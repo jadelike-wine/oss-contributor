@@ -280,7 +280,7 @@ class Autonomous:
         logs = []
         for i, argv in enumerate(spec['setup'] + [spec['regression']]):
             with self.p.lock('worker'):
-                result = execute(argv, cwd=task['workspace'], timeout=self.p.config['timeout_seconds'], started=lambda pid: self.p.track_process('worker', pid))
+                result = execute(argv, cwd=task['workspace'], env=self.p.test_env(), timeout=self.p.config['timeout_seconds'], started=lambda pid: self.p.track_process('worker', pid))
             output = result.stdout + '\n' + result.stderr
             (folder / f'reproduce-{i}.log').write_text(output, encoding='utf-8')
             logs.append({'argv': argv, 'exit_code': result.returncode, 'output': output[-7000:]})

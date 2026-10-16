@@ -392,6 +392,14 @@ class Pipeline:
             digest.update((Path(work) / name).read_bytes())
         return digest.hexdigest()
 
+    def test_env(self):
+        env = os.environ.copy()
+        temp = self.root / 'state/test-tmp'
+        temp.mkdir(parents=True, exist_ok=True)
+        for key in ('TMP', 'TEMP', 'TMPDIR'):
+            env[key] = str(temp)
+        return env
+
     def verify(self, task_id, spec_path):
         """Run structured argv recipes and gate on actual red/green command evidence."""
         with self.lock("worker"):
@@ -417,7 +425,7 @@ class Pipeline:
             results = []
             def run(argv, directory, name):
                 # Windows .cmd shims need an explicit executable; recipes should use node.exe + JS entrypoint.
-                p = execute(argv, cwd=directory, timeout=self.config["timeout_seconds"], started=lambda pid: self.track_process('worker', pid))
+                p = execute(argv, cwd=directory, env=self.test_env(), timeout=self.config["timeout_seconds"], started=lambda pid: self.track_process('worker', pid))
                 output = p.stdout + "\n" + p.stderr
                 (attempt / (name + ".log")).write_text(output, encoding="utf-8")
                 results.append({"name": name, "argv": argv, "cwd": str(directory), "exit_code": p.returncode})

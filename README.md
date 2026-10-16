@@ -1,6 +1,16 @@
 # OSS Contributor
 
-面向 Qwen Code 的贡献流水线首版。Hermes 定时调度和审查，OpenCode 分析与编辑，GitHub CLI 获取真实状态。两个模型入口均使用 tokenking 的 `devin/swe-2`。无费用上限；单次模型或测试命令最长 20 分钟，自动任务失败后不无限重试。
+面向 Qwen Code、Gemini CLI 和 OpenCode 的贡献流水线首版。Hermes 定时调度和审查，OpenCode 分析与编辑，GitHub CLI 获取真实状态。两个模型入口均使用 tokenking 的 `devin/swe-2`。无费用上限；单次模型或测试命令最长 20 分钟，自动任务失败后不无限重试。
+
+## 已接入项目
+
+| 仓库 | 巡检范围 |
+| --- | --- |
+| [QwenLM/qwen-code](https://github.com/QwenLM/qwen-code) | Issue、开放 PR、贡献指南、本人 PR 状态 |
+| [google-gemini/gemini-cli](https://github.com/google-gemini/gemini-cli) | Issue、开放 PR、贡献指南、本人 PR 状态 |
+| [anomalyco/opencode](https://github.com/anomalyco/opencode) | Issue、开放 PR、贡献指南、本人 PR 状态 |
+
+三个仓库均已加入 `config.json` 白名单，支持已有 Issue 分析及 `hunt` 主动调查。每轮扫描全部仓库，再按任务分数从统一队列选择最多一个候选分析；当前不设置仓库权重。每个任务使用所属仓库的独立 worktree 和贡献规则，测试命令按各仓库配置。
 
 ## 当前边界
 
@@ -70,7 +80,7 @@ hermes gateway status
 
 任务无新变化时静默。报告留在本机，不发送到聊天平台。gateway 必须运行，机器关机时不会执行。
 
-在原开发机器上已注册每 6 小时运行的 `oss-contributor-qwen` 任务。克隆仓库不会复制这个任务或自动启动服务；新机器应先验证单次运行，再按本机 Hermes 的 `cron create --help` 注册脚本。`followup` 读取本人 PR 的状态、评审决策和 CI 状态；只在变化时写入 `runs/pr-updates.json`，不会自动回复评论。
+在原开发机器上已注册每 6 小时运行的 `oss-contributor-qwen` 任务。名称沿用首版，但每次执行都会读取当前配置，现已覆盖上述三个仓库，无需重复创建定时任务。克隆仓库不会复制这个任务或自动启动服务；新机器应先验证单次运行，再按本机 Hermes 的 `cron create --help` 注册脚本。`followup` 读取本人 PR 的状态、评审决策和 CI 状态；只在变化时写入 `runs/pr-updates.json`，不会自动回复评论。
 
 原开发机器上的 OpenCode 曾遇到证书校验错误。若本地存在 `state/windows-ca.pem`，执行时仅在未设置 NODE_EXTRA_CA_CERTS 时加载它。证书不随仓库分发；新机器应使用其自身信任的 CA，保持 TLS 校验开启。
 

@@ -1,5 +1,9 @@
 {
-  "repositories": ["QwenLM/qwen-code"],
+  "repositories": [
+    "QwenLM/qwen-code",
+    "google-gemini/gemini-cli",
+    "anomalyco/opencode"
+  ],
   "model": "tokenking/devin/swe-2",
   "timeout_seconds": 1200,
   "scan_limit": 100,

@@ -1,28 +1,42 @@
 # OSS Contributor
 
-面向 Qwen Code、Gemini CLI 和 OpenCode 的贡献流水线首版。Hermes 定时调度和审查，OpenCode 分析与编辑，GitHub CLI 获取真实状态。两个模型入口均使用 tokenking 的 `devin/swe-2`。无费用上限；单次模型或测试命令最长 20 分钟，自动任务失败后不无限重试。
+Hermes + OpenCode + GitHub CLI 驱动的全自动开源贡献流水线，覆盖 Qwen Code、Gemini CLI 和 OpenCode。两个模型入口均使用 tokenking 的 `devin/swe-2`，不设置模型费用上限。
+
+## 自动流程
+
+```text
+扫描已有 Issue / 每周主动调查
+  → 读取贡献规则和讨论
+  → 生成回归测试与执行配方
+  → Hermes 审查测试配方
+  → 运行基线测试，确认预期失败
+  → Hermes 核查复现证据
+  → 新发现：查重 → 创建 Issue → 自动等待维护者反馈
+  → 已有 Issue 或获准的新发现：修复
+  → 同一回归测试在基线上失败、在补丁上通过 + 项目检查
+  → Hermes 独立审查补丁
+  → 查重 → 创建 fork → 提交/推送 → 创建 PR
+  → 监测 CI 和维护者评审 → 自动修改、重新验证、推送更新
+  → 记录上游合并或关闭
+```
+
+正常流程不需要人工生成测试配方、批准审查、执行发布命令或转交评审意见。模型给出结构化决策，控制器执行命令、检查退出码和补丁指纹，再决定是否发布。
+
+**全自动不等于绕过项目维护者。** 新发现先创建 Issue，再自动检查维护者是否同意推进；必须先讨论的已有问题也会等待。等待期间无需你操作。上游最终是否接受、合并 PR 由维护者决定，系统不会尝试代替他们合并。
 
 ## 已接入项目
 
-| 仓库 | 巡检范围 |
+| 仓库 | 自动化范围 |
 | --- | --- |
-| [QwenLM/qwen-code](https://github.com/QwenLM/qwen-code) | Issue、开放 PR、贡献指南、本人 PR 状态 |
-| [google-gemini/gemini-cli](https://github.com/google-gemini/gemini-cli) | Issue、开放 PR、贡献指南、本人 PR 状态 |
-| [anomalyco/opencode](https://github.com/anomalyco/opencode) | Issue、开放 PR、贡献指南、本人 PR 状态 |
+| [QwenLM/qwen-code](https://github.com/QwenLM/qwen-code) | 发现、复现、修复、审查、Issue/PR 发布、CI/评审跟进 |
+| [google-gemini/gemini-cli](https://github.com/google-gemini/gemini-cli) | 同上，读取该仓库的贡献规则和测试命令 |
+| [anomalyco/opencode](https://github.com/anomalyco/opencode) | 同上，读取该仓库的贡献规则和测试命令 |
 
-三个仓库均已加入 `config.json` 白名单，支持已有 Issue 分析及 `hunt` 主动调查。每轮扫描全部仓库，再按任务分数从统一队列选择最多一个候选分析；当前不设置仓库权重。每个任务使用所属仓库的独立 worktree 和贡献规则，测试命令按各仓库配置。
+每轮扫描三个仓库并优先跟进已有 PR 和等待中的 Issue，再从统一评分队列推进新任务。每仓库每周生成一个主动调查任务。初筛每仓库取最近 100 个开放 Issue、200 个开放 PR；发布前再做针对性搜索，发布恢复则通过直接 API 分页查找本人 Issue 和确定的 PR 分支。
 
-## 当前边界
+## 快速开始
 
-自动执行：拉取 Issue/开放 PR、按规则暂缓、持久化去重、生成候选列表、每轮最多一个只读源码调查。
-
-显式命令执行：针对已有 Issue 编辑补丁、运行人工核对过的测试配方、Hermes 独立审查。新发现必须先形成复现证据并遵循上游 Issue 讨论流程。
-
-首版不自动发 Issue、评论、push 或 PR。发布前需要查看真实证据和维护者要求。仓库 worktree 用于任务隔离，并不是操作系统安全沙箱；执行依赖安装和测试前应检查配方。
-
-## 运行
-
-需要 Python 3.11+、Git、已登录的 GitHub CLI、已配置模型的 OpenCode 和 Hermes。Python 代码仅使用标准库，无需 pip 安装依赖。开发和验证环境为 Windows；其他系统尚未实际验证。
+需要 Python 3.11+、Git、已登录的 GitHub CLI、已配置 tokenking/devin/swe-2 的 OpenCode 和 Hermes。Python 无第三方依赖。Hermes 需支持 `chat --query-file --format stream-json`。已验证运行环境为 Windows。
 
 ```powershell
 gh repo clone jadelike-wine/oss-contributor
@@ -30,70 +44,60 @@ cd oss-contributor
 gh auth status
 opencode models tokenking
 python -X utf8 -m unittest -v
+
+# 仅预览接下来会处理的阶段，不调用模型或发布
+python -X utf8 contribute.py auto --dry-run
+
+# 扫描、跟进并自动推进任务（可创建公开 Issue/PR）
+python -X utf8 contribute.py tick
+
+# 不重复扫描，直接推进已有队列
+python -X utf8 contribute.py auto
 ```
 
-模型凭据由各 CLI 自己管理，本仓库不包含 API key。新机器需要自行配置 tokenking 的 `devin/swe-2`。
+`config.json` 的 `automation.enabled` 控制自动执行。默认每轮推进一个新任务，每个失败阶段最多尝试 3 次，单条模型/测试命令超时 20 分钟。复现失败会回到规划阶段调整配方，验证或审查失败会回到修复阶段；耗尽尝试次数记为 `FAILED`，其他任务继续。
 
-在本目录 PowerShell 中运行：
-
-```powershell
-python -X utf8 contribute.py scan
-python -X utf8 contribute.py status
-python -X utf8 contribute.py followup
-python -X utf8 contribute.py hunt QwenLM/qwen-code "Investigate tool cancellation and child process cleanup"
-python -X utf8 contribute.py analyze <任务ID>
-python -X utf8 contribute.py repair <已有Issue任务ID>
-python -X utf8 contribute.py verify <任务ID> <验证配方.json>
-python -X utf8 contribute.py review <任务ID>
-python -X utf8 contribute.py tick --analyze
-python -X utf8 -m unittest -v
-```
-
-查看 `runs/queue.md`。每个任务的 `runs/<任务ID>/` 下保存任务快照、模型事件、分析/修复报告、验证日志、审查结果。`state/tasks.db` 保存状态和事件；这些运行数据不会进入 Git。
-
-`config.json` 配置仓库白名单、模型、扫描数量和执行超时。默认从 PATH 查找 OpenCode；Windows npm 安装会自动解析到同目录下的实际可执行文件。其他安装布局可将 `opencode_executable` 设为实际程序路径。
-
-## 验证配方
-
-配方是可信操作者审核后执行的命令，不从模型输出自动执行。每个命令都是 argv 数组，不经过 shell 字符串拼接。
-
-```json
-{
-  "setup": [["node.exe", "<包管理器JS入口>", "install", "--frozen-lockfile"]],
-  "regression": ["node.exe", "<测试运行器JS入口>", "run", "<回归测试路径>"],
-  "checks": [["node.exe", "<包管理器JS入口>", "run", "preflight"]],
-  "test_files": ["<回归测试路径>"],
-  "baseline_failure_pattern": "<精确的预期断言失败文本>"
-}
-```
-
-这是结构模板，替换占位符后才能运行。Windows 建议用 node.exe 加 JS 入口，避免 .cmd shell 引号问题。验证器建立基线 worktree，只复制指定测试文件，然后分别安装环境、运行同一测试、执行项目检查。环境安装失败不能算作复现；基线必须非零退出且匹配预期断言。校验前后补丁指纹必须相同。基线目录保留以便调查，需定期人工清理。
+OpenCode 从 PATH 查找，Windows npm 安装会自动解析到实际 EXE；特殊布局可在配置中指定。凭据由 CLI 管理，不存入仓库。安装依赖和运行测试是本机真实执行；worktree 隔离代码变更，但不是操作系统沙箱。
 
 ## 调度
 
-`hermes_tick.py` 是 Hermes 的 no-agent 定时脚本入口，可在仓库中直接运行。若复制到当前 Hermes home 的 `scripts/`，需为 gateway 设置 `OSS_CONTRIBUTOR_ROOT` 为仓库绝对路径；可用 `OSS_CONTRIBUTOR_PYTHON` 指定 Python 3.11+ 解释器。调度本身不消耗模型 token，源码分析使用 `tokenking/devin/swe-2`；独立审查同样使用 Hermes 的 tokenking/devin/swe-2。
+`hermes_tick.py` 调用同一个 `tick`，无需额外人工步骤。原开发机器已配置每 6 小时执行的 Hermes no-agent 任务 `oss-contributor-qwen`；名称沿用首版，实际覆盖全部三个仓库。调度本身不调用模型，具体阶段按需调用 OpenCode 和 Hermes。
 
 ```powershell
 hermes cron list
 hermes gateway status
 ```
 
-任务无新变化时静默。报告留在本机，不发送到聊天平台。gateway 必须运行，机器关机时不会执行。
+克隆不会复制本机调度任务或自动启动 gateway。新机器可直接运行仓库中的 `hermes_tick.py`；复制到 Hermes scripts 目录时需设置 `OSS_CONTRIBUTOR_ROOT`，并可用 `OSS_CONTRIBUTOR_PYTHON` 指定解释器。机器离线时不执行。无变化时保持安静，结果保存在本机。
 
-在原开发机器上已注册每 6 小时运行的 `oss-contributor-qwen` 任务。名称沿用首版，但每次执行都会读取当前配置，现已覆盖上述三个仓库，无需重复创建定时任务。克隆仓库不会复制这个任务或自动启动服务；新机器应先验证单次运行，再按本机 Hermes 的 `cron create --help` 注册脚本。`followup` 读取本人 PR 的状态、评审决策和 CI 状态；只在变化时写入 `runs/pr-updates.json`，不会自动回复评论。
+## 可追踪与恢复
 
-原开发机器上的 OpenCode 曾遇到证书校验错误。若本地存在 `state/windows-ca.pem`，执行时仅在未设置 NODE_EXTRA_CA_CERTS 时加载它。证书不随仓库分发；新机器应使用其自身信任的 CA，保持 TLS 校验开启。
+- `state/tasks.db`：任务、阶段、尝试次数、发布意图、Issue/PR 标识、进程锁。
+- `runs/queue.md`：当前队列。
+- `runs/<任务ID>/`：模型输入/输出、计划、测试配方、复现和验证日志、审查结论、Issue/PR 正文。
+- `workspaces/`：独立任务 worktree 和用于修复前对照的基线 worktree。
 
-## 状态与恢复
+核心状态为 `PLAN → REPRODUCE → ISSUE/REPAIR → PATCH_READY → AUTO_REVIEW → PUBLISH → PR_OPEN`。`WAITING_MAINTAINER` 自动复查；`SKIPPED/FAILED/CLOSED/MERGED` 为终止结果。没有等待操作者确认的审查/发布状态。
 
-`DISCOVERED → ANALYZING → NEEDS_REPRODUCTION → REPAIRING → PATCH_READY → VERIFIED → AWAITING_REVIEW`
+发布前必须同时满足真实验证通过、审查批准、补丁指纹一致。创建 Issue/PR 前持久化发布意图；响应丢失时先查找远端结果，不能直接再次创建。若远端结果始终无法确定，会保留待核对状态继续自动查询，宁可不发也不重复发。反馈修复沿用同一分支和 PR。
 
-另有 `HOLD`、`BLOCKED`、`ANALYSIS_FAILED`、`VERIFICATION_FAILED`。分析完成不等于缺陷已证实，审查完成不等于批准发布。worker 锁防止并行重复任务，进程崩溃后保留锁；确认对应 PID 已停止后才能执行 `unlock <锁名> --process-stopped`。
+进程锁同时记录控制器与当前子进程 PID。自动模式只回收两者都已退出的锁；子进程仍在运行时不会重复派发。耗尽重试、身份/权限错误、无法满足仓库要求等情况会留下原因，不会伪造成功。
 
-当前扫描每仓库最近 100 个开放 Issue、最多 200 个开放 PR。引用和 closing issue 关联用于初筛，不能替代发布前的关键词、关闭 Issue 和历史 PR 检索。已有负责人的任务、需要讨论/信息、人类判断任务、安全报告、功能提案和已有引用 PR 会暂缓。
+## 诊断入口
 
-## 发布前
+```powershell
+python -X utf8 contribute.py status
+python -X utf8 contribute.py scan
+python -X utf8 contribute.py followup
+python -X utf8 contribute.py hunt QwenLM/qwen-code "Investigate tool cancellation"
+```
 
-按当前上游 CONTRIBUTING.md 检查 Issue 讨论、重复 PR、测试要求、截图或 N/A 说明、提交格式。确认 `verification.json` 的指纹仍对应当前补丁，并阅读 `review.md`。之后通过 git 提交/推送到自己的 fork，使用 `gh pr create --repo <上游> --base <实际默认分支> --head <账号:分支> --body-file <正文文件>` 发布。此阶段由操作者明确执行。
+旧的 `analyze/repair/verify/review` 命令保留用于单阶段诊断，不是自动流程的必经人工步骤。新任务优先使用 `tick` 或 `auto`。
 
-后续应补充容器执行后端、发布去重和 PR 反馈自动闭环；当前实现不会假装这些已经自动化。
+若本地存在 `state/windows-ca.pem`，OpenCode 会在未配置 `NODE_EXTRA_CA_CERTS` 时加载它。证书不随仓库分发，也不会关闭 TLS 校验。
+
+## 验证覆盖与限制
+
+测试包含真实的本地 Git 仓库、基线失败/修复通过、提交与推送，以及模拟 GitHub/模型接口的完整状态流。覆盖新 Issue 等待后恢复、审查拒绝、过期补丁拒绝、失败次数限制、发布响应丢失后的去重恢复和进程锁恢复。
+
+这些测试不等于真实上游已接受贡献，也不保证所有问题都能自动解决。生产发布仍取决于实际模型、测试环境、仓库规则和 GitHub 权限。运行记录、数据库、凭据、证书和上游 checkout 不上传到本仓库。

@@ -6,7 +6,7 @@ import sys
 
 ROOT = Path(os.environ.get("OSS_CONTRIBUTOR_ROOT", Path(__file__).resolve().parent))
 PYTHON = os.environ.get("OSS_CONTRIBUTOR_PYTHON", sys.executable)
-result = subprocess.run([PYTHON, "-X", "utf8", str(ROOT / "contribute.py"), "tick", "--analyze"],
+result = subprocess.run([PYTHON, "-X", "utf8", str(ROOT / "contribute.py"), "tick"],
                         cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace")
 if result.stdout.strip():
     print(result.stdout.strip())

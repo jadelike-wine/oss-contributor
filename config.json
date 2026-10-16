@@ -1,0 +1,8 @@
+{
+  "repositories": ["QwenLM/qwen-code"],
+  "model": "tokenking/devin/swe-2",
+  "timeout_seconds": 1200,
+  "scan_limit": 100,
+  "max_analysis_per_tick": 1,
+  "opencode_executable": "opencode"
+}

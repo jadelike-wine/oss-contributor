@@ -1,0 +1,11 @@
+state/
+runs/
+workspaces/
+__pycache__/
+*.pyc
+.env
+.env.*
+.venv/
+config.local.json
+*.pem
+*.key

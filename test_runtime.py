@@ -5,11 +5,32 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from autonomous import runtime_tools
+from autonomous import json_answer, runtime_tools, validate_spec
 from contribute import execute
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_bun_run_cwd_order_cannot_silently_skip_check(self):
+        spec = {'setup': [], 'regression': ['bun', 'test', 'test/a.test.ts'],
+                'checks': [['bun', '--cwd', 'packages/ai', 'run', 'typecheck']],
+                'test_files': ['test/a.test.ts'], 'baseline_failure_pattern': 'specific assertion'}
+        with self.assertRaisesRegex(ValueError, 'print help'):
+            validate_spec(spec)
+        spec['checks'] = [['bun', 'run', '--cwd', 'packages/ai', 'typecheck']]
+        self.assertEqual(validate_spec(spec), spec)
+
+    def test_single_fenced_answer_after_explanation(self):
+        self.assertEqual(json_answer('Explanation.\n```json\n{"approved":false,"reason":"failed"}\n```'),
+                         {'approved': False, 'reason': 'failed'})
+        with self.assertRaises(ValueError):
+            json_answer('```json\n{"approved":false}\n```\n```json\n{"approved":true}\n```')
+
+    def test_trailing_object_after_explanation_is_unambiguous(self):
+        self.assertEqual(json_answer('Applied the patch.\n\n{"summary":"done"}'), {'summary': 'done'})
+        for text in ('Note\n{"approved":false}\n{"approved":true}', 'Note\n{"approved":true}\nmore text'):
+            with self.assertRaises(ValueError):
+                json_answer(text)
+
     def test_timeout_retains_model_output_and_clears_child(self):
         with tempfile.TemporaryDirectory() as directory:
             prefix = Path(directory) / 'model'

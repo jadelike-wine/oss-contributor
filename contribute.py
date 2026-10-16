@@ -28,6 +28,8 @@ def execute(args, cwd=None, timeout=180, env=None, started=None, output_prefix=N
     local_bin = ROOT / 'state/tooling/node_modules/bun/bin'
     if (local_bin / ('bun.exe' if os.name == 'nt' else 'bun')).is_file():
         env['PATH'] = str(local_bin) + os.pathsep + env.get('PATH', '')
+        if args[0] == 'bun':
+            args = [str(local_bin / ('bun.exe' if os.name == 'nt' else 'bun')), *args[1:]]
     if output_prefix is not None:
         prefix = Path(output_prefix)
         prefix.parent.mkdir(parents=True, exist_ok=True)
@@ -71,7 +73,7 @@ def execute(args, cwd=None, timeout=180, env=None, started=None, output_prefix=N
 
 def command(args, cwd=None, timeout=180, env=None, started=None):
     if os.name == "nt" and args[0] == "git":
-        args = ["git", "-c", "http.sslBackend=openssl", *args[1:]]
+        args = ["git", "-c", "http.sslBackend=openssl", "-c", "core.longpaths=true", *args[1:]]
     p = execute(args, cwd=cwd, env=env, timeout=timeout, started=started)
     if p.returncode:
         raise RuntimeError(f"{args[0]} failed ({p.returncode}): {p.stderr[-2000:]}")
@@ -410,7 +412,7 @@ class Pipeline:
             folder = self.root / "runs" / task_id
             attempt = folder / ("verify-" + dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f"))
             attempt.mkdir(parents=True)
-            baseline = self.root / "workspaces" / (task_id + "--baseline-" + attempt.name)
+            baseline = self.root / 'workspaces' / ('base-' + hashlib.sha256((task_id + attempt.name).encode()).hexdigest()[:16])
             command(["git", "worktree", "add", "--detach", str(baseline), task["base_sha"]], cwd=work, timeout=600)
             results = []
             def run(argv, directory, name):

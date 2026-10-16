@@ -1,0 +1,149 @@
+diff --git a/packages/ai/src/protocols/openai-chat.ts b/packages/ai/src/protocols/openai-chat.ts
+index 27e9843d6..82f1ecfe0 100644
+--- a/packages/ai/src/protocols/openai-chat.ts
++++ b/packages/ai/src/protocols/openai-chat.ts
+@@ -22,7 +22,7 @@ import {
+   type ToolCallPart,
+   type ToolDefinition,
+ } from "../schema/index.js"
+-import { classifyProviderFailure } from "../provider-error.js"
++import { classifyProviderFailure, providerErrorMessage } from "../provider-error.js"
+ import { isRecord, JsonObject, optionalArray, optionalNull, ProviderShared } from "./shared.js"
+ import { cacheControl } from "./utils/cache.js"
+ import { OpenAIOptions } from "./utils/openai-options.js"
+@@ -1052,7 +1052,7 @@ const step = (state: ParserState, event: OpenAIChatEvent) =>
+       const body = ProviderShared.encodeJson(event)
+       return yield* new AIError({
+         reason: classifyProviderFailure({
+-          message: event.error.message,
++          message: providerErrorMessage(body) ?? event.error.message,
+           status: typeof event.error.code === "number" ? event.error.code : undefined,
+           rawBody: body,
+         }),
+diff --git a/packages/ai/src/provider-error.ts b/packages/ai/src/provider-error.ts
+index 722728c3a..14342a1a3 100644
+--- a/packages/ai/src/provider-error.ts
++++ b/packages/ai/src/provider-error.ts
+@@ -192,9 +192,21 @@ const messageAt = <Fields extends Schema.Struct.Fields>(
+ 
+ // Common error body layouts that carry a human-readable message, in priority order.
+ // Provider-specific layouts belong in their protocol.
+-const decodeMessage = Schema.decodeUnknownOption(
++const decodeMessage: (body: string) => Option.Option<string> = Schema.decodeUnknownOption(
+   Schema.fromJsonString(
+     Schema.Union([
++      // Gateways such as OpenRouter hide the upstream error inside a JSON-encoded
++      // `error.metadata.raw` and report only a wrapper message ("Provider returned
++      // error"); prefer the upstream explanation when it carries one.
++      messageAt(
++        {
++          error: Schema.Struct({
++            message: Message,
++            metadata: Schema.Struct({ raw: Schema.String }),
++          }),
++        },
++        (body) => Option.getOrElse(decodeMessage(body.error.metadata.raw), () => body.error.message),
++      ),
+       messageAt({ error: Schema.Struct({ message: Message }) }, (body) => body.error.message),
+       messageAt({ error: Message }, (body) => body.error),
+       messageAt({ message: Message }, (body) => body.message),
+diff --git a/packages/ai/test/provider/openrouter.test.ts b/packages/ai/test/provider/openrouter.test.ts
+index 1c374d268..0de91995f 100644
+--- a/packages/ai/test/provider/openrouter.test.ts
++++ b/packages/ai/test/provider/openrouter.test.ts
+@@ -612,4 +612,95 @@ describe("OpenRouter", () => {
+       ])
+     }),
+   )
++
++  it.effect("continues image tool results as a trailing user message", () =>
++    Effect.gen(function* () {
++      const prepared = yield* compileRequest(
++        LLM.request({
++          model: OpenRouter.configure({ apiKey: "test-key" }).model("google/gemini-4-argon"),
++          cache: "none",
++          messages: [
++            Message.user("Read the image"),
++            Message.assistant([{ type: "tool-call", id: "call_1", name: "read", input: { path: "pixel.png" } }]),
++            Message.tool({
++              id: "call_1",
++              name: "read",
++              resultType: "content",
++              result: [
++                { type: "text", text: "Image read successfully" },
++                { type: "file", mime: "image/png", uri: "data:image/png;base64,AAEC" },
++              ],
++            }),
++          ],
++        }),
++      )
++
++      // Google rejects requests that end on a model turn; the tool result plus
++      // its hoisted image attachment must close on the user-side messages.
++      expect(prepared.body.messages).toMatchObject([
++        { role: "user" },
++        { role: "assistant", tool_calls: [{ id: "call_1" }] },
++        { role: "tool", tool_call_id: "call_1", content: "Image read successfully" },
++        { role: "user", content: [{ type: "image_url", image_url: { url: "data:image/png;base64,AAEC" } }] },
++      ])
++      expect(prepared.body.messages.at(-1)?.role).toBe("user")
++    }),
++  )
++
++  it.effect("surfaces the upstream error inside OpenRouter metadata.raw", () =>
++    Effect.gen(function* () {
++      const body = JSON.stringify({
++        error: {
++          code: 400,
++          message: "Provider returned error",
++          metadata: {
++            provider_name: "Google",
++            raw: JSON.stringify({
++              error: { code: 400, message: "Requests ending with a model turn are not supported." },
++            }),
++          },
++        },
++      })
++      const error = yield* LLMClient.generate(
++        LLM.request({
++          model: OpenRouter.configure({ apiKey: "test-key" }).model("google/gemini-4-argon"),
++          prompt: "Say hello.",
++        }),
++      ).pipe(Effect.provide(fixedResponse(body, { status: 400 })), Effect.flip)
++
++      expect(error.reason._tag).toBe("InvalidRequest")
++      expect(error.message).toContain("Requests ending with a model turn are not supported")
++    }),
++  )
++
++  it.effect("surfaces the upstream message from a mid-stream OpenRouter error", () =>
++    Effect.gen(function* () {
++      const error = yield* LLMClient.generate(
++        LLM.request({
++          model: OpenRouter.configure({ apiKey: "test-key" }).model("google/gemini-4-argon"),
++          prompt: "Say hello.",
++        }),
++      ).pipe(
++        Effect.provide(
++          fixedResponse(
++            sseEvents({
++              error: {
++                code: 400,
++                message: "Provider returned error",
++                metadata: {
++                  provider_name: "Google",
++                  raw: JSON.stringify({
++                    error: { code: 400, message: "Requests ending with a model turn are not supported." },
++                  }),
++                },
++              },
++            }),
++          ),
++        ),
++        Effect.flip,
++      )
++
++      expect(error.message).toContain("Requests ending with a model turn are not supported")
++    }),
++  )
+ })

@@ -13,8 +13,15 @@ from contribute import command, execute, gh, now, opencode_executable, save
 
 def json_answer(text):
     text = text.strip()
-    if text.startswith('```'):
-        text = re.sub(r'^```(?:json)?\s*|\s*```$', '', text)
+    blocks = re.findall(r'```(?:json)?\s*\n(.*?)\n```', text, flags=re.DOTALL)
+    if blocks:
+        if len(blocks) != 1:
+            raise ValueError('Ambiguous model response: multiple JSON blocks')
+        text = blocks[0].strip()
+    elif not text.startswith('{'):
+        starts = list(re.finditer(r'(?m)^\{', text))
+        if len(starts) == 1:
+            text = text[starts[0].start():]
     value = json.loads(text)
     if not isinstance(value, dict):
         raise ValueError('Model must return a JSON object')
@@ -42,6 +49,8 @@ def validate_spec(spec):
             raise ValueError('Use runtime/package-manager test commands, not publishing or shell commands')
         if Path(argv[0]).suffix.lower() in ('.cmd', '.bat', '.ps1'):
             raise ValueError('Use node plus the package-manager JS entry point instead of a Windows shell shim')
+        if Path(argv[0]).stem.lower() == 'bun' and '--cwd' in argv and 'run' in argv and argv.index('--cwd') < argv.index('run'):
+            raise ValueError('Use bun run --cwd directory script; bun --cwd directory run can print help and exit zero')
     for name in spec['test_files']:
         if not isinstance(name, str):
             raise ValueError('Test path must be text')
@@ -416,7 +425,9 @@ class Autonomous:
             self.move(task_id, data, 'CLOSED')
             return
         login = gh('api', 'user')['login']
-        branch = 'auto/' + hashlib.sha256(task_id.encode()).hexdigest()[:24]
+        branch = data.get('branch') or ('auto/' if data.get('pr_create_pending') or data.get('publish_commit') or data.get('pr_number') else 'auto-') + hashlib.sha256(task_id.encode()).hexdigest()[:24]
+        data['branch'] = branch
+        self.store(task_id, data)
         prs = self.flat(f"repos/{task['repo']}/pulls?head={login}:{branch}&state=all&per_page=100")
         if prs and prs[0]['state'] == 'closed':
             self.move(task_id, data, 'MERGED' if prs[0].get('merged_at') else 'CLOSED')
@@ -451,7 +462,7 @@ class Autonomous:
             pr = prs[0]
         else:
             upstream = gh('api', f"repos/{task['repo']}")
-            body = data['plan']['pr_body'] + f"\n\nFixes #{task['number']}\n\n## Validation\n\n" + '\n'.join('- `' + json.dumps(r['argv']) + '` → exit ' + str(r['exit_code']) for r in evidence['results']) + '\n\nAI-assisted implementation; regression verification and independent automated review completed.\n\n' + self.marker(task_id)
+            body = data['plan']['pr_body'] + f"\n\nRelated issue: #{task['number']}\n\n## Validation\n\n" + '\n'.join('- `' + json.dumps(r['argv']) + '` → exit ' + str(r['exit_code']) for r in evidence['results']) + '\n\nAI-assisted implementation; regression verification and independent automated review completed.\n\n' + self.marker(task_id)
             (folder / 'pr-body.md').write_text(public_text(body), encoding='utf-8')
             data['pr_create_pending'] = True
             self.store(task_id, data)

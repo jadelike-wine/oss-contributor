@@ -1,0 +1,60 @@
+name: Verify OpenCode contribution
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ASTRO_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          path: controller
+          persist-credentials: false
+      - name: Read immutable patch manifest
+        id: manifest
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          manifest = json.loads(Path('controller/ci/patches/opencode-55694.json').read_text())
+          assert manifest['repository'] == 'anomalyco/opencode'
+          patch = Path('controller/ci/patches/opencode-55694.patch').read_bytes()
+          assert hashlib.sha256(patch).hexdigest() == manifest['patch_sha256']
+          assert len(manifest['base_sha']) == 40 and all(c in '0123456789abcdef' for c in manifest['base_sha'])
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write('base=' + manifest['base_sha'] + '\n')
+          PY
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: anomalyco/opencode
+          ref: ${{ steps.manifest.outputs.base }}
+          path: upstream
+          persist-credentials: false
+      - name: Apply exact contribution patch
+        working-directory: upstream
+        run: |
+          git apply --check ../controller/ci/patches/opencode-55694.patch
+          git apply ../controller/ci/patches/opencode-55694.patch
+          git diff --stat
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: '1.4.2'
+      - name: Install locked dependencies
+        working-directory: upstream
+        run: bun install --frozen-lockfile
+      - name: AI package tests
+        working-directory: upstream/packages/ai
+        run: bun run test
+      - name: Canonical full repository check
+        working-directory: upstream
+        run: bun run check

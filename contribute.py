@@ -23,7 +23,34 @@ def save(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
 
-def execute(args, cwd=None, timeout=180, env=None, started=None):
+def execute(args, cwd=None, timeout=180, env=None, started=None, output_prefix=None):
+    env = dict(os.environ if env is None else env)
+    local_bin = ROOT / 'state/tooling/node_modules/bun/bin'
+    if (local_bin / ('bun.exe' if os.name == 'nt' else 'bun')).is_file():
+        env['PATH'] = str(local_bin) + os.pathsep + env.get('PATH', '')
+    if output_prefix is not None:
+        prefix = Path(output_prefix)
+        prefix.parent.mkdir(parents=True, exist_ok=True)
+        stdout_path, stderr_path = Path(str(prefix) + '.jsonl'), Path(str(prefix) + '.stderr')
+        with stdout_path.open('w', encoding='utf-8') as stdout, stderr_path.open('w', encoding='utf-8') as stderr:
+            p = subprocess.Popen(args, cwd=cwd, env=env, stdout=stdout, stderr=stderr,
+                                 start_new_session=os.name != 'nt')
+            if started:
+                started(p.pid)
+            try:
+                p.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                if os.name == 'nt':
+                    subprocess.run(['taskkill', '/PID', str(p.pid), '/T', '/F'], capture_output=True)
+                else:
+                    os.killpg(p.pid, signal.SIGKILL)
+                p.wait()
+                raise
+            finally:
+                if started:
+                    started(None)
+        return subprocess.CompletedProcess(args, p.returncode, stdout_path.read_text(encoding='utf-8', errors='replace'),
+                                           stderr_path.read_text(encoding='utf-8', errors='replace'))
     p = subprocess.Popen(args, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                          text=True, encoding="utf-8", errors="replace", start_new_session=os.name != "nt")
     if started:

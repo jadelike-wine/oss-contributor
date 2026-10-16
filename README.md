@@ -59,6 +59,10 @@ python -X utf8 contribute.py auto
 
 OpenCode 从 PATH 查找，Windows npm 安装会自动解析到实际 EXE；特殊布局可在配置中指定。凭据由 CLI 管理，不存入仓库。安装依赖和运行测试是本机真实执行；worktree 隔离代码变更，但不是操作系统沙箱。
 
+Windows 的 npm/pnpm/Corepack 会转换为已存在的 Node 脚本入口，测试配方必须把每个参数写成单独的字符串。需要 Bun 的项目应按上游 `packageManager` 安装指定版本；也可安装到本项目的 `state/tooling`（例如 `npm install --prefix state/tooling bun@1.4.2`），控制器会自动发现它。
+
+执行器禁用目标项目的 OpenCode 运行配置，避免上游自定义工具与本机 CLI 版本冲突。模型仍必须读取并遵守 `CONTRIBUTING.md`、适用的 `AGENTS.md` 和测试规范。
+
 ## 调度
 
 `hermes_tick.py` 调用同一个 `tick`，无需额外人工步骤。原开发机器已配置每 6 小时执行的 Hermes no-agent 任务 `oss-contributor-qwen`；名称沿用首版，实际覆盖全部三个仓库。调度本身不调用模型，具体阶段按需调用 OpenCode 和 Hermes。
@@ -78,6 +82,8 @@ hermes gateway status
 - `workspaces/`：独立任务 worktree 和用于修复前对照的基线 worktree。
 
 核心状态为 `PLAN → REPRODUCE → ISSUE/REPAIR → PATCH_READY → AUTO_REVIEW → PUBLISH → PR_OPEN`。`WAITING_MAINTAINER` 自动复查；`SKIPPED/FAILED/CLOSED/MERGED` 为终止结果。没有等待操作者确认的审查/发布状态。
+
+模型调用的 `.jsonl` 和 `.stderr` 在运行过程中直接写入，超时后仍保留部分输出；控制器也会即时打印阶段变更，便于判断停在模型、测试还是发布步骤。
 
 发布前必须同时满足真实验证通过、审查批准、补丁指纹一致。创建 Issue/PR 前持久化发布意图；响应丢失时先查找远端结果，不能直接再次创建。若远端结果始终无法确定，会保留待核对状态继续自动查询，宁可不发也不重复发。反馈修复沿用同一分支和 PR。
 

@@ -83,6 +83,8 @@ class AutonomousTests(unittest.TestCase):
 
     def fake_command(self, args, **kwargs):
         if args[:3] == ['gh', 'repo', 'fork']:
+            # gh rejects --remote (even false) when an explicit repository is supplied.
+            self.assertFalse(any(arg.startswith('--remote') for arg in args))
             return 'fork exists'
         if args[:3] == ['gh', 'pr', 'create']:
             self.created_prs.append({'number': 3, 'state': 'open', 'html_url': 'https://github.com/owner/repo/pull/3'})
@@ -124,6 +126,18 @@ class AutonomousTests(unittest.TestCase):
             self.assertEqual('PUBLISH', self.engine.advance(self.key))
             self.assertEqual('PR_OPEN', self.engine.advance(self.key))
         self.assertEqual(1, len(self.created_prs))
+
+    def test_remote_receipt_must_be_reverified_before_push(self):
+        folder = self.root / 'runs' / self.key
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / 'remote-verification.json').write_text('{}', encoding='utf-8')
+        with self.mocks(), patch('verify_ci.verify', side_effect=ValueError('stale CI patch')):
+            self.assertEqual('PUBLISH', self.engine.advance(self.key))
+        self.assertEqual([], self.created_prs)
+        self.assertEqual('', subprocess.check_output(['git', 'ls-remote', str(self.fork)], text=True))
+        with self.mocks(), patch('verify_ci.verify', return_value='https://github.com/verified/run') as check:
+            self.assertEqual('PR_OPEN', self.engine.advance(self.key))
+            check.assert_called_once()
 
     def test_new_issue_waits_for_real_maintainer_then_continues(self):
         with self.p.db:

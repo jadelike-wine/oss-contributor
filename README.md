@@ -108,6 +108,8 @@ python -X utf8 contribute.py hunt QwenLM/qwen-code "Investigate tool cancellatio
 
 ## 验证覆盖与限制
 
+2026-10-16 真实实跑创建了 [OpenCode PR #56027](https://github.com/anomalyco/opencode/pull/56027)，修复 OpenRouter 上游错误详情被隐藏的问题。基线回归测试 24 过、2 失败，补丁后 26 过；AI 包 1,818 过、28 跳过，Linux CI 根目录检查通过。该次调通中修复了 Windows、模型输出解析、查重及发布兼容问题，并配置了针对该补丁的 Linux 验证任务；这不代表所有后续候选都已验证能无人介入完成。
+
 测试包含真实的本地 Git 仓库、基线失败/修复通过、提交与推送，以及模拟 GitHub/模型接口的完整状态流。覆盖新 Issue 等待后恢复、审查拒绝、过期补丁拒绝、失败次数限制、发布响应丢失后的去重恢复和进程锁恢复。
 
 这些测试不等于真实上游已接受贡献，也不保证所有问题都能自动解决。生产发布仍取决于实际模型、测试环境、仓库规则和 GitHub 权限。运行记录、数据库、凭据、证书和上游 checkout 不上传到本仓库。

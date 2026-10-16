@@ -308,13 +308,16 @@ class Autonomous:
             raise ValueError('Specific duplicate-search queries are required')
         candidates = []
         for query in queries[:2]:
-            response = gh('api', '-X', 'GET', 'search/issues', '-f', f"q=repo:{task['repo']} {query}", '-f', 'per_page=20')
+            scope = 'is:pr ' if kind == 'pr' else ''
+            response = gh('api', '-X', 'GET', 'search/issues', '-f', f"q=repo:{task['repo']} {scope}{query}", '-f', 'per_page=20')
             if response.get('incomplete_results') or response['total_count'] > 20:
                 raise RuntimeError('Duplicate query too broad/incomplete; refine automatically on retry')
-            candidates.extend({'number': x['number'], 'title': x['title'], 'body': (x.get('body') or '')[:2500], 'url': x['html_url']} for x in response['items'] if x['number'] != task['number'])
+            candidates.extend({'number': x['number'], 'title': x['title'], 'body': (x.get('body') or '')[:2500], 'url': x['html_url'], 'state': x.get('state'), 'pull_request': x.get('pull_request')} for x in response['items'] if x['number'] != task['number'] and (kind != 'pr' or x.get('pull_request')))
         if candidates:
-            verdict = self.judge(task_id, 'duplicates-' + kind, {'gate': 'Approve only if none of these existing issues/PRs already covers the proposed contribution. Uncertainty means reject.', 'plan': data['plan'], 'candidates': candidates})
+            gate = ('Approve only if none of these PRs already implements or supersedes the proposed fix. Related bug reports are not competing implementations. Inspect candidate scope; uncertainty about duplicate fixes means reject.' if kind == 'pr' else 'Approve only if none of these existing issues/PRs already covers the proposed bug report. Uncertainty means reject.')
+            verdict = self.judge(task_id, 'duplicates-' + kind, {'gate': gate, 'plan': data['plan'], 'candidates': candidates})
             if not verdict['approved']:
+                data['skip_reason'] = verdict['reason']
                 self.move(task_id, data, 'SKIPPED')
                 return False
         return True
@@ -436,7 +439,7 @@ class Autonomous:
             return
         if not prs and not data.get('pr_number') and not self.duplicates(task_id, data, 'pr'):
             return
-        command(['gh', 'repo', 'fork', task['repo'], '--clone=false', '--remote=false'])
+        command(['gh', 'repo', 'fork', task['repo'], '--clone=false'])
         fork = gh('api', f"repos/{login}/{task['repo'].split('/')[1]}")
         if (fork.get('parent') or {}).get('full_name', '').lower() != task['repo'].lower():
             raise RuntimeError('Fork parent does not match upstream')
@@ -457,7 +460,15 @@ class Autonomous:
             command(['git', 'commit', '-m', data['plan']['pr_title']], cwd=work)
         data['publish_commit'] = command(['git', 'rev-parse', 'HEAD'], cwd=work).strip()
         self.store(task_id, data)
-        command(['git', 'push', fork['clone_url'], f'HEAD:refs/heads/{branch}'], cwd=work, timeout=600)
+        push_env = None
+        receipt = folder / 'remote-verification.json'
+        if receipt.exists():
+            from verify_ci import verify as verify_remote
+            verify_remote(self.p, task_id, json.loads(receipt.read_text(encoding='utf-8')))
+            # The exact patch already passed the upstream check on Linux. Do not
+            # rerun that same check in a Windows hook with unsupported symlinks.
+            push_env = {**os.environ, 'HUSKY': '0'}
+        command(['git', 'push', fork['clone_url'], f'HEAD:refs/heads/{branch}'], cwd=work, timeout=600, env=push_env)
         if prs:
             pr = prs[0]
         else:
@@ -523,6 +534,7 @@ class Autonomous:
                 self.p.event(task_id, str(error))
                 break  # Retry on next tick, not a tight loop.
             data['attempts'].pop(stage, None)
+            data.pop('last_error', None)
             self.store(task_id, data)
             if data['stage'] == stage or data['stage'] in ('PR_OPEN', 'WAITING_MAINTAINER', 'SKIPPED', 'CLOSED', 'MERGED'):
                 break

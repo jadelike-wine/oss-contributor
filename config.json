@@ -31,7 +31,7 @@
     }
   },
   "model": "tokenking/devin/swe-2",
-  "timeout_seconds": 1200,
+  "timeout_seconds": 1500,
   "scan_limit": 100,
   "max_analysis_per_tick": 1,
   "opencode_executable": "opencode",

@@ -628,6 +628,8 @@ class Autonomous:
                 waiting = data['stage'] in ('WAITING_MAINTAINER', 'PR_OPEN', 'ISSUE', 'PUBLISH')
                 if not waiting and used >= self.options.get('max_tasks_per_tick', 1):
                     continue
+                if not waiting:
+                    self.p.research_turn(task['repo'])
                 result = self.advance(row['id'])
                 if not waiting or result not in ('WAITING_MAINTAINER', 'PR_OPEN', 'ISSUE', 'PUBLISH'):
                     used += 1
@@ -635,8 +637,14 @@ class Autonomous:
                     print(f"{row['id']}: {result}")
 
     def candidates(self):
-        return self.db.execute("""SELECT tasks.id,tasks.state FROM tasks LEFT JOIN automation ON automation.task=tasks.id
+        rows = self.db.execute("""SELECT tasks.id,tasks.state,tasks.repo FROM tasks LEFT JOIN automation ON automation.task=tasks.id
             WHERE tasks.state NOT IN ('HOLD','SKIPPED','CLOSED','MERGED','FAILED')
             ORDER BY CASE WHEN json_extract(automation.data,'$.pr_number') IS NOT NULL OR state='PR_OPEN' THEN 0
                           WHEN state='WAITING_MAINTAINER' THEN 1 WHEN state='DISCOVERED' THEN 3 ELSE 2 END,
                      score DESC,id""").fetchall()
+        rows = [row for row in rows if row['repo'] in self.p.config['repositories']]
+        waiting, research = [], []
+        for row in rows:
+            target = waiting if self.load(row['id'])['stage'] in ('WAITING_MAINTAINER', 'PR_OPEN', 'ISSUE', 'PUBLISH') else research
+            target.append(row)
+        return waiting + self.p.fair_candidates(research)

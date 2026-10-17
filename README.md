@@ -32,7 +32,7 @@ Hermes + OpenCode + GitHub CLI 驱动的全自动开源贡献流水线，覆盖 
 | [google-gemini/gemini-cli](https://github.com/google-gemini/gemini-cli) | 同上，读取该仓库的贡献规则和测试命令 |
 | [anomalyco/opencode](https://github.com/anomalyco/opencode) | 同上，读取该仓库的贡献规则和测试命令 |
 
-每轮扫描三个仓库并优先跟进已有 PR 和等待中的 Issue，再从统一评分队列推进新任务。每仓库每周生成一个主动调查任务。初筛每仓库取最近 100 个开放 Issue、200 个开放 PR；发布前再做针对性搜索，发布恢复则通过直接 API 分页查找本人 Issue 和确定的 PR 分支。
+每轮扫描三个仓库，优先跟进已发布 PR 和等待中的 Issue。消耗研究额度的任务按仓库轮转，仓库内部优先处理已有 PR 的修复、进行中的任务，再按评分选新任务。轮转位置保存在 `state/tasks.db`，跨进程、跨轮次延续，失败或中断的尝试也会让出下一次机会；没有候选的仓库自动跳过。`auto` 和关闭自动执行后的 `tick --analyze` 共用轮转位置，`auto --dry-run` 只预览、不占用轮次。默认每轮仍只推进一个研究任务，三个仓库都有候选时依次获得机会，不因全局分数差异长期偏向一个仓库；这保证研究机会均衡，不保证相同 Token 消耗或 PR 数量。每仓库每周生成一个主动调查任务。初筛每仓库取最近 100 个开放 Issue、200 个开放 PR；发布前再做针对性搜索，发布恢复则通过直接 API 分页查找本人 Issue 和确定的 PR 分支。
 
 ## 过往 PR 跟进
 

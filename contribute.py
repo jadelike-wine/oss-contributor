@@ -167,10 +167,35 @@ class Pipeline:
           updated TEXT NOT NULL, workspace TEXT, base_sha TEXT);
         CREATE TABLE IF NOT EXISTS locks (name TEXT PRIMARY KEY, pid INTEGER, started TEXT);
         CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, task TEXT, event TEXT, at TEXT);
+        CREATE TABLE IF NOT EXISTS scheduler (name TEXT PRIMARY KEY, last_repo TEXT NOT NULL);
         ''')
         if 'child_pid' not in {r[1] for r in self.db.execute('PRAGMA table_info(locks)')}:
             self.db.execute('ALTER TABLE locks ADD COLUMN child_pid INTEGER')
             self.db.commit()
+
+    def fair_candidates(self, rows):
+        """Round-robin eligible repositories, retaining the supplied order within each."""
+        repos = list(dict.fromkeys(self.config['repositories']))
+        cursor = self.db.execute("SELECT last_repo FROM scheduler WHERE name='research'").fetchone()
+        if cursor and cursor['last_repo'] in repos:
+            start = repos.index(cursor['last_repo']) + 1
+            repos = repos[start:] + repos[:start]
+        buckets = {repo: [] for repo in repos}
+        for row in rows:
+            if row['repo'] in buckets:
+                buckets[row['repo']].append(row)
+        ordered = []
+        for index in range(max((len(bucket) for bucket in buckets.values()), default=0)):
+            for repo in repos:
+                if index < len(buckets[repo]):
+                    ordered.append(buckets[repo][index])
+        return ordered
+
+    def research_turn(self, repo):
+        # Persist before dispatch: failed or interrupted attempts must also yield a turn.
+        with self.db:
+            self.db.execute("INSERT INTO scheduler VALUES ('research',?) ON CONFLICT(name) "
+                            'DO UPDATE SET last_repo=excluded.last_repo', (repo,))
 
     def track_process(self, lock, pid):
         with self.db:
@@ -565,7 +590,11 @@ def main():
             Autonomous(pipeline).run()
         elif args.analyze:
             # Failed tasks are deliberately not automatically retried.
-            for row in pipeline.db.execute("SELECT id FROM tasks WHERE state='DISCOVERED' AND holds='[]' ORDER BY score DESC LIMIT ?", (pipeline.config["max_analysis_per_tick"],)).fetchall():
+            rows = pipeline.db.execute("SELECT id,repo FROM tasks WHERE state='DISCOVERED' AND holds='[]' ORDER BY score DESC,id").fetchall()
+            for row in pipeline.fair_candidates(rows)[:pipeline.config['max_analysis_per_tick']]:
+                if pipeline.db.execute("SELECT 1 FROM locks WHERE name IN ('worker','prepare','autonomous')").fetchone():
+                    break
+                pipeline.research_turn(row['repo'])
                 try:
                     print(pipeline.analyze(row["id"]))
                 except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as exc:

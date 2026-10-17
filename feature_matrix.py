@@ -75,7 +75,11 @@ def build(answer, task, packet):
         if not sha and not source.get('error'):
             raise ValueError('Successful snapshot requires a fixed SHA')
     sources = {s['repo']: s for s in supplied}
-    statuses = raw.get('feature_status')
+    # Older prose prompts did not specify nesting; accept their top-level map
+    # without weakening any evidence checks. Ambiguous conflicting maps fail closed.
+    statuses = raw.get('feature_status', answer.get('feature_status'))
+    if 'feature_status' in raw and 'feature_status' in answer and raw['feature_status'] != answer['feature_status']:
+        raise ValueError('Conflicting feature_status maps')
     if not isinstance(statuses, dict) or set(statuses) != set(sources):
         raise ValueError('Matrix must cover target and every selected peer exactly once')
     normalized, all_evidence = {}, []
@@ -164,11 +168,12 @@ def persist(engine, task, answer, matrix, **gates):
 
 
 PROMPT = '''For every candidate include feature_matrix with feature_key (stable lowercase kebab-case identity),
-feature_name, category (one of %s), user_scenario, gap_analysis (including existing alternatives),
-migration_analysis (reusable design AND architectural incompatibilities; do not copy code blindly),
-affected_files (relative paths array), implementation_plan (steps array), validation_plan (commands and acceptance array), risks.
-feature_status maps EVERY target/peer repo to {status: implemented|partial|not_found|unknown, reason,
+feature_name (string), category (string, one of %s), user_scenario (string), gap_analysis (string, including existing alternatives),
+migration_analysis (string, reusable design AND architectural incompatibilities; do not copy code blindly),
+affected_files (relative paths array of strings), implementation_plan (steps array of strings), validation_plan (commands and acceptance array of strings), risks (nonempty STRING, not an array).
+Inside feature_matrix, the REQUIRED feature_status object maps EVERY target/peer repo to {status: implemented|partial|not_found|unknown, reason,
 missing (required for partial), checked_paths: [actually supplied paths], evidence: [{repo,path,quote}]}.
 implemented/partial require exact code/test quotes. not_found means only in checked_paths, never whole-project absence.
 Failed/incomplete inspections are unknown. Tests are static evidence, NOT execution results.
+Nesting example: {"feature_matrix":{"feature_key":"resume-session", ...,"feature_status":{"owner/target":{...},"owner/peer":{...}}}}.
 ''' % ', '.join(CATEGORIES)

@@ -39,11 +39,34 @@ class DuplicateTests(unittest.TestCase):
             self.assertFalse(self.engine.duplicates('task', self.data, 'issue'))
         self.engine.move.assert_called_once_with('task', self.data, 'SKIPPED')
 
+    def test_repository_prose_cannot_hide_duplicates_or_change_scope(self):
+        self.data['plan']['duplicate_queries'] = ['owner/repo repo:other/project resume saved trajectory']
+        with self.search(self.issue) as search:
+            self.assertFalse(self.engine.duplicates('task', self.data, 'issue'))
+        self.assertIn('q=repo:owner/repo resume saved trajectory', search.call_args.args)
+
     def test_competing_pr_is_still_reviewed_and_rejected(self):
         with self.search({**self.issue, 'pull_request': {'url': 'pr-url'}}):
             self.assertFalse(self.engine.duplicates('task', self.data, 'pr'))
         self.engine.judge.assert_called_once()
         self.assertEqual(self.data['skip_reason'], 'existing report')
+
+    def test_feature_request_is_reused_without_authorizing_implementation(self):
+        self.data['plan']['category'] = 'feature'
+        self.engine.judge.return_value = {'approved': True, 'reason': 'Open demand; design unconfirmed', 'existing_issue': 20}
+        with self.search(self.issue):
+            self.assertTrue(self.engine.duplicates('task', self.data, 'issue'))
+        self.assertEqual(20, self.data['existing_issue']['number'])
+        self.assertNotIn('maintainer_approved', self.data)
+        self.engine.move.assert_not_called()
+
+    def test_feature_request_reuse_rejects_closed_pr_and_invented_ids(self):
+        self.data['plan']['category'] = 'feature'
+        for item, number in [({**self.issue, 'state': 'closed'}, 20),
+                             ({**self.issue, 'pull_request': {'url': 'pr'}}, 20), (self.issue, 999)]:
+            self.engine.judge.return_value = {'approved': True, 'reason': 'reuse', 'existing_issue': number}
+            with self.search(item), self.assertRaisesRegex(ValueError, 'inspected open issue'):
+                self.engine.duplicates('task', self.data, 'issue')
 
 
 if __name__ == '__main__':

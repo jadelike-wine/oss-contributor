@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from feature_matrix import build, persist, route, file_type
-from research import collect, validate, snapshot
+from research import collect, validate, snapshot, select_paths, search_target
 from telemetry import BudgetExhausted
 from test_autonomous import AutonomousTests as Fixture
 from test_research import opportunity
@@ -31,6 +31,69 @@ class MatrixTests(unittest.TestCase):
     setUp = Fixture.setUp
     tearDown = Fixture.tearDown
     git = Fixture.git
+
+    def test_session_selection_uses_baseline_content_and_preserves_runtime_coverage(self):
+        files = {
+            'src/minisweagent/agents/default.py': 'def save():\n    return "trajectory"\n',
+            'src/minisweagent/agents/interactive.py': 'history = []\n',
+            'src/minisweagent/models/utils/actions_text.py': 'actions = []\n',
+            'src/minisweagent/py.typed': '',
+            'tests/agents/__init__.py': '',
+            'tests/agents/test_default.py': 'def test_save():\n    assert "trajectory"\n',
+            'docs/recovery.md': 'Resume a session\n',
+        }
+        for name, body in files.items():
+            path = self.work / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(body)
+        self.git('add', '.')
+        self.git('commit', '-qm', 'session fixture')
+        sha = self.git('rev-parse', 'HEAD')
+        focus = 'Compare session recovery and checkpoints without repeating completed actions'
+        # An untracked or edited file must not change what baseline research sees.
+        (self.work / 'src/minisweagent/agents/default.py').write_text('unrelated = True\n')
+        (self.work / 'untracked.py').write_text('resume = True\n')
+        matches = search_target(self.work, sha, focus, list(files))
+        self.assertIn('src/minisweagent/agents/default.py', matches)
+        self.assertNotIn('untracked.py', matches)
+        selected = select_paths(list(files), focus, 4, matches)
+        self.assertIn('src/minisweagent/agents/default.py', selected)
+        self.assertIn('tests/agents/test_default.py', selected)
+        self.assertIn('docs/recovery.md', selected)
+        self.assertNotIn('src/minisweagent/py.typed', selected)
+        self.assertNotIn('tests/agents/__init__.py', selected)
+
+    def test_content_search_no_hits_is_not_a_command_failure(self):
+        self.assertEqual([], search_target(self.work, self.base, 'nonexistentcapability', ['value.py']))
+
+    def test_legacy_status_nesting_keeps_all_evidence_checks(self):
+        task, packet, answer = self.fixture()
+        answer['feature_status'] = answer['feature_matrix'].pop('feature_status')
+        self.assertIn(task['repo'], build(answer, task, packet)['feature_status'])
+        answer['feature_matrix']['feature_status'] = {}
+        with self.assertRaisesRegex(ValueError, 'Conflicting'):
+            build(answer, task, packet)
+
+    def test_correction_reports_bad_quotes_and_unread_scope_together(self):
+        from research import correction_feedback
+        task, packet, answer = self.fixture()
+        answer['feature_matrix']['feature_status'][task['repo']]['checked_paths'] = ['unread.py']
+        answer['evidence'][0]['quote'] = 'invented excerpt'
+        feedback = correction_feedback(answer, packet, ValueError('first error'))
+        self.assertIn('unread.py', feedback)
+        self.assertIn('invented excerpt', feedback)
+
+    def test_policy_files_do_not_displace_reserved_source_and_test_reads(self):
+        (self.work / 'AGENTS.md').write_text('Rules\n')
+        (self.work / 'CONTRIBUTING.md').write_text('Contribution rules\n')
+        (self.work / 'test_value.py').write_text('assert True\n')
+        self.git('add', '.')
+        self.git('commit', '-qm', 'policy coverage')
+        task = {**self.p.task(self.key), 'base_sha': self.git('rev-parse', 'HEAD')}
+        self.p.config['research'] = {'target_files': 4}
+        with patch('repository_catalog.research_pool', return_value=[]), patch('research.gh', return_value=[]):
+            packet = collect(self.engine, task)
+        self.assertEqual({'AGENTS.md', 'CONTRIBUTING.md', 'value.py', 'test_value.py'}, set(packet['target']['files']))
 
     def fixture(self):
         task = self.p.task(self.key)

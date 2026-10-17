@@ -210,14 +210,15 @@ def observed(name, task=False):
     return decorate
 
 
-def model_call(channel):
+def model_call(channel, review=None):
     def decorate(function):
         @functools.wraps(function)
         def wrapper(self, task_id, purpose, *args, **kwargs):
-            with run(self.p, 'model'), stage('review' if channel == 'hermes' else 'model', task_id):
+            is_review = channel == 'hermes' if review is None else review
+            with run(self.p, 'model'), stage('review' if is_review else 'model', task_id):
                 current = ACTIVE.get()
                 model = self.p.config.get('review_model') or self.p.config.get('model', 'tokenking/devin/swe-2')
-                if channel == 'opencode':
+                if not is_review:
                     model = self.p.config.get('model', 'tokenking/devin/swe-2')
                 identifier = current.reserve_call(task_id, purpose, model, channel)
                 previous_call = current.call_id

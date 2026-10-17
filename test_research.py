@@ -33,6 +33,12 @@ class ResearchTests(unittest.TestCase):
     mocks = AutonomousTests.mocks
     fake_gh = AutonomousTests.fake_gh
     fake_command = AutonomousTests.fake_command
+
+    def test_registering_hunt_does_not_probe_unrelated_contribution_boards(self):
+        from argparse import Namespace
+        from contribute import dispatch
+        with patch.object(self.p, 'effective_repositories', side_effect=AssertionError('unrelated network probe')):
+            dispatch(self.p, Namespace(action='hunt', repo='owner/repo', focus='bounded research'))
     def packet(self):
         (self.work / 'CONTRIBUTING.md').write_text('Small bug fixes welcome.\n', encoding='utf-8')
         self.git('add', 'CONTRIBUTING.md')
@@ -94,6 +100,67 @@ class ResearchTests(unittest.TestCase):
             self.assertEqual('SKIPPED', self.engine.advance(self.key))
         duplicate.assert_not_called()
         self.assertEqual([], self.created_issues)
+
+    def test_invalid_research_gets_only_one_bounded_correction(self):
+        packet = self.packet()
+        invalid = opportunity()
+        invalid['scope'] = ['value.py']
+        with self.research_mocks(invalid, packet), patch.object(self.engine, 'model', side_effect=[
+                invalid, {'decision': 'none', 'reason': 'Insufficient evidence'}]) as model:
+            result = self.engine.research(self.key, self.engine.load(self.key))
+        self.assertEqual('none', result['opportunity']['decision'])
+        self.assertEqual(['research', 'research-correction'], [c.args[1] for c in model.call_args_list])
+        self.assertTrue((self.engine.packet_dir(self.key) / 'research-invalid.json').exists())
+
+    def test_repeated_invalid_correction_fails_closed(self):
+        packet = self.packet()
+        invalid = opportunity()
+        invalid['scope'] = ['value.py']
+        with self.research_mocks(invalid, packet), patch.object(self.engine, 'model', return_value=invalid) as model:
+            with self.assertRaisesRegex(ValueError, 'scope'):
+                self.engine.research(self.key, self.engine.load(self.key))
+        self.assertEqual(2, model.call_count)
+        self.assertFalse(self.engine.load(self.key).get('research'))
+
+    def test_reviewer_feedback_revises_once_and_cannot_loop(self):
+        packet = self.packet()
+        with self.research_mocks(opportunity(), packet), patch.object(self.engine, 'judge', return_value={
+                'approved': False, 'reason': 'Missing compatibility analysis'}) as judge:
+            self.engine.research(self.key, self.engine.load(self.key))
+        self.assertEqual(2, judge.call_count)
+        data = self.engine.load(self.key)
+        self.assertTrue(data['research_revision_attempted'])
+        self.assertEqual('SKIPPED', data['stage'])
+        self.assertFalse(data.get('research'))
+
+    def test_revalidation_reuses_proposal_but_clears_old_approval_on_failure(self):
+        packet = self.packet()
+        data = self.engine.load(self.key)
+        data['research'] = {'opportunity': opportunity(), 'base_sha': self.base,
+                            'fingerprint': self.p.fingerprint(self.work), 'approved': True}
+        self.engine.store(self.key, data)
+        with self.research_mocks(opportunity(), packet), patch.object(self.engine, 'model') as model, \
+                patch.object(self.engine, 'duplicates', side_effect=RuntimeError('network unavailable')):
+            with self.assertRaisesRegex(RuntimeError, 'network unavailable'):
+                self.engine.research(self.key, data)
+        model.assert_not_called()
+        self.assertFalse(self.engine.load(self.key).get('research'))
+
+    def test_existing_feature_request_waits_without_creating_duplicate_issue(self):
+        self.packet()
+        answer = opportunity()
+        answer['category'] = 'feature'
+        data = self.engine.load(self.key)
+        data['research'] = {'opportunity': answer, 'existing_issue': {'number': 42}}
+        self.engine.store(self.key, data)
+        with self.mocks(), patch('autonomous.gh', return_value={
+                'number': 42, 'state': 'open', 'html_url': 'https://github.com/owner/repo/issues/42'}):
+            self.engine.plan(self.key, data)
+        self.assertEqual('WAITING_MAINTAINER', data['stage'])
+        self.assertEqual(42, self.p.task(self.key)['number'])
+        self.assertFalse(data.get('maintainer_approved'))
+        self.assertEqual([], self.created_issues)
+        self.assertEqual([], self.created_prs)
 
     def test_lost_proposal_response_recovers_without_duplicate_or_implementation(self):
         packet = self.packet()

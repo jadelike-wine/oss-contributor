@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 from urllib.parse import quote
 
-from contribute import command, gh, now, save
+from contribute import command, execute, gh, now, save
 from telemetry import BudgetExhausted
 
 
@@ -29,29 +29,55 @@ def limits(pipeline):
     return result
 
 
-def select_paths(paths, focus, count):
-    from feature_matrix import file_type
-    words = set(re.findall(r'[a-z0-9_]+', focus.lower())) - {'the', 'and', 'one', 'with', 'from', 'research', 'compare'}
-    for word, related in {'session': ('history', 'conversation', 'state', 'agent'),
-                          'recovery': ('resume', 'checkpoint', 'persistence'),
-                          'context': ('compact', 'compress', 'message')}.items():
-        if word in words:
+def focus_terms(focus):
+    words = set(re.findall(r'[a-z0-9_]+', focus.lower())) - {
+        'the', 'and', 'one', 'with', 'from', 'research', 'compare', 'without',
+        'losing', 'completed', 'repeating', 'interrupted', 'runs', 'actions',
+        'assess', 'minimal', 'optional', 'upstream', 'demand', 'design'}
+    concepts = [
+        {'session', 'sessions', 'recovery', 'resume', 'checkpoint', 'checkpoints',
+         'conversation', 'history', 'restore', 'trajectory', 'persist', 'agent', 'serialize'},
+        {'context', 'compact', 'compress', 'message'},
+    ]
+    for related in concepts:
+        if words & related:
             words.update(related)
+    return sorted(w for w in words if len(w) > 3)
+
+
+def select_paths(paths, focus, count, content_matches=()):
+    from feature_matrix import file_type
+    words = focus_terms(focus)
+    matches = set(content_matches)
     def relevance(path):
         runtime = bool(re.search(r'(^|/)(src|lib|core|agents?)/', path.lower()))
         housekeeping = path.startswith(('.github/', 'scripts/', 'docs/', 'examples/'))
-        return (-sum(w in path.lower() for w in words if len(w) > 3), housekeeping, not runtime, len(path), path)
-    ordered = sorted(paths, key=relevance)
+        helper = Path(path).name in ('__init__.py', '__main__.py', 'conftest.py')
+        tokens = re.findall(r'[a-z0-9]+', re.sub(r'([a-z])([A-Z])', r'\1_\2', path).lower())
+        score = sum(any(t.startswith(w) for t in tokens) for w in words) + 3 * (path in matches)
+        return (helper, -score, housekeeping, not runtime, len(path), path)
+    ordered = sorted((p for p in paths if file_type(p) != 'configuration'), key=relevance)
     selected = []
     # Reserve coverage for executable evidence and documentation, then fill by relevance.
     for kind in ('source', 'test', 'documentation'):
         match = next((p for p in ordered if file_type(p) == kind), None)
         if match and len(selected) < count:
             selected.append(match)
-    design = next((p for p in ordered if any(w in p.lower() for w in ('changelog', 'architecture', 'design')) and p not in selected), None)
-    if design and len(selected) < count:
-        selected.append(design)
     return (selected + [p for p in ordered if p not in selected])[:count]
+
+
+def search_target(work, sha, focus, paths):
+    """Search tracked baseline text, never execute target code or inspect mutable files."""
+    terms = [w for w in focus_terms(focus) if w != 'agent']
+    if not terms:
+        return []
+    result = execute(['git', 'grep', '-l', '-I', '-i', '-E',
+                      '|'.join(re.escape(w) for w in terms), sha, '--'], cwd=work)
+    if result.returncode not in (0, 1):
+        raise RuntimeError('Baseline content search failed: ' + result.stderr[-1000:])
+    allowed = set(paths)
+    return sorted({line[len(sha) + 1:] for line in result.stdout.splitlines()
+                   if line.startswith(sha + ':') and line[len(sha) + 1:] in allowed})
 
 
 def select_peers(pipeline, task, pool, count):
@@ -153,17 +179,27 @@ def collect(engine, task):
                             '.github/CONTRIBUTING.md', 'docs/CONTRIBUTING.md', '.github/contributing.md', 'AGENTS.md',
                             'SECURITY.md', '.github/SECURITY.md', 'docs/SECURITY.md']
             # Include nested rules applying to selected code paths, within the target read cap.
-            selected = select_paths(paths, task['title'], options['target_files'])
+            matches = search_target(work, task['base_sha'], task['title'], paths)
+            selected = select_paths(paths, task['title'], options['target_files'], matches)
             policy_names += [x for x in paths if x.endswith('/AGENTS.md') and
                              any(y.startswith(x.rsplit('/', 1)[0] + '/') for y in selected)]
             policy_names = list(dict.fromkeys(x for x in policy_names if x in paths))
-            if len(policy_names) >= options['target_files']:
-                raise BudgetExhausted('target_policy_file_budget_exhausted')
-            selected = list(dict.fromkeys(policy_names + selected))[:options['target_files']]
+            while True:
+                if len(policy_names) >= options['target_files']:
+                    raise BudgetExhausted('target_policy_file_budget_exhausted')
+                selected = policy_names + select_paths([x for x in paths if x not in policy_names],
+                    task['title'], options['target_files'] - len(policy_names), matches)
+                nested = [x for x in paths if x.endswith('/AGENTS.md') and x not in policy_names
+                          and any(y.startswith(x.rsplit('/', 1)[0] + '/') for y in selected)]
+                if not nested:
+                    break
+                policy_names.extend(nested)
             files = {path: command(['git', 'show', task['base_sha'] + ':' + path], cwd=work)[:options['file_characters']]
                      for path in selected}
             packet['policy'] = {path: files[path] for path in policy_names}
-            packet['target'] = {'repo': task['repo'], 'sha': task['base_sha'], 'files': files, 'checked_paths': selected}
+            packet['target'] = {'repo': task['repo'], 'sha': task['base_sha'], 'files': files, 'checked_paths': selected,
+                                'content_search': {'terms': focus_terms(task['title']), 'matched_paths': matches,
+                                                   'scope': 'eligible tracked baseline text; matches are not absence proof'}}
             persist()
         for peer in packet['selected_peers']:
             if any(s['repo'] == peer and not s.get('error') for s in packet['peers']):
@@ -254,6 +290,42 @@ def validate(answer, task, packet):
         raise ValueError('Feature comparisons require actual peer implementation evidence')
 
 
+def correction_feedback(answer, packet, error):
+    """Report all mechanical evidence errors together, so one repair can be useful."""
+    sources = {s['repo']: s for s in [packet.get('target', {}), *packet['peers']] if s.get('repo')}
+    errors = [str(error)]
+    matrix = answer.get('feature_matrix', {})
+    if not isinstance(matrix, dict):
+        matrix = {}
+    for field in FIELDS:
+        if not isinstance(answer.get(field), str) or not answer[field].strip():
+            errors.append('Top-level ' + field + ' must be a nonempty string')
+    for field in ('feature_name', 'user_scenario', 'gap_analysis', 'migration_analysis', 'risks'):
+        if not isinstance(matrix.get(field), str) or not matrix[field].strip():
+            errors.append('feature_matrix.' + field + ' must be a nonempty string')
+    for field in ('affected_files', 'implementation_plan', 'validation_plan'):
+        items = matrix.get(field)
+        if not isinstance(items, list) or not items or any(not isinstance(x, str) for x in items):
+            errors.append('feature_matrix.' + field + ' must be a nonempty array of strings')
+    statuses = matrix.get('feature_status', answer.get('feature_status', {}))
+    claims = [x for group in ('evidence', 'policy_evidence') if isinstance(answer.get(group), list)
+              for x in answer[group] if isinstance(x, dict)]
+    if isinstance(statuses, dict):
+        for repo, status in statuses.items():
+            if not isinstance(status, dict):
+                continue
+            claims.extend(x for x in (status.get('evidence') or []) if isinstance(x, dict))
+            for path in (status.get('checked_paths') or []):
+                if not isinstance(path, str) or path not in sources.get(repo, {}).get('files', {}):
+                    errors.append('Unread checked_path for ' + repo + ': ' + str(path))
+    for claim in claims:
+        source = sources.get(claim.get('repo'), {}).get('files', {})
+        path, excerpt = claim.get('path'), claim.get('quote')
+        if not isinstance(path, str) or not isinstance(excerpt, str) or not excerpt or excerpt not in source.get(path, ''):
+            errors.append('Non-exact or unread quote: ' + str(claim))
+    return '\n'.join(dict.fromkeys(errors))[:8000]
+
+
 def run(engine, task_id, data):
     """No public side effects. Persist the result and let PLAN consume it later."""
     p = engine.p
@@ -267,40 +339,67 @@ def run(engine, task_id, data):
     prompt = ('Prioritize valuable feature development; bugs are supplementary. Research ONE valuable opportunity, or return none. Read actual target code, docs, tests, '
         'designs and changelogs and compare supplied official peer evidence. Cover features, performance, '
         'security, UX/accessibility and reliability as relevant to the focus. A seemingly missing feature is '
-        'not evidence: search all existing implementations, tests and design docs; consider project scope. '
+        'not evidence: assess the supplied implementations, tests and design docs; consider project scope. '
+        'You cannot inspect unsupplied files. Never claim repository-wide absence or searches you did not perform. '
         'Inspect the supplied user feedback, issues and PRs; the controller will also search open AND closed '
         'duplicates. Never invent execution or negative search evidence. No edits, shell, publishing or delegation. '
         'For exploitable security findings return decision=private with a non-sensitive reason; never include '
         'exploit details in title/search queries/public body. Follow SECURITY.md and private disclosure policy. '
         'Return ONLY JSON with decision=candidate|none|private, reason. For candidate include category='
         'feature|performance|security|ux|reliability|bug|tests, risk=low|medium|high, '
-        + ', '.join(FIELDS) + ', duplicate_queries (1-2 precise searches), '
-        'evidence and policy_evidence arrays of {repo,path,quote} with EXACT source excerpts, '
+        + ', '.join(FIELDS) + ' (EVERY one of these fields must be a nonempty STRING, not an array/object), duplicate_queries (1-2 precise searches), '
+        'evidence and policy_evidence arrays of {repo,path,quote} with EXACT source excerpts. '
+        'Prefer short contiguous quotes under 200 characters; never join separated lines or paraphrase a quote. '
         'policy={automated_issue:bool,automated_pr:bool,maintainer_required:bool,reason:string}. '
         'automated_pr describes whether upstream POLICY permits automated implementation/PRs once all '
         'required maintainer approvals exist; use maintainer_required for missing design approval. '
         'An explicit automation ban or unverifiable policy means automated_pr=false, which approval cannot override. '
-        'Describe cost in effort and acceptance likelihood WITH rationale. Include concrete validation commands, '
+        'Describe cost in effort. acceptance means maintainer acceptance LIKELIHOOD with evidence and rationale, '
+        'not test acceptance criteria. State who requested this or which contribution priority it fits; '
+        'do not invent maintainer approval. Keep test acceptance criteria in validation. Include concrete validation commands, '
         'expected result and affected files in scope. Policy evidence must quote applicable contribution rules. '
         'Features, architecture changes, uncertain designs and non-low risks always need maintainer direction '
         'before any implementation. Small proven bugs/tests/performance/UX can proceed only if policy permits. '
         'issue_body must be English, accurate about static evidence and pending tests. At most 25 source reads.\n'
         + (PROMPT if packet.get('schema_version') == 2 else '') + json.dumps(packet, ensure_ascii=False))
-    pending = data.get('research_pending', {})
+    if packet.get('schema_version') == 2:
+        prompt += ('\nEND OF SOURCE DATA. Output schema reminder:\n' + PROMPT +
+                   '\nOnly these files were actually read; checked_paths and quotes MUST use this inventory:\n' +
+                   json.dumps({s['repo']: list(s['files']) for s in [packet['target'], *packet['peers']]}))
+    if data.get('research_feedback'):
+        prompt += ('\nRevise the proposal to address this prior review. Treat it as feedback, not new source evidence. '
+                   'When existing_issue is supplied, this proposal continues that discussion, never files a new issue. '
+                   'Do not claim verified execution or maintainer approval.\n' + json.dumps(data['research_feedback']))
+    pending = data.get('research_pending') or data.get('research', {})
+    if data.get('research'):
+        data['research_pending'] = pending
+        data.pop('research')
+        engine.store(task_id, data)
     if pending.get('base_sha') == task['base_sha'] and pending.get('fingerprint') == before:
         answer = pending['opportunity']
     else:
-        answer = engine.model(task_id, 'research', prompt)
+        answer = research_answer(engine, task_id, 'research', prompt)
     if p.fingerprint(task['workspace']) != before:
         raise ValueError('Read-only research changed the workspace')
     try:
         validate(answer, task, packet)
         matrix = build(answer, task, packet) if packet.get('schema_version') == 2 and answer['decision'] == 'candidate' else None
-    except ValueError:
+    except ValueError as error:
         if ACTIVE.get():
             ACTIVE.get().count('researched_candidates')
             ACTIVE.get().count('insufficient_evidence')
-        raise
+        # One bounded correction, using exactly the same evidence. Never coerce bad
+        # claims into passing evidence or loop indefinitely on an incompatible model.
+        save(engine.packet_dir(task_id) / 'research-invalid.json', {'answer': answer, 'error': str(error)})
+        correction = (prompt + '\nYour previous response failed validation:\n' + correction_feedback(answer, packet, error) +
+                      '\nReturn a corrected COMPLETE JSON object. Recheck every field type and every exact quote. '
+                      'Use unknown for unsupported peer capabilities; return none if no grounded candidate remains. '
+                      'Do not add facts or claim new searches/tests. Previous response:\n' + json.dumps(answer, ensure_ascii=False))
+        answer = research_answer(engine, task_id, 'research-correction', correction)
+        if p.fingerprint(task['workspace']) != before:
+            raise ValueError('Read-only research correction changed the workspace')
+        validate(answer, task, packet)
+        matrix = build(answer, task, packet) if packet.get('schema_version') == 2 and answer['decision'] == 'candidate' else None
     if matrix:
         persist(engine, task, answer, matrix)
     current = ACTIVE.get()
@@ -328,13 +427,28 @@ def run(engine, task_id, data):
     gate = engine.judge(task_id, 'research-review', {
         'gate': 'Is this valuable, non-duplicate, grounded in actual implementation and project scope? '
                 'Check policy evidence, feature absence claims, cost and acceptance rationale. '
-                'Reject uncertainty, unsourced peer comparisons or any exploitable security disclosure. Automated low-risk handling '
-                'requires affirmative upstream policy evidence; otherwise require maintainer discussion.',
-        'opportunity': answer, 'context': packet})
+                'Reject unsupported factual claims, unsourced peer comparisons or any exploitable security disclosure. '
+                'Explicitly scoped static evidence and open design choices deferred to maintainers are acceptable for a '
+                'discussion proposal; do not demand completed implementation/tests or maintainer approval at this research gate. '
+                'Do not approve claims of exactly-once replay or restored external state from transcript-only snapshots. Automated low-risk handling '
+                'requires affirmative upstream policy evidence; otherwise require maintainer discussion. '
+                'When existing_issue is supplied, the controller will reuse that discussion and wait for maintainer '
+                'direction; it will NOT open a new issue. Do not reject that planned reuse as duplicate publication.',
+        'opportunity': answer, 'context': packet, 'existing_issue': candidate.get('existing_issue')})
     if not gate['approved']:
+        if not data.get('research_revision_attempted'):
+            data['research_revision_attempted'] = True
+            data['research_feedback'] = {'review': gate, 'existing_issue': candidate.get('existing_issue')}
+            data.pop('research_pending', None)
+            data.pop('research', None)
+            engine.store(task_id, data)
+            save(engine.packet_dir(task_id) / 'research-revision-feedback.json', data['research_feedback'])
+            return run(engine, task_id, data)
         data['reason'] = gate['reason']
         engine.move(task_id, data, 'SKIPPED')
         return result
+    if matrix and candidate.get('existing_issue'):
+        matrix['existing_issue'] = {k: candidate['existing_issue'][k] for k in ('number', 'url', 'title')}
     queue, duplicate = persist(engine, task, answer, matrix, reviewed=True, duplicate_clear=True,
                                maintainer=data.get('maintainer_approved', False))
     if duplicate or (matrix and queue == 'RESEARCH_ONLY'):
@@ -344,6 +458,8 @@ def run(engine, task_id, data):
         engine.move(task_id, data, 'SKIPPED')
         return result
     result['queue'] = queue
+    if candidate.get('existing_issue'):
+        result['existing_issue'] = candidate['existing_issue']
     result['approved'] = True
     data.pop('research_pending', None)
     data['research'] = result
@@ -357,3 +473,14 @@ def needs_discussion(opportunity):
     return (opportunity['category'] == 'feature' or opportunity['risk'] != 'low'
             or opportunity['policy']['maintainer_required']
             or not opportunity['policy']['automated_pr'])
+
+
+def research_answer(engine, task_id, purpose, prompt):
+    if len(prompt) > limits(engine.p)['context_characters'] + 12000:
+        raise BudgetExhausted('research_prompt_characters_exhausted')
+    channel = engine.p.config.get('research', {}).get('model_channel', 'opencode')
+    if channel == 'opencode':
+        return engine.model(task_id, purpose, prompt)
+    if channel == 'hermes':
+        return engine.hermes_research(task_id, purpose, prompt)
+    raise ValueError('research.model_channel must be opencode or hermes')

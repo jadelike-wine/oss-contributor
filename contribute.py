@@ -843,7 +843,9 @@ def main():
 
 
 def dispatch(pipeline, args):
-    if args.action not in ('status', 'unlock'):
+    research_only = (args.action in ('hunt', 'research-batch') or
+                     (args.action == 'analyze' and pipeline.task(args.task)['source'] == 'hunt'))
+    if args.action not in ('status', 'unlock') and not research_only:
         pipeline.effective_repositories()
     if args.action == 'research-batch':
         from autonomous import Autonomous

@@ -1,0 +1,307 @@
+{
+  "kind": "live_research_not_fixture",
+  "observed_at": "2026-10-17T16:26:12.227705+00:00",
+  "task_id": "SWE-agent--mini-swe-agent--hunt-84ed9801ff3a",
+  "matrix": {
+    "feature_name": "Resume a saved trajectory after interruption",
+    "user_scenario": "A run crashes or hits a limit mid-task (as in upstream issue #963); the user wants to continue the saved trajectory with prior cost/step accounting instead of restarting from scratch.",
+    "gap_analysis": "save() writes full messages plus model_stats after every step, but run() always resets self.messages and re-renders templates; no supplied path loads a .traj.json back into an agent. Existing alternative: none supplied in target; peers ship session resume (vibe) and checkpoint restore plans (cline).",
+    "migration_analysis": "Reusable from peers: durable session records and explicit resume entry points (vibe ADR), restore-plan validation before mutation (cline). Incompatible to copy: peers persist richer session stores and worktree checkpoints; mini-swe-agent stores a single trajectory JSON with model-format-specific message shapes, so resume must key off trajectory_format and the model's message format rather than adopt peer schemas.",
+    "risks": "Last-step data loss on hard kill; wall_time_limit_seconds semantics change across resume; message-format drift between saved trajectory and configured model class.",
+    "affected_files": [
+      "src/minisweagent/run/extra/resume.py",
+      "docs/advanced/cookbook.md",
+      "tests/run/test_resume.py"
+    ],
+    "implementation_plan": [
+      "Discuss design on issue #963; confirm maintainer preference for extra script vs agent subclass.",
+      "Implement loader: parse .traj.json, validate trajectory_format, restore messages/cost/n_calls.",
+      "Handle trailing unpaired assistant message after a hard kill (drop or synthesize observation).",
+      "Decide and document wall-clock limit semantics on resume (_start_time reset).",
+      "Add tests covering resume continuation, cost/step limit continuity, and truncated-tail handling."
+    ],
+    "validation_plan": [
+      "pytest tests/run/test_resume.py — resumed agent continues with restored messages and stats",
+      "pytest -n auto — no regressions",
+      "Acceptance: trajectory saved mid-run resumes and submits; cost_limit/step_limit remain enforced across the resume"
+    ],
+    "category": "session_recovery",
+    "schema_version": 1,
+    "feature_id": "e1eacd11efbc474ccdc7b1c4",
+    "feature_key": "resume-saved-trajectory",
+    "target_repo": "SWE-agent/mini-swe-agent",
+    "target_sha": "04d809ceab9df28f9adaed044884180159172930",
+    "peer_repositories": [
+      {
+        "repo": "mistralai/mistral-vibe",
+        "sha": "4ae5c5955da8e761318916bdb1a7f46f0b50c7d0",
+        "error": null
+      },
+      {
+        "repo": "aaif-goose/goose",
+        "sha": "bfcc6ee6f1ee18d0c4c852a65c49b25f87ee40dc",
+        "error": null
+      },
+      {
+        "repo": "cline/cline",
+        "sha": "a42df8c8d5fd9d9f9a9073589baffe32ea9bb2f0",
+        "error": null
+      }
+    ],
+    "feature_status": {
+      "SWE-agent/mini-swe-agent": {
+        "status": "not_found",
+        "reason": "In checked paths, trajectories are saved via save()/output_path but no code loads them back into an agent; run() resets self.messages. Absence limited to checked paths.",
+        "checked_paths": [
+          "src/minisweagent/agents/default.py",
+          "src/minisweagent/agents/interactive.py",
+          "src/minisweagent/agents/README.md",
+          "tests/agents/test_default.py",
+          "tests/agents/test_interactive.py",
+          "tests/utils/test_serialize.py"
+        ],
+        "evidence": [
+          {
+            "repo": "SWE-agent/mini-swe-agent",
+            "path": "src/minisweagent/agents/default.py",
+            "quote": "        self.messages = []",
+            "sha": "04d809ceab9df28f9adaed044884180159172930",
+            "file_type": "source",
+            "feature_id": "e1eacd11efbc474ccdc7b1c4",
+            "url": "https://github.com/SWE-agent/mini-swe-agent/blob/04d809ceab9df28f9adaed044884180159172930/src/minisweagent/agents/default.py"
+          },
+          {
+            "repo": "SWE-agent/mini-swe-agent",
+            "path": "src/minisweagent/agents/default.py",
+            "quote": "            finally:\n                self.save(self.config.output_path)",
+            "sha": "04d809ceab9df28f9adaed044884180159172930",
+            "file_type": "source",
+            "feature_id": "e1eacd11efbc474ccdc7b1c4",
+            "url": "https://github.com/SWE-agent/mini-swe-agent/blob/04d809ceab9df28f9adaed044884180159172930/src/minisweagent/agents/default.py"
+          }
+        ],
+        "sha": "04d809ceab9df28f9adaed044884180159172930",
+        "scope_limited": true
+      },
+      "mistralai/mistral-vibe": {
+        "status": "implemented",
+        "reason": "Sessions are durable resumable records with a saved-sessions layer and tested relocate/title/delete operations.",
+        "checked_paths": [
+          "vibe/core/checkpoints/history.py",
+          "tests/session/test_saved_sessions.py",
+          "docs/adr/0006-local-sessions.md"
+        ],
+        "evidence": [
+          {
+            "repo": "mistralai/mistral-vibe",
+            "path": "docs/adr/0006-local-sessions.md",
+            "quote": "Sessions are durable local records of conversation state, metadata, tool availability, stats, and resumability data.",
+            "sha": "4ae5c5955da8e761318916bdb1a7f46f0b50c7d0",
+            "file_type": "documentation",
+            "feature_id": "e1eacd11efbc474ccdc7b1c4",
+            "url": "https://github.com/mistralai/mistral-vibe/blob/4ae5c5955da8e761318916bdb1a7f46f0b50c7d0/docs/adr/0006-local-sessions.md"
+          },
+          {
+            "repo": "mistralai/mistral-vibe",
+            "path": "tests/session/test_saved_sessions.py",
+            "quote": "updated = await relocate_saved_session(",
+            "sha": "4ae5c5955da8e761318916bdb1a7f46f0b50c7d0",
+            "file_type": "test",
+            "feature_id": "e1eacd11efbc474ccdc7b1c4",
+            "url": "https://github.com/mistralai/mistral-vibe/blob/4ae5c5955da8e761318916bdb1a7f46f0b50c7d0/tests/session/test_saved_sessions.py"
+          }
+        ],
+        "sha": "4ae5c5955da8e761318916bdb1a7f46f0b50c7d0",
+        "scope_limited": false
+      },
+      "aaif-goose/goose": {
+        "status": "partial",
+        "reason": "UI shows session creation and resumeSessionId plumbing, plus docs on resuming sessions, but the resume backend implementation itself was not supplied.",
+        "missing": "Server-side session resume/restore implementation files were not among the supplied paths.",
+        "checked_paths": [
+          "ui/desktop/src/sessions.ts",
+          "ui/desktop/src/__tests__/sessions.test.ts",
+          "documentation/docs/guides/sessions/index.md"
+        ],
+        "evidence": [
+          {
+            "repo": "aaif-goose/goose",
+            "path": "ui/desktop/src/sessions.ts",
+            "quote": "resumeSessionId: session.id,",
+            "sha": "bfcc6ee6f1ee18d0c4c852a65c49b25f87ee40dc",
+            "file_type": "source",
+            "feature_id": "e1eacd11efbc474ccdc7b1c4",
+            "url": "https://github.com/aaif-goose/goose/blob/bfcc6ee6f1ee18d0c4c852a65c49b25f87ee40dc/ui/desktop/src/sessions.ts"
+          },
+          {
+            "repo": "aaif-goose/goose",
+            "path": "documentation/docs/guides/sessions/index.md",
+            "quote": "Learn how to start, resume, or search sessions",
+            "sha": "bfcc6ee6f1ee18d0c4c852a65c49b25f87ee40dc",
+            "file_type": "documentation",
+            "feature_id": "e1eacd11efbc474ccdc7b1c4",
+            "url": "https://github.com/aaif-goose/goose/blob/bfcc6ee6f1ee18d0c4c852a65c49b25f87ee40dc/documentation/docs/guides/sessions/index.md"
+          }
+        ],
+        "sha": "bfcc6ee6f1ee18d0c4c852a65c49b25f87ee40dc",
+        "scope_limited": false
+      },
+      "cline/cline": {
+        "status": "implemented",
+        "reason": "Core SDK implements checkpoint restore plans, message trimming to a run count, and worktree restore transactions with tests.",
+        "checked_paths": [
+          "sdk/packages/core/src/session/checkpoint-restore.ts",
+          "sdk/packages/core/src/session/checkpoint-restore.test.ts",
+          "apps/vscode/src/core/controller/checkpoints/checkpointRestore.ts"
+        ],
+        "evidence": [
+          {
+            "repo": "cline/cline",
+            "path": "sdk/packages/core/src/session/checkpoint-restore.ts",
+            "quote": "export function createCheckpointRestorePlan(input: {",
+            "sha": "a42df8c8d5fd9d9f9a9073589baffe32ea9bb2f0",
+            "file_type": "source",
+            "feature_id": "e1eacd11efbc474ccdc7b1c4",
+            "url": "https://github.com/cline/cline/blob/a42df8c8d5fd9d9f9a9073589baffe32ea9bb2f0/sdk/packages/core/src/session/checkpoint-restore.ts"
+          },
+          {
+            "repo": "cline/cline",
+            "path": "sdk/packages/core/src/session/checkpoint-restore.ts",
+            "quote": "export function trimMessagesToCheckpoint(",
+            "sha": "a42df8c8d5fd9d9f9a9073589baffe32ea9bb2f0",
+            "file_type": "source",
+            "feature_id": "e1eacd11efbc474ccdc7b1c4",
+            "url": "https://github.com/cline/cline/blob/a42df8c8d5fd9d9f9a9073589baffe32ea9bb2f0/sdk/packages/core/src/session/checkpoint-restore.ts"
+          }
+        ],
+        "sha": "a42df8c8d5fd9d9f9a9073589baffe32ea9bb2f0",
+        "scope_limited": false
+      }
+    },
+    "evidence": [
+      {
+        "repo": "SWE-agent/mini-swe-agent",
+        "path": "src/minisweagent/agents/default.py",
+        "quote": "        self.messages = []",
+        "sha": "04d809ceab9df28f9adaed044884180159172930",
+        "file_type": "source",
+        "feature_id": "e1eacd11efbc474ccdc7b1c4",
+        "url": "https://github.com/SWE-agent/mini-swe-agent/blob/04d809ceab9df28f9adaed044884180159172930/src/minisweagent/agents/default.py"
+      },
+      {
+        "repo": "SWE-agent/mini-swe-agent",
+        "path": "src/minisweagent/agents/default.py",
+        "quote": "            finally:\n                self.save(self.config.output_path)",
+        "sha": "04d809ceab9df28f9adaed044884180159172930",
+        "file_type": "source",
+        "feature_id": "e1eacd11efbc474ccdc7b1c4",
+        "url": "https://github.com/SWE-agent/mini-swe-agent/blob/04d809ceab9df28f9adaed044884180159172930/src/minisweagent/agents/default.py"
+      },
+      {
+        "repo": "mistralai/mistral-vibe",
+        "path": "docs/adr/0006-local-sessions.md",
+        "quote": "Sessions are durable local records of conversation state, metadata, tool availability, stats, and resumability data.",
+        "sha": "4ae5c5955da8e761318916bdb1a7f46f0b50c7d0",
+        "file_type": "documentation",
+        "feature_id": "e1eacd11efbc474ccdc7b1c4",
+        "url": "https://github.com/mistralai/mistral-vibe/blob/4ae5c5955da8e761318916bdb1a7f46f0b50c7d0/docs/adr/0006-local-sessions.md"
+      },
+      {
+        "repo": "mistralai/mistral-vibe",
+        "path": "tests/session/test_saved_sessions.py",
+        "quote": "updated = await relocate_saved_session(",
+        "sha": "4ae5c5955da8e761318916bdb1a7f46f0b50c7d0",
+        "file_type": "test",
+        "feature_id": "e1eacd11efbc474ccdc7b1c4",
+        "url": "https://github.com/mistralai/mistral-vibe/blob/4ae5c5955da8e761318916bdb1a7f46f0b50c7d0/tests/session/test_saved_sessions.py"
+      },
+      {
+        "repo": "aaif-goose/goose",
+        "path": "ui/desktop/src/sessions.ts",
+        "quote": "resumeSessionId: session.id,",
+        "sha": "bfcc6ee6f1ee18d0c4c852a65c49b25f87ee40dc",
+        "file_type": "source",
+        "feature_id": "e1eacd11efbc474ccdc7b1c4",
+        "url": "https://github.com/aaif-goose/goose/blob/bfcc6ee6f1ee18d0c4c852a65c49b25f87ee40dc/ui/desktop/src/sessions.ts"
+      },
+      {
+        "repo": "aaif-goose/goose",
+        "path": "documentation/docs/guides/sessions/index.md",
+        "quote": "Learn how to start, resume, or search sessions",
+        "sha": "bfcc6ee6f1ee18d0c4c852a65c49b25f87ee40dc",
+        "file_type": "documentation",
+        "feature_id": "e1eacd11efbc474ccdc7b1c4",
+        "url": "https://github.com/aaif-goose/goose/blob/bfcc6ee6f1ee18d0c4c852a65c49b25f87ee40dc/documentation/docs/guides/sessions/index.md"
+      },
+      {
+        "repo": "cline/cline",
+        "path": "sdk/packages/core/src/session/checkpoint-restore.ts",
+        "quote": "export function createCheckpointRestorePlan(input: {",
+        "sha": "a42df8c8d5fd9d9f9a9073589baffe32ea9bb2f0",
+        "file_type": "source",
+        "feature_id": "e1eacd11efbc474ccdc7b1c4",
+        "url": "https://github.com/cline/cline/blob/a42df8c8d5fd9d9f9a9073589baffe32ea9bb2f0/sdk/packages/core/src/session/checkpoint-restore.ts"
+      },
+      {
+        "repo": "cline/cline",
+        "path": "sdk/packages/core/src/session/checkpoint-restore.ts",
+        "quote": "export function trimMessagesToCheckpoint(",
+        "sha": "a42df8c8d5fd9d9f9a9073589baffe32ea9bb2f0",
+        "file_type": "source",
+        "feature_id": "e1eacd11efbc474ccdc7b1c4",
+        "url": "https://github.com/cline/cline/blob/a42df8c8d5fd9d9f9a9073589baffe32ea9bb2f0/sdk/packages/core/src/session/checkpoint-restore.ts"
+      }
+    ],
+    "tests": [
+      {
+        "repo": "mistralai/mistral-vibe",
+        "path": "tests/session/test_saved_sessions.py",
+        "quote": "updated = await relocate_saved_session(",
+        "sha": "4ae5c5955da8e761318916bdb1a7f46f0b50c7d0",
+        "file_type": "test",
+        "feature_id": "e1eacd11efbc474ccdc7b1c4",
+        "url": "https://github.com/mistralai/mistral-vibe/blob/4ae5c5955da8e761318916bdb1a7f46f0b50c7d0/tests/session/test_saved_sessions.py",
+        "execution_result": "not_run"
+      }
+    ],
+    "contribution_path": "research_only",
+    "created_at": "2026-10-17T16:21:44.496159+00:00",
+    "updated_at": "2026-10-17T16:27:04.910882+00:00",
+    "queue": "PAUSED_POLICY",
+    "queue_reason": "automation_or_personal_review_policy",
+    "existing_issue": {
+      "number": 963,
+      "url": "https://github.com/SWE-agent/mini-swe-agent/issues/963",
+      "title": "How to resume from a crashed interactive session?"
+    }
+  },
+  "policy": {
+    "automated_issue": false,
+    "automated_pr": false,
+    "maintainer_required": true,
+    "reason": "No explicit automation ban, but this is a feature touching agent state semantics; contributing guide steers feature extensions to new components and issue labels, and this should first be discussed on existing issue #963 to confirm maintainer-preferred shape before any PR."
+  },
+  "review": {
+    "approved": true,
+    "reason": "Grounded in supplied source: run() unconditionally resets self.messages and re-renders templates, save() persists messages plus model_stats in a per-step finally block, and serialize() emits trajectory_format — so the load-side gap is real and the feature-absence claim is properly scoped to checked paths. The plan correctly targets a comment on existing open issue #963 rather than a new issue or PR, flags two genuine edge cases the original report missed (_start_time reset affecting wall_time_limit_seconds, and a hard-kill leaving a trailing assistant message without observation), and defers design choices to maintainers per the gate's allowance for discussion proposals. Peer comparisons (vibe ADR session resumability, cline checkpoint-restore) are sourced and used only as precedent, not as required schema. Maintainer-required policy is respected: automated_issue/automated_pr are false and engagement on #963 precedes implementation. No exactly-once or external-state-restore claims; caveats are stated honestly. No security disclosure, permission, or compatibility risk in the deliverable (a scoped comment).",
+    "existing_issue": 963,
+    "review_identity": {
+      "model": "tokenking/devin/swe-2",
+      "channel": "hermes",
+      "independence": "same_model_separate_invocation"
+    }
+  },
+  "duplicate_review": {
+    "approved": true,
+    "reason": "Issue #963 is open, non-PR, and requests exactly this feature (resuming a crashed session to preserve spent cost). The plan correctly treats it as existing demand rather than a competing implementation, scopes the action to a technical comment on that issue rather than a new issue or premature PR, acknowledges it is a user request and not maintainer approval, and grounds the gap in code evidence (run() resets self.messages; save() persists per-step in finally). Prior duplicate flag is handled correctly by targeting the existing discussion. No competing implementation in the target repo was found in checked paths, and peer features are demand/prior-art, not conflicts.",
+    "existing_issue": 963,
+    "review_identity": {
+      "model": "tokenking/devin/swe-2",
+      "channel": "hermes",
+      "independence": "same_model_separate_invocation"
+    }
+  },
+  "upstream_execution": "not_run",
+  "upstream_publication": "none",
+  "maintainer_approval": false
+}

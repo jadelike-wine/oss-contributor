@@ -35,6 +35,32 @@ class TelemetryTests(unittest.TestCase):
         self.assertIsNone(report['runs'][0]['usage']['actual_cost_usd'])
         self.assertFalse(report['cost_caps_enforced'])
 
+    def test_hermes_research_uses_research_identity_budget_and_no_tools(self):
+        from autonomous import Autonomous
+        self.p.config.update(model='research/model', review_model='review/model')
+        key = self.p.hunt('owner/repo', 'live research adapter')
+        engine = Autonomous(self.p)
+        result = {'type': 'result', 'exit_code': 0, 'text': '{"decision":"none","reason":"no gap"}',
+                  'tokens': {'input': 10, 'output': 5}}
+        with patch('autonomous.execute', return_value=subprocess.CompletedProcess([], 0, json.dumps(result), '')) as invoke:
+            answer = engine.hermes_research(key, 'research', 'Inspect source')
+        self.assertEqual('none', answer['decision'])
+        argv = invoke.call_args.args[0]
+        self.assertEqual('research', argv[argv.index('--provider') + 1])
+        self.assertEqual('none', argv[argv.index('-t') + 1])
+        row = self.p.db.execute('SELECT * FROM model_calls').fetchone()
+        self.assertEqual('research/model', row['model'])
+        self.assertEqual('hermes', row['channel'])
+        self.assertEqual('success', row['outcome'])
+        with patch('autonomous.execute', return_value=subprocess.CompletedProcess([], 0, '', '')):
+            with self.assertRaisesRegex(RuntimeError, 'did not complete'):
+                engine.hermes_research(key, 'research', 'Inspect source')
+        self.assertEqual(2, self.p.db.execute('SELECT count(*) FROM model_calls').fetchone()[0])
+        stream = json.dumps({'type': 'tool_call', 'name': 'read_file'}) + '\n' + json.dumps(result)
+        with patch('autonomous.execute', return_value=subprocess.CompletedProcess([], 0, stream, '')):
+            with self.assertRaisesRegex(RuntimeError, 'used tools'):
+                engine.hermes_research(key, 'research', 'Inspect source')
+
     def test_budget_reserved_before_call_and_survives_next_run(self):
         self.p.config['budgets'] = {'run_model_calls': 1, 'task_model_calls': 1}
         with self.assertRaises(BudgetExhausted):

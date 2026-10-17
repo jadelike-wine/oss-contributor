@@ -1,5 +1,6 @@
 import unittest
 import tempfile
+import sqlite3
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -10,6 +11,11 @@ class DuplicateTests(unittest.TestCase):
     def setUp(self):
         self.engine = object.__new__(Autonomous)
         self.engine.p = Mock()
+        self.engine.p.config = {}
+        self.engine.p.db = sqlite3.connect(':memory:')
+        self.addCleanup(self.engine.p.db.close)
+        from telemetry import migrate
+        migrate(self.engine.p.db)
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.engine.p.root = Path(temp.name)

@@ -126,7 +126,7 @@ class ResearchTests(unittest.TestCase):
         import shutil
         import subprocess
         import sys
-        for name in ('contribute.py', 'autonomous.py', 'repository_policy.py', 'ci_status.py'):
+        for name in ('contribute.py', 'autonomous.py', 'repository_policy.py', 'ci_status.py', 'telemetry.py'):
             shutil.copyfile(__import__('pathlib').Path(__file__).parent / name, self.root / name)
         script = ("import runpy,sys; sys.argv=['contribute.py','status']; "
                   "runpy.run_path('contribute.py', run_name='__main__'); import autonomous; "

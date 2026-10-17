@@ -40,5 +40,36 @@
     "max_tasks_per_tick": 1,
     "max_stage_attempts": 3,
     "weekly_hunts": true
+  },
+  "review_model": "tokenking/devin/swe-2",
+  "repository_catalog": "repository-catalog.json",
+  "research": {
+    "candidates_per_run": 3,
+    "peers_per_candidate": 3,
+    "files_per_peer": 4,
+    "target_files": 12,
+    "file_characters": 12000,
+    "context_characters": 320000,
+    "network_requests": 40,
+    "catalog_max_age_days": 30,
+    "batch_on_auto": true
+  },
+  "timeouts": {
+    "command_seconds": 180,
+    "model_seconds": 1500,
+    "test_seconds": 1500,
+    "git_seconds": 600,
+    "stage_seconds": 2400,
+    "remote_ci_seconds": 1800
+  },
+  "budgets": {
+    "run_model_calls": 16,
+    "task_model_calls": 40,
+    "daily_model_calls": 80,
+    "run_seconds": 5400,
+    "task_seconds": 3600,
+    "daily_seconds": 21600,
+    "run_cost_usd": null,
+    "daily_cost_usd": null
   }
 }

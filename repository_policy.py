@@ -1,6 +1,7 @@
 """Read-only repository health checks and upstream contribution gates (stdlib only)."""
 import datetime as dt
 import re
+from urllib.parse import urlsplit, quote
 
 
 def contributing_guide(repo, gh, command):
@@ -19,7 +20,20 @@ def contributing_guide(repo, gh, command):
     url = guide['url']
     if not isinstance(url, str) or not url.lower().startswith(f'https://api.github.com/repos/{repo}/contents/'.lower()):
         raise ValueError('Invalid contributing guide URL')
-    return command(['gh', 'api', url, '-H', 'Accept: application/vnd.github.raw+json']), url
+    try:
+        return command(['gh', 'api', url, '-H', 'Accept: application/vnd.github.raw+json']), url
+    except RuntimeError as error:
+        if not re.search(r'\bHTTP 404\b', str(error)):
+            raise
+        # GitHub community profiles can synthesize a nonexistent local contents URL
+        # for an organization-wide default. Only trust the same owner's .github repo.
+        shared = urlsplit(guide.get('html_url', ''))
+        parts = shared.path.strip('/').split('/')
+        if (shared.scheme != 'https' or shared.netloc != 'github.com' or len(parts) < 5
+                or parts[0].lower() != repo.split('/')[0].lower() or parts[1:3] != ['.github', 'blob']):
+            raise
+        endpoint = f"repos/{parts[0]}/.github/contents/{quote('/'.join(parts[4:]), safe='/')}?ref={quote(parts[3], safe='')}"
+        return command(['gh', 'api', endpoint, '-H', 'Accept: application/vnd.github.raw+json']), endpoint
 
 
 def maintenance_notice(repo, text):

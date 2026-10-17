@@ -19,6 +19,7 @@ class RepositoryPolicyTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.config = json.loads(Path(__file__).with_name('config.json').read_text(encoding='utf-8'))
+        self.config.setdefault('research', {})['batch_on_auto'] = False  # Isolate health tests from research dispatch.
         (self.root / 'config.json').write_text(json.dumps(self.config), encoding='utf-8')
         self.p = Pipeline(self.root)
         self.calls = []

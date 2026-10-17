@@ -61,7 +61,10 @@ def refresh(pipeline, task_id, receipt_file):
         command(['gh', 'workflow', 'run', 'verify-opencode.yml', '-R', repo, '--ref', pending['branch']])
         pending['dispatched'] = True
         save(pending_file, pending)
-    deadline = time.monotonic() + 1800
+    from telemetry import ACTIVE
+    current = ACTIVE.get()
+    wait_seconds = pipeline.config.get('timeouts', {}).get('remote_ci_seconds', 1800)
+    deadline = time.monotonic() + min(wait_seconds, current.remaining() if current else wait_seconds)
     last_status = None
     while time.monotonic() < deadline:
         runs = gh('api', endpoint)['workflow_runs']
@@ -75,7 +78,7 @@ def refresh(pipeline, task_id, receipt_file):
             url = verify(pipeline, task_id, candidate)
             save(receipt_file, candidate)
             return url
-        time.sleep(10)
+        time.sleep(min(10, max(0, deadline - time.monotonic())))
     raise RuntimeError('Remote CI is still pending; next tick will resume the same run')
 
 

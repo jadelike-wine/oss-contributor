@@ -12,6 +12,7 @@ from verify_ci import verify, refresh
 class RemoteVerificationTests(unittest.TestCase):
     def setUp(self):
         self.pipeline = Mock()
+        self.pipeline.config = {}
         self.pipeline.task.return_value = {'repo': 'owner/upstream', 'base_sha': 'base', 'workspace': 'work'}
         self.receipt = {'repository': 'owner/controller', 'run_id': 123, 'head_sha': 'commit',
                         'workflow_path': '.github/workflows/check.yml', 'manifest_path': 'ci/patch.json'}

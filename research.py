@@ -1,9 +1,13 @@
 """Bounded, read-only opportunity research, using the existing model and gates."""
 import json
+import hashlib
+import re
+import subprocess
 from pathlib import Path
 from urllib.parse import quote
 
 from contribute import command, gh, now, save
+from telemetry import BudgetExhausted
 
 
 CATEGORIES = ('feature', 'performance', 'security', 'ux', 'reliability', 'bug', 'tests')
@@ -11,68 +15,190 @@ FIELDS = ('title', 'background', 'users', 'expected_effect', 'scope', 'validatio
           'risks', 'effort', 'acceptance', 'comparison', 'issue_body')
 
 
-def snapshot(repo):
-    """Official evidence only. Pin source reads; never treat API failure as absence."""
-    meta = gh('api', f'repos/{repo}')
-    sha = gh('api', f"repos/{repo}/commits/{meta['default_branch']}")['sha']
-    tree = gh('api', f'repos/{repo}/git/trees/{sha}?recursive=1')
+def limits(pipeline):
+    options = pipeline.config.get('research', {})
+    bounds = {'peers_per_candidate': (3, 3, 5), 'files_per_peer': (4, 2, 6),
+              'target_files': (12, 3, 25), 'file_characters': (12000, 100, 60000),
+              'context_characters': (320000, 1000, 600000), 'network_requests': (40, 1, 60)}
+    result = {}
+    for key, (default, low, high) in bounds.items():
+        value = options.get(key, default)
+        if type(value) is not int or not low <= value <= high:
+            raise ValueError('Research limit out of range: ' + key)
+        result[key] = value
+    return result
+
+
+def select_paths(paths, focus, count):
+    from feature_matrix import file_type
+    words = set(re.findall(r'[a-z0-9_]+', focus.lower())) - {'the', 'and', 'one', 'with', 'from', 'research', 'compare'}
+    for word, related in {'session': ('history', 'conversation', 'state', 'agent'),
+                          'recovery': ('resume', 'checkpoint', 'persistence'),
+                          'context': ('compact', 'compress', 'message')}.items():
+        if word in words:
+            words.update(related)
+    def relevance(path):
+        runtime = bool(re.search(r'(^|/)(src|lib|core|agents?)/', path.lower()))
+        housekeeping = path.startswith(('.github/', 'scripts/', 'docs/', 'examples/'))
+        return (-sum(w in path.lower() for w in words if len(w) > 3), housekeeping, not runtime, len(path), path)
+    ordered = sorted(paths, key=relevance)
+    selected = []
+    # Reserve coverage for executable evidence and documentation, then fill by relevance.
+    for kind in ('source', 'test', 'documentation'):
+        match = next((p for p in ordered if file_type(p) == kind), None)
+        if match and len(selected) < count:
+            selected.append(match)
+    design = next((p for p in ordered if any(w in p.lower() for w in ('changelog', 'architecture', 'design')) and p not in selected), None)
+    if design and len(selected) < count:
+        selected.append(design)
+    return (selected + [p for p in ordered if p not in selected])[:count]
+
+
+def select_peers(pipeline, task, pool, count):
+    """Use verified categories and bounded inventories for relevance, rotate equal matches."""
+    catalog_file = pipeline.root / pipeline.config.get('repository_catalog', 'repository-catalog.json')
+    records = {}
+    if catalog_file.exists():
+        records = {r['repo']: r for r in json.loads(catalog_file.read_text(encoding='utf-8'))['repositories']}
+    target_category = records.get(task['repo'], {}).get('category', 'coding_harness')
+    words = {w for w in task['title'].lower().replace('-', ' ').split() if len(w) > 3}
+    def order(repo):
+        record = records.get(repo, {})
+        inventory = ' '.join(p for v in record.get('inventory', {}).values() for p in v.get('examples', []))
+        relevance = sum(word in (repo + ' ' + inventory).lower() for word in words)
+        relevance += 3 * (record.get('category', 'coding_harness') == target_category)
+        rotation = hashlib.sha256((task['id'] + repo).encode()).hexdigest()
+        return -relevance, rotation
+    return sorted((r for r in dict.fromkeys(pool) if r.lower() != task['repo'].lower()), key=order)[:count]
+
+
+def snapshot(repo, focus='', options=None, request=None, raw=None):
+    """Pin every read, and bound the inventory, file count and text supplied to models."""
+    options = options or {'files_per_peer': 4, 'file_characters': 12000}
+    request, raw = request or gh, raw or command
+    meta = request('api', f'repos/{repo}')
+    if meta.get('archived') or meta.get('disabled') or meta.get('private'):
+        raise ValueError('Peer is no longer eligible for research')
+    if meta.get('full_name', repo).lower() != repo.lower():
+        raise ValueError('Peer moved; catalog re-verification required')
+    sha = request('api', f"repos/{repo}/commits/{meta['default_branch']}")['sha']
+    if not isinstance(sha, str) or not re.fullmatch(r'[a-f0-9]{40}', sha):
+        raise ValueError('Peer commit lookup did not return an immutable SHA')
+    tree = request('api', f'repos/{repo}/git/trees/{sha}?recursive=1')
     if tree.get('truncated'):
         raise ValueError('Research source tree is truncated: ' + repo)
-    paths = [x['path'] for x in tree['tree'] if x['type'] == 'blob']
-    readme = next((p for p in paths if p.lower() == 'readme.md'), None)
+    paths = [x['path'] for x in tree['tree'] if x['type'] == 'blob' and x.get('size', 60001) <= 60000]
     files = {}
-    if readme:
-        files[readme] = command(['gh', 'api', f'repos/{repo}/contents/{readme}?ref={sha}',
-                                '-H', 'Accept: application/vnd.github.raw+json'])
-    return {'repo': repo, 'sha': sha, 'paths': paths, 'files': files}
+    error = None
+    for path in select_paths(paths, focus, options['files_per_peer']):
+        try:
+            files[path] = raw(['gh', 'api', f"repos/{repo}/contents/{quote(path, safe='/')}?ref={sha}",
+                               '-H', 'Accept: application/vnd.github.raw+json'])[:options['file_characters']]
+        except BudgetExhausted:
+            raise
+        except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as failure:
+            error = type(failure).__name__
+            break
+    return {'repo': repo, 'sha': sha, 'files': files, 'checked_paths': list(files),
+            'inventory_count': len(paths), 'error': error, 'evidence_scope': 'bounded excerpts; absence is scope limited'}
 
 
 def collect(engine, task):
-    p = engine.p
-    # A rotating peer keeps requests bounded and compares different harnesses over time.
-    peers = [r for r in p.effective_repositories() if r != task['repo']]
-    peer = peers[sum(task['id'].encode()) % len(peers)] if peers else None
-    sources = [snapshot(peer)] if peer else []
-    if sources:
-        # Prefer focus-related paths but expose a bounded inventory to the selector.
-        words = set(task['title'].lower().replace('-', ' ').split()) - {'the', 'and', 'one', 'with', 'from'}
-        sources[0]['paths'].sort(key=lambda path: (-sum(w in path.lower() for w in words if len(w) > 3), len(path), path))
-        sources[0]['paths'] = sources[0]['paths'][:600]
-    work = Path(task['workspace'])
-    policy = {}
-    for name in dict.fromkeys([p.contributing_path(task['repo']), 'CONTRIBUTING.md',
-                               'AGENTS.md', 'SECURITY.md', '.github/SECURITY.md', 'docs/SECURITY.md']):
-        file = (work / name).resolve()
-        if file.is_relative_to(work.resolve()) and file.is_file():
-            policy[name] = file.read_text(encoding='utf-8')
-    packet = {'at': now(), 'task': task, 'policy': policy, 'peers': sources,
-              'recent_issues_and_prs': gh('api', f"repos/{task['repo']}/issues?state=all&sort=updated&per_page=30"),
-              'recent_releases': gh('api', f"repos/{task['repo']}/releases?per_page=3")}
-    packet['recent_issues_and_prs'] = [
-        {key: (str(item[key])[:5000] if key == 'body' else item[key])
-         for key in ('number', 'title', 'body', 'html_url', 'state', 'pull_request') if key in item}
-        for item in packet['recent_issues_and_prs']]
-    packet['recent_releases'] = [
-        {key: str(item.get(key) or '')[:6000] for key in ('tag_name', 'body', 'html_url')}
-        for item in packet['recent_releases']]
-    if sources:
-        request = engine.model(task['id'], 'research-sources',
-            'Select up to FOUR useful PEER code, test, design or changelog files from peer.paths '
-            'to compare with the target focus. This step only selects remote peer material: do not read '
-            'the local checkout or return target paths. Use [] if no useful peer evidence exists. '
-            'No edits, shell, network or delegation. Return ONLY JSON {"paths":["exact path from peer.paths"]}. '
-            'Context:\n' + json.dumps({'focus': task['title'], 'target_repo': task['repo'], 'peer': sources[0]}, ensure_ascii=False))
-        paths = request.get('paths')
-        if not isinstance(paths, list) or len(paths) > 4 or any(not isinstance(x, str) or x not in sources[0]['paths'] for x in paths):
-            raise ValueError('Invalid peer evidence paths')
-        for path in dict.fromkeys(paths):
-            sources[0]['files'][path] = command(['gh', 'api',
-                f"repos/{peer}/contents/{quote(path, safe='/')}?ref={sources[0]['sha']}",
-                '-H', 'Accept: application/vnd.github.raw+json'])
-        # The path inventory was only for discovery; keep the final packet bounded.
-        sources[0].pop('paths')
-    save(engine.packet_dir(task['id']) / 'research-context.json', packet)
-    return packet
+    from repository_catalog import research_pool
+    from telemetry import ACTIVE, BudgetExhausted
+    p, options = engine.p, limits(engine.p)
+    checkpoint = engine.packet_dir(task['id']) / 'research-context.json'
+    packet = {}
+    if checkpoint.exists():
+        previous = json.loads(checkpoint.read_text(encoding='utf-8'))
+        if previous.get('schema_version') == 2 and previous.get('task', {}).get('base_sha') == task['base_sha']:
+            packet = previous
+    if not packet:
+        peers = select_peers(p, task, research_pool(p), options['peers_per_candidate'])
+        packet = {'schema_version': 2, 'at': now(), 'task': task, 'policy': {}, 'peers': [],
+                  'selected_peers': peers, 'network_requests': 0, 'complete': False,
+                  'peer_selection': 'Verified category and bounded path relevance; deterministic rotation of ties'}
+    packet['complete'] = False
+    requests = 0
+    def budget():
+        nonlocal requests
+        if requests >= options['network_requests']:
+            raise BudgetExhausted('research_network_requests_exhausted')
+        requests += 1
+        packet['network_requests'] += 1
+        current = ACTIVE.get()
+        if current:
+            current.remaining()
+            current.count('research_network_requests')
+    def request(*args):
+        budget()
+        return gh(*args)
+    def raw(*args, **kwargs):
+        budget()
+        return command(*args, **kwargs)
+    def persist():
+        save(checkpoint, packet)
+    try:
+        if 'target' not in packet:
+            work = Path(task['workspace'])
+            # Read tracked content at the recorded baseline, never mutable/untracked files.
+            inventory = command(['git', 'ls-tree', '-r', '-l', task['base_sha']], cwd=work)
+            paths = []
+            for line in inventory.splitlines():
+                metadata, path = line.split('\t', 1)
+                fields = metadata.split()
+                if fields[1] == 'blob' and fields[3].isdigit() and int(fields[3]) <= 60000:
+                    paths.append(path)
+            policy_names = [p.contributing_path(task['repo']), 'CONTRIBUTING.md', 'docs/contributing.md',
+                            '.github/CONTRIBUTING.md', 'docs/CONTRIBUTING.md', '.github/contributing.md', 'AGENTS.md',
+                            'SECURITY.md', '.github/SECURITY.md', 'docs/SECURITY.md']
+            # Include nested rules applying to selected code paths, within the target read cap.
+            selected = select_paths(paths, task['title'], options['target_files'])
+            policy_names += [x for x in paths if x.endswith('/AGENTS.md') and
+                             any(y.startswith(x.rsplit('/', 1)[0] + '/') for y in selected)]
+            policy_names = list(dict.fromkeys(x for x in policy_names if x in paths))
+            if len(policy_names) >= options['target_files']:
+                raise BudgetExhausted('target_policy_file_budget_exhausted')
+            selected = list(dict.fromkeys(policy_names + selected))[:options['target_files']]
+            files = {path: command(['git', 'show', task['base_sha'] + ':' + path], cwd=work)[:options['file_characters']]
+                     for path in selected}
+            packet['policy'] = {path: files[path] for path in policy_names}
+            packet['target'] = {'repo': task['repo'], 'sha': task['base_sha'], 'files': files, 'checked_paths': selected}
+            persist()
+        for peer in packet['selected_peers']:
+            if any(s['repo'] == peer and not s.get('error') for s in packet['peers']):
+                continue
+            try:
+                source = snapshot(peer, task['title'], options, request, raw)
+            except BudgetExhausted:
+                raise
+            except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired, KeyError, TypeError) as error:
+                source = {'repo': peer, 'sha': None, 'files': {}, 'error': type(error).__name__, 'status': 'unknown'}
+            packet['peers'] = [s for s in packet['peers'] if s['repo'] != peer] + [source]
+            persist()
+        if 'recent_issues_and_prs' not in packet:
+            packet['recent_issues_and_prs'] = [
+                {k: str(item.get(k) or '')[:2000] for k in ('number', 'title', 'body', 'html_url', 'state')}
+                for item in request('api', f"repos/{task['repo']}/issues?state=all&sort=updated&per_page=20")]
+            persist()
+        if 'recent_releases' not in packet:
+            packet['recent_releases'] = [
+                {k: str(item.get(k) or '')[:2000] for k in ('tag_name', 'body', 'html_url')}
+                for item in request('api', f"repos/{task['repo']}/releases?per_page=3")]
+        if len(json.dumps(packet, ensure_ascii=False)) > options['context_characters']:
+            raise BudgetExhausted('research_context_characters_exhausted')
+        packet['complete'] = True
+        current = ACTIVE.get()
+        if current:
+            current.count('selected_peers', len(packet['peers']))
+            current.count('researched_repositories', 1 + len(packet['peers']))
+            from feature_matrix import file_type
+            for source in [packet['target'], *packet['peers']]:
+                for path in source['files']:
+                    current.count('files_' + file_type(path))
+        return packet
+    finally:
+        persist()
 
 
 def validate(answer, task, packet):
@@ -105,7 +231,8 @@ def validate(answer, task, packet):
             if item['repo'] == task['repo']:
                 work = Path(task['workspace']).resolve()
                 file = (work / item['path']).resolve()
-                text = file.read_text(encoding='utf-8') if file.is_relative_to(work) and file.is_file() else ''
+                text = (packet['target']['files'].get(item['path'], '') if packet.get('schema_version') == 2 else
+                        file.read_text(encoding='utf-8') if file.is_relative_to(work) and file.is_file() else '')
                 sha = task['base_sha']
                 if group == 'policy_evidence' and item['path'] not in packet['policy']:
                     raise ValueError('Policy evidence must cite applicable target rules')
@@ -117,6 +244,9 @@ def validate(answer, task, packet):
                 sha = peer.get('sha')
             if item['quote'] not in text or not text:
                 raise ValueError('Research quote does not match source: ' + item['path'])
+            item['sha'] = sha
+            from feature_matrix import file_type
+            item['file_type'] = file_type(item['path'])
             item['url'] = f"https://github.com/{item['repo']}/blob/{sha}/{quote(item['path'], safe='/')}"
     if not any(x['repo'] == task['repo'] for x in answer['evidence']):
         raise ValueError('Target implementation evidence required')
@@ -127,12 +257,14 @@ def validate(answer, task, packet):
 def run(engine, task_id, data):
     """No public side effects. Persist the result and let PLAN consume it later."""
     p = engine.p
-    p.require_contribution(p.task(task_id))
-    p.prepare(task_id)
+    p.require_research(p.task(task_id))
+    p.prepare(task_id, read_only=True)
     task = p.task(task_id)
     before = p.fingerprint(task['workspace'])
     packet = collect(engine, task)
-    prompt = ('Research ONE valuable opportunity, or return none. Read actual target code, docs, tests, '
+    from feature_matrix import PROMPT, build, persist
+    from telemetry import ACTIVE
+    prompt = ('Prioritize valuable feature development; bugs are supplementary. Research ONE valuable opportunity, or return none. Read actual target code, docs, tests, '
         'designs and changelogs and compare supplied official peer evidence. Cover features, performance, '
         'security, UX/accessibility and reliability as relevant to the focus. A seemingly missing feature is '
         'not evidence: search all existing implementations, tests and design docs; consider project scope. '
@@ -153,19 +285,43 @@ def run(engine, task_id, data):
         'Features, architecture changes, uncertain designs and non-low risks always need maintainer direction '
         'before any implementation. Small proven bugs/tests/performance/UX can proceed only if policy permits. '
         'issue_body must be English, accurate about static evidence and pending tests. At most 25 source reads.\n'
-        + json.dumps(packet, ensure_ascii=False))
-    answer = engine.model(task_id, 'research', prompt)
+        + (PROMPT if packet.get('schema_version') == 2 else '') + json.dumps(packet, ensure_ascii=False))
+    pending = data.get('research_pending', {})
+    if pending.get('base_sha') == task['base_sha'] and pending.get('fingerprint') == before:
+        answer = pending['opportunity']
+    else:
+        answer = engine.model(task_id, 'research', prompt)
     if p.fingerprint(task['workspace']) != before:
         raise ValueError('Read-only research changed the workspace')
-    validate(answer, task, packet)
+    try:
+        validate(answer, task, packet)
+        matrix = build(answer, task, packet) if packet.get('schema_version') == 2 and answer['decision'] == 'candidate' else None
+    except ValueError:
+        if ACTIVE.get():
+            ACTIVE.get().count('researched_candidates')
+            ACTIVE.get().count('insufficient_evidence')
+        raise
+    if matrix:
+        persist(engine, task, answer, matrix)
+    current = ACTIVE.get()
+    if current:
+        current.count('researched_candidates')
+        current.count('candidate_' + answer.get('category', answer['decision']))
     result = {'base_sha': task['base_sha'], 'fingerprint': before, 'at': now(), 'opportunity': answer}
+    if matrix:
+        result['feature_id'] = matrix['feature_id']
     save(engine.packet_dir(task_id) / 'opportunity.json', result)
     if answer['decision'] != 'candidate' or answer.get('category') == 'security':
         data['reason'] = answer['reason']
         engine.move(task_id, data, 'SKIPPED')
         return result
     candidate = {'plan': answer}
+    # A validated model result is checkpointed before duplicate/reviewer calls.
+    data['research_pending'] = result
+    engine.store(task_id, data)
     if not engine.duplicates(task_id, candidate, 'issue'):
+        if current:
+            current.count('duplicate_candidates')
         data['reason'] = candidate.get('skip_reason')
         engine.move(task_id, data, 'SKIPPED')
         return result
@@ -179,7 +335,17 @@ def run(engine, task_id, data):
         data['reason'] = gate['reason']
         engine.move(task_id, data, 'SKIPPED')
         return result
+    queue, duplicate = persist(engine, task, answer, matrix, reviewed=True, duplicate_clear=True,
+                               maintainer=data.get('maintainer_approved', False))
+    if duplicate or (matrix and queue == 'RESEARCH_ONLY'):
+        if current:
+            current.count('duplicate_candidates' if duplicate else 'insufficient_evidence')
+        data['reason'] = 'Local duplicate or insufficient matrix gap evidence'
+        engine.move(task_id, data, 'SKIPPED')
+        return result
+    result['queue'] = queue
     result['approved'] = True
+    data.pop('research_pending', None)
     data['research'] = result
     engine.store(task_id, data)
     save(engine.packet_dir(task_id) / 'opportunity.json', result)

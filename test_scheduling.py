@@ -11,6 +11,9 @@ from autonomous import Autonomous
 
 class RepositorySchedulingTests(unittest.TestCase):
     def setUp(self):
+        health = patch.object(Pipeline, 'effective_repositories', lambda p, contribution=False: list(p.config['repositories']))
+        health.start()
+        self.addCleanup(health.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.repos = ['QwenLM/qwen-code', 'google-gemini/gemini-cli', 'anomalyco/opencode']
@@ -36,6 +39,18 @@ class RepositorySchedulingTests(unittest.TestCase):
             for _ in range(rounds):
                 self.engine.run()
         return seen
+
+    def test_weekly_research_reuses_legacy_batch_ids(self):
+        import datetime as dt
+        week = dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).strftime('%G-W%V')
+        legacy = self.p.hunt(self.repos[0], 'Investigate one concrete bug. Research batch ' + week)
+        self.engine.options['weekly_hunts'] = True
+        with patch.object(self.engine, 'advance', return_value='PLAN'):
+            self.engine.run()
+            self.engine.run()
+        rows = self.p.db.execute("SELECT id FROM tasks WHERE repo=? AND json_extract(payload,'$.focus') LIKE ?",
+                                 (self.repos[0], '%Research batch ' + week)).fetchall()
+        self.assertEqual([legacy], [row['id'] for row in rows])
 
     def test_persistent_candidates_get_equal_turns_despite_scores_and_restart(self):
         first = self.dispatch(2)

@@ -12,6 +12,9 @@ from autonomous import Autonomous, json_answer, validate_spec
 
 class AutonomousTests(unittest.TestCase):
     def setUp(self):
+        health = patch.object(Pipeline, 'effective_repositories', lambda p, contribution=False: list(p.config['repositories']))
+        health.start()
+        self.addCleanup(health.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         (self.root / 'config.json').write_text(json.dumps({'repositories': ['owner/repo'], 'timeout_seconds': 30,
@@ -142,9 +145,14 @@ class AutonomousTests(unittest.TestCase):
     def test_new_issue_waits_for_real_maintainer_then_continues(self):
         with self.p.db:
             self.p.db.execute("UPDATE tasks SET source='hunt',number=NULL WHERE id=?", (self.key,))
+        # Resume a pre-research task with a saved executable plan. Legacy records
+        # retain their conservative maintainer gate.
+        self.model(self.key, 'plan', '')
+        self.purposes.clear()
+        self.engine.store(self.key, {'stage': 'REPRODUCE', 'attempts': {}, 'plan': self.plan})
         with self.mocks():
             self.assertEqual('WAITING_MAINTAINER', self.engine.advance(self.key))
-            self.assertEqual(['plan'], self.purposes)
+            self.assertEqual([], self.purposes)
             self.assertEqual('WAITING_MAINTAINER', self.engine.advance(self.key))
             self.comments = [{'author_association': 'MEMBER', 'body': 'Confirmed, please send a fix.'}]
             self.assertEqual('PR_OPEN', self.engine.advance(self.key))
@@ -154,6 +162,8 @@ class AutonomousTests(unittest.TestCase):
     def test_lost_issue_response_is_reconciled_without_duplicate(self):
         with self.p.db:
             self.p.db.execute("UPDATE tasks SET source='hunt',number=NULL WHERE id=?", (self.key,))
+        self.model(self.key, 'plan', '')
+        self.engine.store(self.key, {'stage': 'REPRODUCE', 'attempts': {}, 'plan': self.plan})
         self.lose_issue_response = True
         with self.mocks():
             self.assertEqual('ISSUE', self.engine.advance(self.key))

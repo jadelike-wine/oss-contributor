@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import datetime as dt
 
-from contribute import command, execute, gh, now, opencode_executable, save
+from contribute import ContributionPaused, command, execute, gh, now, opencode_executable, save
 
 
 def json_answer(text):
@@ -195,18 +195,43 @@ class Autonomous:
         issue['comments_data'] = self.flat(f"repos/{task['repo']}/issues/{task['number']}/comments?per_page=100")
         return issue
 
+    def research(self, task_id, data):
+        from research import run
+        result = run(self, task_id, data)
+        self.p.report()
+        return result
+
     def plan(self, task_id, data):
         task = self.p.task(task_id)
         self.p.prepare(task_id)
         task = self.p.task(task_id)
+        if task['source'] == 'hunt' and not task['number']:
+            if not data.get('research'):
+                self.research(task_id, data)
+            if data['stage'] == 'SKIPPED':
+                return
+            if not data.get('research'):
+                raise RuntimeError('Hunt requires approved research before planning')
+            opportunity = data['research']['opportunity']
+            if not opportunity['policy']['automated_issue']:
+                raise ContributionPaused('Research found upstream requires personal issue submission: ' + opportunity['policy']['reason'])
+            from research import needs_discussion
+            if needs_discussion(opportunity):
+                data['plan'] = opportunity
+                data['proposal_only'] = True
+                self.move(task_id, data, 'ISSUE')
+                return
         issue = self.live_issue(task)
         if issue and issue['state'] != 'open':
             self.move(task_id, data, 'SKIPPED')
             return
-        prompt = ('Build a minimal executable regression test for this contribution, not a repair yet. Read CONTRIBUTING.md, '
+        if issue and data.get('research') and not data['research']['opportunity']['policy']['automated_pr']:
+            raise ContributionPaused('Upstream policy does not permit automatic implementation/PR submission')
+        prompt = ('Build a minimal executable regression or acceptance test for this contribution, not an implementation yet. Read CONTRIBUTING.md, '
                   'all applicable AGENTS.md and package scripts. Inspect existing issue discussion. Change ONLY regression test files, '
-                  'never production code. No shell access; the controller runs commands. Tests must fail on the actual baseline bug, '
-                  'not missing dependencies. If no credible bug or contribution is disallowed, decision=skip. If maintainer approval '
+                  'never production code. No shell access; the controller runs commands. Tests must fail on the actual baseline defect '
+                  'or missing maintainer-approved behavior, not missing dependencies. For an approved feature, test the agreed '
+                  'acceptance criteria within the research scope. If no defensible contribution exists or policy disallows it, decision=skip. If maintainer approval '
                   'is required but absent, decision=wait; cite the rule and do not edit files. '
                   'Return JSON {"decision":"ready|skip|wait","reason":"...","title":"bug title",'
                   '"issue_body":"English issue body, say tests are pending; do not invent results",'
@@ -221,7 +246,9 @@ class Autonomous:
                   'Never combine arguments such as "run build" or "pnpm install" into one string. '
                   'Keep at most 15 source reads. '
                   'Do not publish or delegate.\n' + json.dumps({'task': task, 'issue': issue, 'platform': os.name,
-                  'last_error': data.get('last_error'),
+                  'last_error': data.get('last_error'), 'research': data.get('research'),
+                  'maintainer_approved': data.get('maintainer_approved', False),
+                  'contributing_guide': self.p.contributing_path(task['repo']),
                   'tools': runtime_tools()}, ensure_ascii=False, indent=2))
         answer = self.model(task_id, 'plan', prompt, edit=True)
         if answer.get('decision') == 'skip':
@@ -244,7 +271,8 @@ class Autonomous:
         data['plan'] = answer
         save(self.packet_dir(task_id) / 'auto-spec.json', answer['spec'])
         gate = self.judge(task_id, 'recipe-review', {'gate': 'Is this a meaningful executable regression recipe for the reported bug? Setup must not publish, access credentials or modify production code.',
-                          'plan': answer, 'test_code': self.test_code(task, answer['spec'])})
+                          'plan': answer, 'research': data.get('research'), 'maintainer_approved': data.get('maintainer_approved'),
+                          'test_code': self.test_code(task, answer['spec'])})
         if not gate['approved']:
             raise RuntimeError('Recipe review rejected: ' + gate['reason'])
         self.move(task_id, data, 'REPRODUCE')
@@ -261,7 +289,7 @@ class Autonomous:
 
     def rules(self, task):
         work = Path(task['workspace']).resolve()
-        paths = {work / 'CONTRIBUTING.md', work / 'AGENTS.md'}
+        paths = {work / 'CONTRIBUTING.md', work / 'AGENTS.md', work / self.p.contributing_path(task['repo'])}
         for name in changed_files(work):
             parent = (work / name).parent
             while parent.is_relative_to(work):
@@ -293,7 +321,7 @@ class Autonomous:
             raise ValueError('Setup modified baseline production files')
         evidence = {'base_sha': task['base_sha'], 'logs': logs, 'at': now(), 'fingerprint': self.p.fingerprint(task['workspace'])}
         save(folder / 'reproduction.json', evidence)
-        gate = self.judge(task_id, 'reproduction-review', {'gate': 'Does the executed baseline test establish the stated bug, not an environment failure? Is the issue wording accurate for this evidence?', 'plan': data['plan'], 'evidence': evidence, 'test_code': self.test_code(task, spec)})
+        gate = self.judge(task_id, 'reproduction-review', {'gate': 'Does the executed baseline test establish the stated defect or maintainer-approved missing behavior, rather than an environment failure? Is the issue wording accurate for this evidence?', 'plan': data['plan'], 'research': data.get('research'), 'evidence': evidence, 'test_code': self.test_code(task, spec)})
         if not gate['approved']:
             raise RuntimeError('Reproduction rejected: ' + gate['reason'])
         self.move(task_id, data, 'ISSUE' if not task['number'] else 'REPAIR')
@@ -307,9 +335,12 @@ class Autonomous:
         if not isinstance(queries, list) or not queries or not all(isinstance(x, str) and x.strip() for x in queries):
             raise ValueError('Specific duplicate-search queries are required')
         candidates = []
+        searches = []
         for query in queries[:2]:
             scope = 'is:pr ' if kind == 'pr' else ''
             response = gh('api', '-X', 'GET', 'search/issues', '-f', f"q=repo:{task['repo']} {scope}{query}", '-f', 'per_page=20')
+            searches.append({'query': query, 'response': response})
+            save(self.packet_dir(task_id) / ('duplicate-search-' + kind + '.json'), {'at': now(), 'searches': searches})
             if response.get('incomplete_results') or response['total_count'] > 20:
                 raise RuntimeError('Duplicate query too broad/incomplete; refine automatically on retry')
             candidates.extend({'number': x['number'], 'title': x['title'], 'body': (x.get('body') or '')[:2500], 'url': x['html_url'], 'state': x.get('state'), 'pull_request': x.get('pull_request')} for x in response['items'] if x['number'] != task['number'] and (kind != 'pr' or x.get('pull_request')))
@@ -324,6 +355,11 @@ class Autonomous:
 
     def publish_issue(self, task_id, data):
         task = self.p.task(task_id)
+        self.p.require_contribution(task)
+        if data.get('research'):
+            opportunity = data['research']['opportunity']
+            if not opportunity['policy']['automated_issue'] or opportunity['category'] == 'security':
+                raise ContributionPaused('Public issue is disallowed by policy/security gate')
         login = gh('api', 'user')['login']
         items = self.flat(f"repos/{task['repo']}/issues?creator={login}&state=all&per_page=100")
         matches = [x for x in items if not x.get('pull_request') and self.marker(task_id) in (x.get('body') or '')]
@@ -334,16 +370,7 @@ class Autonomous:
                 return False  # Ambiguous network result: reconcile, never blindly create again.
             if not self.duplicates(task_id, data, 'issue'):
                 return False
-            evidence = json.loads((self.packet_dir(task_id) / 'reproduction.json').read_text(encoding='utf-8'))
-            if evidence['fingerprint'] != self.p.fingerprint(task['workspace']):
-                raise RuntimeError('Reproduction changed before issue publication')
-            body = data['plan']['issue_body'] + '\n\n## Executed reproduction\n\nBaseline: `' + task['base_sha'] + '`\n\n```json\n' + json.dumps(evidence['logs'][-1], ensure_ascii=False, indent=2) + '\n```\n\n' + self.marker(task_id)
-            spec = data['plan']['spec']
-            test_patch = command(['git', 'diff', 'HEAD', '--', *spec['test_files']], cwd=task['workspace'])
-            for name in spec['test_files']:
-                if not command(['git', 'ls-files', '--', name], cwd=task['workspace']).strip():
-                    test_patch += '\nNew regression file: ' + name + '\n' + (Path(task['workspace']) / name).read_text(encoding='utf-8')
-            body += '\n\n## Regression test\n\n```diff\n' + test_patch + '\n```\n'
+            body = self.issue_body(task_id, data)
             file = self.packet_dir(task_id) / 'issue-body.md'
             file.write_text(public_text(body), encoding='utf-8')
             data['issue_create_pending'] = True
@@ -353,8 +380,39 @@ class Autonomous:
         with self.db:
             self.db.execute("UPDATE tasks SET number=?,url=?,source='issue' WHERE id=?", (issue['number'], issue['html_url'], task_id))
         data['issue_create_pending'] = False
-        self.move(task_id, data, 'WAITING_MAINTAINER')
+        from research import needs_discussion
+        research = data.get('research')
+        wait = not research or data.get('proposal_only') or needs_discussion(research['opportunity'])
+        self.move(task_id, data, 'WAITING_MAINTAINER' if wait else 'REPAIR')
         return True
+
+    def issue_body(self, task_id, data):
+        task = self.p.task(task_id)
+        body = data['plan']['issue_body']
+        if data.get('proposal_only'):
+            research = data.get('research', {})
+            if research.get('approved') is not True or research.get('fingerprint') != self.p.fingerprint(task['workspace']):
+                raise RuntimeError('Proposal requires unchanged independently approved research')
+            opportunity = research['opportunity']
+            if not opportunity['policy']['automated_issue'] or opportunity['category'] == 'security':
+                raise ContributionPaused('Public proposal is disallowed by policy/security gate')
+            body += '\n\n## Research evidence (static; tests pending)\n\n'
+            body += '\n'.join('- ' + x['url'] + '\n  > ' + x['quote'] for x in opportunity['evidence'])
+            for field in ('users', 'expected_effect', 'scope', 'validation', 'risks', 'effort', 'acceptance', 'comparison'):
+                body += '\n\n### ' + field.replace('_', ' ').title() + '\n\n' + opportunity[field]
+            body += '\n\nMaintainer direction requested before implementation.'
+        else:
+            evidence = json.loads((self.packet_dir(task_id) / 'reproduction.json').read_text(encoding='utf-8'))
+            if evidence['fingerprint'] != self.p.fingerprint(task['workspace']):
+                raise RuntimeError('Reproduction changed before issue publication')
+            body += '\n\n## Executed reproduction\n\nBaseline: `' + task['base_sha'] + '`\n\n```json\n' + json.dumps(evidence['logs'][-1], ensure_ascii=False, indent=2) + '\n```'
+            spec = data['plan']['spec']
+            test_patch = command(['git', 'diff', 'HEAD', '--', *spec['test_files']], cwd=task['workspace'])
+            for name in spec['test_files']:
+                if not command(['git', 'ls-files', '--', name], cwd=task['workspace']).strip():
+                    test_patch += '\nNew regression file: ' + name + '\n' + (Path(task['workspace']) / name).read_text(encoding='utf-8')
+            body += '\n\n## Regression test\n\n```diff\n' + test_patch + '\n```\n'
+        return body + '\n\nAI-assisted contribution.\n\n' + self.marker(task_id)
 
     def wait_maintainer(self, task_id, data):
         task = self.p.task(task_id)
@@ -370,6 +428,9 @@ class Autonomous:
         data['maintainer_digest'] = digest
         self.store(task_id, data)
         if verdict['approved']:
+            data['maintainer_approved'] = True
+            if data.pop('proposal_only', False):
+                data.pop('plan', None)  # A proposal is not an executable regression recipe.
             self.move(task_id, data, 'REPAIR' if data.get('plan') else 'PLAN')
             return True
         return False
@@ -382,7 +443,7 @@ class Autonomous:
             evidence = json.loads(verification.read_text(encoding='utf-8'))
             for file in Path(evidence['logs']).glob('*.log'):
                 failure_logs[file.name] = file.read_text(encoding='utf-8')[-5000:]
-        prompt = ('Repair the proven issue with a small focused patch. Read current CONTRIBUTING.md and applicable AGENTS.md. '
+        prompt = ('Implement the proven fix or maintainer-approved feature with a small focused patch. Read current CONTRIBUTING.md and applicable AGENTS.md. '
                   'Do not commit, publish, invoke shell or delegate. Do not change credentials, dependencies, workflows or unrelated files. '
                   'Keep the regression test meaningful; handle downstream callers and upstream review requirements. '
                   'If this task already has a PR, limit edits to outstanding reviewer requests or demonstrated CI failures; '
@@ -456,6 +517,13 @@ class Autonomous:
 
     def publish_pr(self, task_id, data):
         task = self.p.task(task_id)
+        self.p.require_contribution(task, publishing=True)
+        if data.get('research'):
+            from research import needs_discussion
+            opportunity = data['research']['opportunity']
+            if (opportunity['category'] == 'security' or not opportunity['policy']['automated_pr']
+                    or (needs_discussion(opportunity) and not data.get('maintainer_approved'))):
+                raise ContributionPaused('Research contribution requires maintainer approval or private disclosure')
         work = task['workspace']
         folder = self.packet_dir(task_id)
         evidence = json.loads((folder / 'verification.json').read_text(encoding='utf-8'))
@@ -587,7 +655,15 @@ class Autonomous:
             if stage not in methods:
                 break
             try:
+                self.p.require_contribution(self.p.task(task_id), publishing=stage == 'PUBLISH')
+            except ContributionPaused as error:
+                print(f'{task_id}: {error}', flush=True)
+                break  # Policy pauses do not consume retries or overwrite the saved stage.
+            try:
                 methods[stage](task_id, data)
+            except ContributionPaused as error:
+                print(f'{task_id}: {error}', flush=True)
+                break
             except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as error:
                 if 'Lock worker exists' in str(error):
                     break
@@ -615,14 +691,19 @@ class Autonomous:
         with self.p.lock('autonomous'):
             if self.options.get('weekly_hunts'):
                 week = dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).strftime('%G-W%V')
-                for repo in self.p.config['repositories']:
-                    self.p.hunt(repo, 'Investigate one concrete bug in tool cancellation, timeout, session recovery or cross-platform paths; obey upstream contribution rules. Research batch ' + week)
+                for repo in self.p.effective_repositories(contribution=True):
+                    if self.p.config.get('repository_checks', {}).get('policies', {}).get(repo, {}).get('manual_issue_submission'):
+                        continue
+                    if self.db.execute("SELECT 1 FROM tasks WHERE repo=? AND json_extract(payload,'$.focus') LIKE ?",
+                                       (repo, '%Research batch ' + week)).fetchone():
+                        continue  # Preserve weekly IDs generated by older research prompts.
+                    self.p.hunt(repo, 'Compare official harness code, docs, tests, releases and user feedback. Research features, performance, security, UX and reliability; verify implementation, project scope and duplicates. Research batch ' + week)
             # Existing external work gets attention before starting new contributions.
             rows = self.candidates()
             used = 0
             for row in rows:
                 task = self.p.task(row['id'])
-                if task['repo'] not in self.p.config['repositories']:
+                if task['repo'] not in self.p.effective_repositories(contribution=True):
                     continue
                 data = self.load(row['id'])
                 waiting = data['stage'] in ('WAITING_MAINTAINER', 'PR_OPEN', 'ISSUE', 'PUBLISH')
@@ -637,12 +718,15 @@ class Autonomous:
                     print(f"{row['id']}: {result}")
 
     def candidates(self):
-        rows = self.db.execute("""SELECT tasks.id,tasks.state,tasks.repo FROM tasks LEFT JOIN automation ON automation.task=tasks.id
+        rows = self.db.execute("""SELECT tasks.id,tasks.state,tasks.repo,tasks.number FROM tasks LEFT JOIN automation ON automation.task=tasks.id
             WHERE tasks.state NOT IN ('HOLD','SKIPPED','CLOSED','MERGED','FAILED')
             ORDER BY CASE WHEN json_extract(automation.data,'$.pr_number') IS NOT NULL OR state='PR_OPEN' THEN 0
                           WHEN state='WAITING_MAINTAINER' THEN 1 WHEN state='DISCOVERED' THEN 3 ELSE 2 END,
                      score DESC,id""").fetchall()
-        rows = [row for row in rows if row['repo'] in self.p.config['repositories']]
+        repos = self.p.effective_repositories(contribution=True)
+        policies = self.p.config.get('repository_checks', {}).get('policies', {})
+        rows = [row for row in rows if row['repo'] in repos and
+                (row['number'] or not policies.get(row['repo'], {}).get('manual_issue_submission'))]
         waiting, research = [], []
         for row in rows:
             target = waiting if self.load(row['id'])['stage'] in ('WAITING_MAINTAINER', 'PR_OPEN', 'ISSUE', 'PUBLISH') else research

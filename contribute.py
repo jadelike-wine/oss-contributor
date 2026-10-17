@@ -13,8 +13,17 @@ import shutil
 import signal
 import subprocess
 import sys
+from urllib.parse import unquote, urlsplit
+from repository_policy import contributing_guide, inspect_repository, project_items, ready_issue
+
+# Keep exception identity shared when autonomous/research import the CLI module.
+if __name__ == '__main__':
+    sys.modules['contribute'] = sys.modules[__name__]
 
 ROOT = Path(__file__).resolve().parent
+
+class ContributionPaused(RuntimeError):
+    """A policy hold, not a failed research attempt."""
 
 def now():
     return dt.datetime.now(dt.timezone.utc).isoformat()
@@ -155,6 +164,9 @@ class Pipeline:
     def __init__(self, root=ROOT):
         self.root = Path(root)
         self.config = json.loads((self.root / "config.json").read_text(encoding="utf-8"))
+        self._repository_status = None
+        self._repository_evidence = {}
+        self._policy_holds = {}
         (self.root / "state").mkdir(exist_ok=True)
         self.db = sqlite3.connect(self.root / "state/tasks.db", timeout=30)
         self.db.row_factory = sqlite3.Row
@@ -173,9 +185,92 @@ class Pipeline:
             self.db.execute('ALTER TABLE locks ADD COLUMN child_pid INTEGER')
             self.db.commit()
 
+    def refresh_repository_status(self):
+        """Check once per process; keep pauses separate from historical task stages."""
+        options = self.config.get('repository_checks', {})
+        path = self.root / 'state/repositories.json'
+        try:
+            previous = json.loads(path.read_text(encoding='utf-8')).get('repositories', {}) if path.exists() else {}
+        except (ValueError, TypeError, AttributeError):
+            previous = {}  # Refresh live evidence rather than trust a damaged previous report.
+        if not isinstance(previous, dict):
+            previous = {}
+        statuses = {}
+        self._repository_evidence = {}
+        retired = options.get('retired', {})
+        for repo in dict.fromkeys([*self.config['repositories'], *retired]):
+            status = {'active': False, 'contribute': False, 'checked_at': now()}
+            try:
+                repo_name(repo)
+                if repo in retired:
+                    status.update(reason=retired[repo]['reason'], evidence=retired[repo]['evidence'])
+                else:
+                    meta, readme, rules, guide_url, reason = inspect_repository(
+                        repo, options.get('max_inactive_days', 180), gh, command)
+                    status.update(active=reason is None, contribute=reason is None, reason=reason,
+                                  evidence=f'https://github.com/{repo}#readme', pushed_at=meta['pushed_at'],
+                                  canonical=meta['full_name'], contributing=guide_url)
+                    self._repository_evidence[repo] = (meta, rules)
+                    snapshot = self.root / 'runs/snapshots' / repo.replace('/', '--')
+                    if readme is not None:
+                        snapshot.mkdir(parents=True, exist_ok=True)
+                        (snapshot / 'README.md').write_text(readme, encoding='utf-8')
+                    if rules is not None:
+                        (snapshot / 'CONTRIBUTING.md').write_text(rules, encoding='utf-8')
+                    policy = options.get('policies', {}).get(repo, {})
+                    if status['active'] and policy.get('ready_project'):
+                        try:
+                            project_items(repo, gh)
+                        except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired, KeyError, TypeError) as error:
+                            status.update(contribute=False, reason='Cannot verify required Ready board: ' + str(error))
+            except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired, KeyError, TypeError) as error:
+                status.update(active=False, contribute=False, reason=f'Health/policy check failed ({type(error).__name__}): {error}')
+            statuses[repo] = status
+            mode = 'ACTIVE' if status['contribute'] else 'CONTRIBUTION_PAUSED' if status['active'] else 'PAUSED'
+            message = f"repository {repo}: {mode}" + (': ' + status['reason'] if status.get('reason') else '')
+            print(message, file=sys.stderr)
+            if any(previous.get(repo, {}).get(key) != status.get(key) for key in ('active', 'contribute', 'reason')):
+                self.event('repository:' + repo, message)
+        self._repository_status = statuses
+        save(path, {'checked_at': now(), 'repositories': statuses})
+        return statuses
+
+    def effective_repositories(self, contribution=False):
+        statuses = self._repository_status if self._repository_status is not None else self.refresh_repository_status()
+        return [repo for repo in dict.fromkeys(self.config['repositories'])
+                if statuses.get(repo, {}).get('active') and (not contribution or statuses[repo]['contribute'])]
+
+    def contributing_path(self, repo):
+        guide = (self._repository_status or {}).get(repo, {}).get('contributing') or ''
+        path = unquote(urlsplit(guide).path)
+        return path.split('/contents/', 1)[1] if '/contents/' in path else 'CONTRIBUTING.md'
+
+    def require_contribution(self, task, publishing=False):
+        repo = task['repo']
+        reason = None
+        if repo not in self.effective_repositories(contribution=True):
+            reason = (self._repository_status or {}).get(repo, {}).get('reason') or 'Repository is outside the effective contribution allowlist'
+        else:
+            policy = self.config.get('repository_checks', {}).get('policies', {}).get(repo, {})
+            if policy.get('manual_issue_submission') and not task['number']:
+                reason = 'Upstream requires the contributor to submit an issue personally; automatic issue publication is disabled'
+            elif publishing and policy.get('human_pr_review_required'):
+                reason = 'Upstream requires personal code review before PR submission; this pipeline has no recorded human review'
+            elif policy.get('ready_project'):
+                try:
+                    if not ready_issue(repo, task['number'], policy['ready_project'], gh):
+                        reason = 'Issue must be OPEN and Ready on ' + policy['ready_project']
+                except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired, KeyError, TypeError) as error:
+                    reason = 'Cannot verify required Ready issue: ' + str(error)
+        if reason:
+            if self._policy_holds.get(task['id']) != reason:
+                self._policy_holds[task['id']] = reason
+                self.event(task['id'], 'Contribution paused: ' + reason)
+            raise ContributionPaused('Contribution paused: ' + reason)
+
     def fair_candidates(self, rows):
         """Round-robin eligible repositories, retaining the supplied order within each."""
-        repos = list(dict.fromkeys(self.config['repositories']))
+        repos = self.effective_repositories(contribution=True)
         cursor = self.db.execute("SELECT last_repo FROM scheduler WHERE name='research'").fetchone()
         if cursor and cursor['last_repo'] in repos:
             start = repos.index(cursor['last_repo']) + 1
@@ -233,46 +328,91 @@ class Pipeline:
     def scan(self):
         changed = 0
         with self.lock("scan"):
-            for repo in self.config["repositories"]:
-                repo_name(repo)
-                meta = gh("api", f"repos/{repo}")
-                if meta["archived"]:
-                    continue
-                issues = gh("issue", "list", "-R", repo, "--state", "open", "--limit", str(self.config["scan_limit"]),
-                            "--json", "number,title,body,labels,assignees,updatedAt,url")
-                prs = gh("pr", "list", "-R", repo, "--state", "open", "--limit", "200",
-                         "--json", "number,title,body,url,closingIssuesReferences")
-                snapshot = self.root / "runs/snapshots" / repo.replace("/", "--")
-                save(snapshot / "repository.json", {k: meta[k] for k in ("full_name", "stargazers_count", "default_branch", "pushed_at")})
-                save(snapshot / "open-prs.json", prs)
-                rules = command(["gh", "api", f"repos/{repo}/contents/CONTRIBUTING.md", "-H", "Accept: application/vnd.github.raw+json"])
-                (snapshot / "CONTRIBUTING.md").write_text(rules, encoding="utf-8")
-                for issue in issues:
-                    task_id = repo.replace("/", "--") + "--" + str(issue["number"])
-                    existing = self.db.execute('SELECT id FROM tasks WHERE repo=? AND number=? LIMIT 1', (repo, issue['number'])).fetchone()
-                    if existing:
-                        task_id = existing['id']
-                    score, holds = rank(issue)
-                    related = [p for p in prs if
-                               any(x["number"] == issue["number"] for x in p.get("closingIssuesReferences", [])) or
-                               re.search(r"(?<![\w/])#" + str(issue["number"]) + r"\b", p.get("body") or "") or
-                               issue["url"] in (p.get("body") or "")]
-                    if related:
-                        holds.append("existing PR: " + ", ".join(p["url"] for p in related))
-                    payload = json.dumps(issue, ensure_ascii=False)
-                    old = self.db.execute("SELECT payload FROM tasks WHERE id=?", (task_id,)).fetchone()
-                    changed += int(old is None or old["payload"] != payload)
-                    initial = "HOLD" if holds else "DISCOVERED"
+            for repo in self.effective_repositories():
+                try:
+                    # One transaction per repository: malformed responses must not leave partial updates.
                     with self.db:
-                        self.db.execute('''INSERT INTO tasks(id,repo,number,source,title,url,score,state,holds,payload,updated)
+                        result = self.scan_repository(repo)
+                except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired, KeyError, TypeError) as error:
+                    message = f"scan {repo}: FAILED ({type(error).__name__}): {error}"
+                    self.event('scan:' + repo, message)
+                    print(message, file=sys.stderr)
+                    continue
+                if result is None:
+                    message = f"scan {repo}: SKIPPED (archived)"
+                else:
+                    count, issues, prs = result
+                    changed += count
+                    message = f"scan {repo}: {'OK' if issues else 'EMPTY'} ({issues} open issues, {prs} open PRs, {count} new/updated)"
+                self.event('scan:' + repo, message)
+                print(message, file=sys.stderr)
+            self.report()
+        return changed
+
+    def scan_repository(self, repo):
+        repo_name(repo)
+        cached = self._repository_evidence.get(repo)
+        meta = cached[0] if cached else gh("api", f"repos/{repo}")
+        if not isinstance(meta, dict) or type(meta.get('archived')) is not bool:
+            raise ValueError('Invalid repository metadata')
+        if meta["archived"]:
+            return None
+        issues = gh("issue", "list", "-R", repo, "--state", "open", "--limit", str(self.config["scan_limit"]),
+                    "--json", "number,title,body,labels,assignees,updatedAt,url")
+        prs = gh("pr", "list", "-R", repo, "--state", "open", "--limit", "200",
+                 "--json", "number,title,body,url,closingIssuesReferences")
+        for kind, items in (('issue', issues), ('PR', prs)):
+            if not isinstance(items, list):
+                raise ValueError(f'Invalid {kind} list')
+            for item in items:
+                if (not isinstance(item, dict) or type(item.get('number')) is not int or item['number'] <= 0
+                        or not isinstance(item.get('url'), str) or not item['url']
+                        or not isinstance(item.get('body', ''), (str, type(None)))):
+                    raise ValueError(f'Invalid {kind} record')
+                if kind == 'issue' and (not isinstance(item.get('title'), str)
+                        or not isinstance(item.get('labels', []), list)
+                        or any(not isinstance(label, dict) or not isinstance(label.get('name'), str)
+                               for label in item.get('labels', []))):
+                    raise ValueError('Invalid issue title/labels')
+                if kind == 'PR' and (not isinstance(item.get('closingIssuesReferences', []), list)
+                        or any(not isinstance(ref, dict) or type(ref.get('number')) is not int
+                               for ref in item.get('closingIssuesReferences', []))):
+                    raise ValueError('Invalid PR closing issue references')
+        snapshot = self.root / "runs/snapshots" / repo.replace("/", "--")
+        save(snapshot / "repository.json", {k: meta[k] for k in ("full_name", "stargazers_count", "default_branch", "pushed_at")})
+        save(snapshot / "open-prs.json", prs)
+        rules = snapshot / 'CONTRIBUTING.md'
+        text = cached[1] if cached else contributing_guide(repo, gh, command)[0]
+        if text is None:
+            rules.unlink(missing_ok=True)
+            print(f'scan {repo}: WARNING no contributing guide found; read checkout rules before research', file=sys.stderr)
+        else:
+            rules.write_text(text, encoding='utf-8')
+        changed = 0
+        for issue in issues:
+            task_id = repo.replace("/", "--") + "--" + str(issue["number"])
+            existing = self.db.execute('SELECT id FROM tasks WHERE repo=? AND number=? LIMIT 1', (repo, issue['number'])).fetchone()
+            if existing:
+                task_id = existing['id']
+            score, holds = rank(issue)
+            related = [p for p in prs if
+                       any(x["number"] == issue["number"] for x in p.get("closingIssuesReferences", [])) or
+                       re.search(r"(?<![\w/])#" + str(issue["number"]) + r"\b", p.get("body") or "") or
+                       issue["url"] in (p.get("body") or "")]
+            if related:
+                holds.append("existing PR: " + ", ".join(p["url"] for p in related))
+            payload = json.dumps(issue, ensure_ascii=False)
+            old = self.db.execute("SELECT payload FROM tasks WHERE id=?", (task_id,)).fetchone()
+            changed += int(old is None or old["payload"] != payload)
+            initial = "HOLD" if holds else "DISCOVERED"
+            self.db.execute('''INSERT INTO tasks(id,repo,number,source,title,url,score,state,holds,payload,updated)
                           VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
                           title=excluded.title,score=excluded.score,holds=excluded.holds,payload=excluded.payload,
                           updated=excluded.updated,state=CASE WHEN tasks.state IN ('HOLD','DISCOVERED')
                           THEN excluded.state ELSE tasks.state END''',
                           (task_id, repo, issue["number"], "issue", issue["title"], issue["url"], score, initial,
                            json.dumps(holds), payload, now()))
-            self.report()
-        return changed
+        return changed, len(issues), len(prs)
 
     def report(self):
         rows = self.db.execute("SELECT * FROM tasks ORDER BY score DESC,id").fetchall()
@@ -301,6 +441,7 @@ class Pipeline:
     def prepare(self, task_id):
         with self.lock("prepare"):
             task = self.task(task_id)
+            self.require_contribution(task)
             if task["workspace"]:
                 if not Path(task["workspace"]).is_dir():
                     raise RuntimeError("Recorded workspace is missing")
@@ -329,8 +470,19 @@ class Pipeline:
             return str(work)
 
     def analyze(self, task_id, mode="analyze"):
+        if mode == 'analyze' and self.task(task_id)['source'] == 'hunt':
+            from autonomous import Autonomous
+            with self.lock('autonomous'):
+                self.require_contribution(self.task(task_id))
+                engine = Autonomous(self)
+                data = engine.load(task_id)
+                if data['stage'] != 'PLAN':
+                    raise RuntimeError('Research requires a PLAN task; existing progress is preserved')
+                engine.research(task_id, data)
+                return str(self.root / 'runs' / task_id / 'opportunity.json')
         with self.lock("worker"):
             task = self.task(task_id)
+            self.require_contribution(task)
             if mode == "repair" and (task["source"] != "issue" or task["state"] not in ("NEEDS_REPRODUCTION", "PATCH_READY", "VERIFICATION_FAILED")):
                 raise RuntimeError("Repair requires an analyzed existing issue. New findings must first go through upstream discussion.")
             if json.loads(task["holds"]):
@@ -338,6 +490,7 @@ class Pipeline:
             work = self.prepare(task_id)
             task = self.task(task_id)
             folder = self.root / "runs" / task_id
+            task['contributing_guide'] = self.contributing_path(task['repo'])
             if task["source"] == "issue":
                 issue = gh("issue", "view", str(task["number"]), "-R", task["repo"], "--json", "title,body,comments,labels,state,assignees")
                 if issue["state"] != "OPEN":
@@ -440,6 +593,7 @@ class Pipeline:
         """Run structured argv recipes and gate on actual red/green command evidence."""
         with self.lock("worker"):
             task = self.task(task_id)
+            self.require_contribution(task)
             if task["state"] not in ("PATCH_READY", "VERIFICATION_FAILED", "VERIFIED"):
                 raise RuntimeError("Verification requires a repair")
             work = Path(task["workspace"])
@@ -498,6 +652,7 @@ class Pipeline:
     def review(self, task_id):
         from autonomous import Autonomous
         task = self.task(task_id)
+        self.require_contribution(task)
         folder = self.root / 'runs' / task_id
         evidence = json.loads((folder / 'verification.json').read_text(encoding='utf-8'))
         if not evidence['passed'] or evidence['fingerprint'] != self.fingerprint(task['workspace']):
@@ -516,24 +671,58 @@ class Pipeline:
         previous = json.loads(file.read_text(encoding="utf-8")) if file.exists() else {}
         current = dict(previous)
         changes = []
-        for repo in self.config["repositories"]:
-            prs = gh("pr", "list", "-R", repo, "--author", "@me", "--state", "all", "--limit", "100",
-                     "--json", "number,title,state,url,updatedAt,reviewDecision,statusCheckRollup")
+        repos = self.effective_repositories()
+        # Retiring a target stops contributions, but existing published PRs still need observation.
+        historical = [key.rsplit('#', 1)[0] for key, pr in previous.items() if pr.get('state') == 'OPEN']
+        if self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='automation'").fetchone():
+            historical += [row['repo'] for row in self.db.execute("SELECT tasks.repo FROM tasks JOIN automation ON automation.task=tasks.id WHERE json_extract(automation.data,'$.pr_number') IS NOT NULL AND tasks.state NOT IN ('CLOSED','MERGED')")]
+        for repo in dict.fromkeys([*repos, *historical]):
+            try:
+                prs = self.followup_repository(repo_name(repo))
+            except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired, KeyError, TypeError) as error:
+                message = f'followup {repo}: FAILED ({type(error).__name__}): {error}'
+                self.event('followup:' + repo, message)
+                print(message, file=sys.stderr)
+                continue
             for pr in prs:
-                if pr['state'] == 'OPEN':
-                    # Check conclusions can be green while bots request changes.
-                    for field, endpoint in (('comments', f"issues/{pr['number']}/comments"),
-                                            ('inline_comments', f"pulls/{pr['number']}/comments"),
-                                            ('reviews', f"pulls/{pr['number']}/reviews")):
-                        pages = gh('api', '--paginate', '--slurp', f'repos/{repo}/{endpoint}?per_page=100')
-                        pr[field] = [item for page in pages for item in page]
                 key = repo + "#" + str(pr["number"])
                 if previous.get(key) != pr and (key in previous or pr["state"] == "OPEN"):
                     changes.append(pr)
                 current[key] = pr
+                self.observe_pr_completion(repo, pr)
         save(file, current)
         save(self.root / "runs/pr-updates.json", changes)
         return changes
+
+    def observe_pr_completion(self, repo, pr):
+        if pr['state'] not in ('MERGED', 'CLOSED') or not self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='automation'").fetchone():
+            return
+        rows = self.db.execute("SELECT tasks.id,automation.data FROM tasks JOIN automation ON automation.task=tasks.id WHERE tasks.repo=? AND json_extract(automation.data,'$.pr_number')=? AND tasks.state NOT IN ('CLOSED','MERGED')", (repo, pr['number'])).fetchall()
+        for row in rows:
+            data = json.loads(row['data'])
+            data['stage'] = pr['state']
+            with self.db:
+                self.db.execute('UPDATE tasks SET state=?,updated=? WHERE id=?', (pr['state'], now(), row['id']))
+                self.db.execute('UPDATE automation SET data=? WHERE task=?', (json.dumps(data), row['id']))
+            self.event(row['id'], 'Observed upstream PR ' + pr['state'] + ': ' + pr['url'])
+
+    def followup_repository(self, repo):
+        prs = gh('pr', 'list', '-R', repo, '--author', '@me', '--state', 'all', '--limit', '100',
+                 '--json', 'number,title,state,url,updatedAt,reviewDecision,statusCheckRollup')
+        if not isinstance(prs, list):
+            raise ValueError('Invalid PR list')
+        for pr in prs:
+            if (not isinstance(pr, dict) or type(pr.get('number')) is not int
+                    or pr.get('state') not in ('OPEN', 'CLOSED', 'MERGED')
+                    or not isinstance(pr.get('title'), str) or not isinstance(pr.get('url'), str)):
+                raise ValueError('Invalid PR record')
+            if pr['state'] == 'OPEN':
+                for field, endpoint in (('comments', f"issues/{pr['number']}/comments"),
+                                        ('inline_comments', f"pulls/{pr['number']}/comments"),
+                                        ('reviews', f"pulls/{pr['number']}/reviews")):
+                    pages = gh('api', '--paginate', '--slurp', f'repos/{repo}/{endpoint}?per_page=100')
+                    pr[field] = [item for page in pages for item in page]
+        return prs
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -559,6 +748,8 @@ def main():
     p.add_argument("--process-stopped", action="store_true", required=True)
     args = parser.parse_args()
     pipeline = Pipeline()
+    if args.action not in ('status', 'unlock'):
+        pipeline.effective_repositories()
     if args.action == "scan":
         print(f"New/updated issues: {pipeline.scan()}")
     elif args.action == "auto":
@@ -597,6 +788,8 @@ def main():
                 pipeline.research_turn(row['repo'])
                 try:
                     print(pipeline.analyze(row["id"]))
+                except ContributionPaused as exc:
+                    print(str(exc), file=sys.stderr)
                 except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as exc:
                     if "Lock worker exists" in str(exc):
                         break
@@ -607,7 +800,9 @@ def main():
                     raise
     elif args.action == "status":
         print(json.dumps({"states": [dict(r) for r in pipeline.db.execute("SELECT state,count(*) AS count FROM tasks GROUP BY state")],
-                          "locks": [dict(r) for r in pipeline.db.execute("SELECT * FROM locks")]}, indent=2))
+                          "locks": [dict(r) for r in pipeline.db.execute("SELECT * FROM locks")],
+                          "repositories": json.loads((pipeline.root / 'state/repositories.json').read_text(encoding='utf-8'))
+                          if (pipeline.root / 'state/repositories.json').exists() else None}, indent=2))
     elif args.action == "hunt":
         print(pipeline.hunt(args.repo, args.focus))
     elif args.action == "followup":

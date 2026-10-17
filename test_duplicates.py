@@ -1,4 +1,6 @@
 import unittest
+import tempfile
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 from autonomous import Autonomous
@@ -8,6 +10,9 @@ class DuplicateTests(unittest.TestCase):
     def setUp(self):
         self.engine = object.__new__(Autonomous)
         self.engine.p = Mock()
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.engine.p.root = Path(temp.name)
         self.engine.p.task.return_value = {'repo': 'owner/repo', 'number': 10}
         self.engine.judge = Mock(return_value={'approved': False, 'reason': 'existing report'})
         self.engine.move = Mock()

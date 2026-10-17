@@ -2,8 +2,34 @@
   "repositories": [
     "QwenLM/qwen-code",
     "google-gemini/gemini-cli",
-    "anomalyco/opencode"
+    "anomalyco/opencode",
+    "cline/cline",
+    "OpenHands/OpenHands",
+    "Kilo-Org/kilocode",
+    "aaif-goose/goose",
+    "SWE-agent/mini-swe-agent"
   ],
+  "repository_checks": {
+    "max_inactive_days": 180,
+    "retired": {
+      "continuedev/continue": {
+        "reason": "Official README: no longer actively maintained; read-only for all users",
+        "evidence": "https://github.com/continuedev/continue#readme"
+      },
+      "SWE-agent/SWE-agent": {
+        "reason": "Official README: development moved to mini-swe-agent, which supersedes SWE-agent",
+        "evidence": "https://github.com/SWE-agent/SWE-agent#readme"
+      }
+    },
+    "policies": {
+      "aaif-goose/goose": {
+        "ready_project": "https://github.com/orgs/aaif-goose/projects/1",
+        "manual_issue_submission": true,
+        "human_pr_review_required": true,
+        "evidence": "https://github.com/aaif-goose/goose/blob/main/CONTRIBUTING.md"
+      }
+    }
+  },
   "model": "tokenking/devin/swe-2",
   "timeout_seconds": 1200,
   "scan_limit": 100,

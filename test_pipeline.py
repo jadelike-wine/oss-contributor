@@ -9,6 +9,9 @@ from contribute import Pipeline, rank, repo_name
 
 class PipelineTests(unittest.TestCase):
     def setUp(self):
+        health = patch.object(Pipeline, 'effective_repositories', lambda p, contribution=False: list(p.config['repositories']))
+        health.start()
+        self.addCleanup(health.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         (self.root / "config.json").write_text(json.dumps({"repositories": ["owner/repo"], "scan_limit": 100}), encoding="utf-8")
@@ -116,6 +119,8 @@ class PipelineTests(unittest.TestCase):
 
     def test_diagnostic_analyze_isolates_config_and_tracks_child(self):
         key, _, _ = self.verification_fixture()
+        with self.p.db:
+            self.p.db.execute("UPDATE tasks SET source='issue',number=1 WHERE id=?", (key,))
         self.p.config.update(model="tokenking/devin/swe-2", opencode_executable="opencode")
         work = self.p.task(key)["workspace"]
         (self.root / "runs" / key).mkdir(parents=True)
@@ -129,7 +134,7 @@ class PipelineTests(unittest.TestCase):
                 return 0
             process.wait.side_effect = wait
             return process
-        with patch.object(self.p, "prepare", return_value=work), patch("contribute.opencode_executable", return_value="opencode"), patch("contribute.subprocess.Popen", side_effect=start):
+        with patch.object(self.p, "prepare", return_value=work), patch("contribute.gh", return_value={'state': 'OPEN', 'title': 'Bug'}), patch("contribute.opencode_executable", return_value="opencode"), patch("contribute.subprocess.Popen", side_effect=start):
             self.p.analyze(key)
         with self.subTest("project config isolation"):
             self.assertEqual("1", observed["env"].get("OPENCODE_DISABLE_PROJECT_CONFIG"))

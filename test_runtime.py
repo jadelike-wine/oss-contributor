@@ -10,6 +10,15 @@ from contribute import execute
 
 
 class RuntimeTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows launcher resolution')
+    def test_bare_corepack_runs_through_node_without_shell(self):
+        import shutil
+        if not shutil.which('corepack'):
+            self.skipTest('Corepack is not installed')
+        result = execute(['corepack', '--version'])
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertRegex(result.stdout.strip(), r'^\d+\.\d+\.\d+')
+
     def test_bun_run_cwd_order_cannot_silently_skip_check(self):
         spec = {'setup': [], 'regression': ['bun', 'test', 'test/a.test.ts'],
                 'checks': [['bun', '--cwd', 'packages/ai', 'run', 'typecheck']],

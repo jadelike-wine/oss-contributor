@@ -63,7 +63,7 @@ class AutonomousTests(unittest.TestCase):
 
     def fake_gh(self, *args):
         if args[0] == 'pr':
-            return {'state': 'OPEN', 'mergedAt': None, 'reviewDecision': '', 'statusCheckRollup': []}
+            return {'state': 'OPEN', 'mergedAt': None, 'reviewDecision': '', 'statusCheckRollup': [], 'body': 'Existing description'}
         endpoint = args[-1]
         if '--slurp' in args:
             if '/pulls?head=' in endpoint:
@@ -219,6 +219,47 @@ class AutonomousTests(unittest.TestCase):
         self.assertNotEqual(first, self.git('rev-parse', 'HEAD'))
         remote = subprocess.check_output(['git', 'ls-remote', str(self.fork)], text=True)
         self.assertIn(self.git('rev-parse', 'HEAD'), remote)
+
+    def test_bot_feedback_is_not_lost_when_checks_are_green(self):
+        with self.mocks():
+            self.assertEqual('PR_OPEN', self.engine.advance(self.key))
+            self.comments = [{'author_association': 'CONTRIBUTOR', 'user': {'type': 'Bot'},
+                              'body': 'Please remove the unrelated test.'}]
+            with patch.object(self.engine, 'model', return_value={'needs_changes': True, 'needs_body_changes': False}) as model:
+                data = self.engine.load(self.key)
+                self.assertTrue(self.engine.feedback(self.key, data))
+                self.assertEqual('REPAIR', data['stage'])
+                self.assertIn('Please remove the unrelated test.', model.call_args.args[2])
+
+    def test_description_only_feedback_edits_existing_pr_without_code_change(self):
+        with self.mocks():
+            self.assertEqual('PR_OPEN', self.engine.advance(self.key))
+            head = self.git('rev-parse', 'HEAD')
+            self.comments = [{'author_association': 'CONTRIBUTOR', 'body': 'Missing template sections'}]
+            data = self.engine.load(self.key)
+            with patch.object(self.engine, 'model', return_value={'needs_changes': False, 'needs_body_changes': True}), \
+                 patch.object(self.engine, 'pr_body', return_value='Corrected description'), \
+                 patch('autonomous.command', return_value='') as cmd:
+                self.assertFalse(self.engine.feedback(self.key, data))
+                self.assertEqual('PR_OPEN', data['stage'])
+                self.assertTrue(any(c.args[0][:3] == ['gh', 'pr', 'edit'] for c in cmd.call_args_list))
+                count = cmd.call_count
+                self.assertFalse(self.engine.feedback(self.key, data))
+                self.assertEqual(count, cmd.call_count)
+            self.assertEqual(head, self.git('rev-parse', 'HEAD'))
+            self.assertEqual(1, len(self.created_prs))
+
+    def test_missing_template_is_fixed_even_when_model_misses_it(self):
+        with self.mocks():
+            self.assertEqual('PR_OPEN', self.engine.advance(self.key))
+            (self.work / '.github').mkdir()
+            (self.work / '.github/pull_request_template.md').write_text('### Verification\n')
+            data = self.engine.load(self.key)
+            with patch.object(self.engine, 'model', return_value={'needs_changes': False, 'needs_body_changes': False}), \
+                 patch.object(self.engine, 'pr_body', return_value='### Verification\nTest passed.'), \
+                 patch('autonomous.command', return_value='') as cmd:
+                self.assertFalse(self.engine.feedback(self.key, data))
+                self.assertTrue(any(c.args[0][:3] == ['gh', 'pr', 'edit'] for c in cmd.call_args_list))
 
     def test_scan_failure_does_not_block_existing_work(self):
         from contribute import main

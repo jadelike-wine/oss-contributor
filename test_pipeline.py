@@ -106,9 +106,20 @@ class PipelineTests(unittest.TestCase):
         self.assertFalse(json.loads(result.read_text(encoding="utf-8"))["passed"])
         self.assertEqual("VERIFICATION_FAILED", self.p.task(key)["state"])
 
+    def test_followup_detects_bot_comments_even_with_unchanged_green_checks(self):
+        pr = {"number": 1, "title": "fix", "state": "OPEN", "url": "https://github.com/owner/repo/pull/1", "updatedAt": "one", "statusCheckRollup": []}
+        comments = []
+        with patch("contribute.gh", side_effect=lambda *args: [pr.copy()] if args[0] == "pr" else [comments.copy()]):
+            self.p.followup()
+            self.assertEqual([], self.p.followup())
+            comments.append({"body": "Required template missing", "author_association": "CONTRIBUTOR"})
+            self.assertEqual(1, len(self.p.followup()))
+            self.assertEqual([], self.p.followup())
+            self.assertEqual([], json.loads((self.root / 'runs/pr-updates.json').read_text()))
+
     def test_followup_only_reports_changes(self):
         pr = {"number": 1, "title": "fix", "state": "OPEN", "url": "https://github.com/owner/repo/pull/1", "updatedAt": "one"}
-        with patch("contribute.gh", return_value=[pr]):
+        with patch("contribute.gh", side_effect=lambda *args: [pr.copy()] if args[0] == "pr" else [[]]):
             self.assertEqual(1, len(self.p.followup()))
             self.assertEqual([], self.p.followup())
             pr["state"] = "MERGED"

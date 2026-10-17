@@ -25,6 +25,14 @@ def save(path, value):
 
 def execute(args, cwd=None, timeout=180, env=None, started=None, output_prefix=None):
     env = dict(os.environ if env is None else env)
+    entries = {'npm': 'npm/bin/npm-cli.js', 'pnpm': 'pnpm/bin/pnpm.cjs', 'corepack': 'corepack/dist/corepack.js'}
+    if os.name == 'nt' and args[0] in entries:
+        launcher = shutil.which(args[0])
+        node = shutil.which('node')
+        script = Path(launcher).parent / 'node_modules' / entries[args[0]] if launcher else None
+        if not node or not script or not script.is_file():
+            raise ValueError('Missing Node entry point for ' + args[0])
+        args = [node, str(script), *args[1:]]
     local_bin = ROOT / 'state/tooling/node_modules/bun/bin'
     if (local_bin / ('bun.exe' if os.name == 'nt' else 'bun')).is_file():
         env['PATH'] = str(local_bin) + os.pathsep + env.get('PATH', '')
@@ -491,13 +499,19 @@ class Pipeline:
             prs = gh("pr", "list", "-R", repo, "--author", "@me", "--state", "all", "--limit", "100",
                      "--json", "number,title,state,url,updatedAt,reviewDecision,statusCheckRollup")
             for pr in prs:
+                if pr['state'] == 'OPEN':
+                    # Check conclusions can be green while bots request changes.
+                    for field, endpoint in (('comments', f"issues/{pr['number']}/comments"),
+                                            ('inline_comments', f"pulls/{pr['number']}/comments"),
+                                            ('reviews', f"pulls/{pr['number']}/reviews")):
+                        pages = gh('api', '--paginate', '--slurp', f'repos/{repo}/{endpoint}?per_page=100')
+                        pr[field] = [item for page in pages for item in page]
                 key = repo + "#" + str(pr["number"])
                 if previous.get(key) != pr and (key in previous or pr["state"] == "OPEN"):
                     changes.append(pr)
                 current[key] = pr
         save(file, current)
-        if changes:
-            save(self.root / "runs/pr-updates.json", changes)
+        save(self.root / "runs/pr-updates.json", changes)
         return changes
 
 def main():

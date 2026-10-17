@@ -96,6 +96,48 @@ class PipelineTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "exact patch"):
             self.p.review(key)
 
+    def test_diagnostic_verify_rejects_unsafe_recipe_before_execution(self):
+        key, path, spec = self.verification_fixture()
+        spec["checks"] = [["git", "push", "origin", "HEAD"]]
+        path.write_text(json.dumps(spec), encoding="utf-8")
+        with patch("contribute.execute") as run:
+            with self.assertRaisesRegex(ValueError, "publishing or shell"):
+                self.p.verify(key, path)
+        run.assert_not_called()
+        self.assertEqual("PATCH_READY", self.p.task(key)["state"])
+
+    def test_diagnostic_verify_rejects_generic_failure_oracle(self):
+        key, path, spec = self.verification_fixture()
+        spec["baseline_failure_pattern"] = ".*"
+        path.write_text(json.dumps(spec), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "specific baseline assertion"):
+            self.p.verify(key, path)
+        self.assertEqual("PATCH_READY", self.p.task(key)["state"])
+
+    def test_diagnostic_analyze_isolates_config_and_tracks_child(self):
+        key, _, _ = self.verification_fixture()
+        self.p.config.update(model="tokenking/devin/swe-2", opencode_executable="opencode")
+        work = self.p.task(key)["workspace"]
+        (self.root / "runs" / key).mkdir(parents=True)
+        observed = {}
+        def start(args, **kwargs):
+            observed["env"] = kwargs["env"]
+            kwargs["stdout"].write(json.dumps({"type": "text", "part": {"text": "Static report"}}) + "\n")
+            process = unittest.mock.Mock(pid=424242)
+            def wait(**kwargs):
+                observed["child"] = self.p.db.execute("SELECT child_pid FROM locks WHERE name='worker'").fetchone()[0]
+                return 0
+            process.wait.side_effect = wait
+            return process
+        with patch.object(self.p, "prepare", return_value=work), patch("contribute.opencode_executable", return_value="opencode"), patch("contribute.subprocess.Popen", side_effect=start):
+            self.p.analyze(key)
+        with self.subTest("project config isolation"):
+            self.assertEqual("1", observed["env"].get("OPENCODE_DISABLE_PROJECT_CONFIG"))
+        with self.subTest("live child lock"):
+            self.assertEqual(424242, observed["child"])
+        self.assertEqual("NEEDS_REPRODUCTION", self.p.task(key)["state"])
+        self.assertEqual(0, self.p.db.execute("SELECT count(*) FROM locks").fetchone()[0])
+
     def test_environment_failure_is_not_reproduction(self):
         key, path, spec = self.verification_fixture()
         spec["setup"] = [[sys.executable, "-c", "raise SystemExit(2)"]]

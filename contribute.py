@@ -340,6 +340,7 @@ class Pipeline:
                           "Explain the user impact and limitations in Chinese. Context:\n" + json.dumps(task, ensure_ascii=False) + "\nPrior analysis:\n" + previous)
             (folder / f"{mode}-prompt.txt").write_text(prompt, encoding="utf-8")
             env = os.environ.copy()
+            env["OPENCODE_DISABLE_PROJECT_CONFIG"] = "1"
             ca_bundle = self.root / "state/windows-ca.pem"
             if ca_bundle.exists() and not env.get("NODE_EXTRA_CA_CERTS"):
                 env["NODE_EXTRA_CA_CERTS"] = str(ca_bundle)
@@ -357,6 +358,7 @@ class Pipeline:
             try:
                 with log.open("w", encoding="utf-8") as out, (folder / f"{attempt_name}-stderr.log").open("w", encoding="utf-8") as err:
                     p = subprocess.Popen(args, stdout=out, stderr=err, env=env)
+                    self.track_process("worker", p.pid)
                     try:
                         rc = p.wait(timeout=self.config["timeout_seconds"])
                     except subprocess.TimeoutExpired:
@@ -387,6 +389,7 @@ class Pipeline:
                     self.db.execute("UPDATE tasks SET state='ANALYSIS_FAILED' WHERE id=?", (task_id,))
                 raise
             finally:
+                self.track_process("worker", None)
                 self.report()
             return str(folder / ("repair.md" if mode == "repair" else "analysis.md"))
 
@@ -416,15 +419,8 @@ class Pipeline:
                 raise RuntimeError("Verification requires a repair")
             work = Path(task["workspace"])
             spec = json.loads(Path(spec_path).read_text(encoding="utf-8"))
-            for key in ("setup", "regression", "checks", "test_files", "baseline_failure_pattern"):
-                if key not in spec:
-                    raise ValueError("Missing verification key: " + key)
-            if not spec["regression"] or not spec["checks"] or not spec["test_files"] or not spec["baseline_failure_pattern"]:
-                raise ValueError("Regression, checks, test files and assertion pattern must be nonempty")
-            re.compile(spec["baseline_failure_pattern"])
-            for argv in spec["setup"] + [spec["regression"]] + spec["checks"]:
-                if not isinstance(argv, list) or not argv or not all(isinstance(x, str) for x in argv):
-                    raise ValueError("Commands must be nonempty argv arrays")
+            from autonomous import validate_spec
+            validate_spec(spec)
             folder = self.root / "runs" / task_id
             attempt = folder / ("verify-" + dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f"))
             attempt.mkdir(parents=True)

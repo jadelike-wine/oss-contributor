@@ -15,6 +15,7 @@ import subprocess
 import sys
 from urllib.parse import unquote, urlsplit
 from repository_policy import contributing_guide, inspect_repository, project_items, ready_issue
+from ci_status import observe_ci
 
 # Keep exception identity shared when autonomous/research import the CLI module.
 if __name__ == '__main__':
@@ -708,7 +709,7 @@ class Pipeline:
 
     def followup_repository(self, repo):
         prs = gh('pr', 'list', '-R', repo, '--author', '@me', '--state', 'all', '--limit', '100',
-                 '--json', 'number,title,state,url,updatedAt,reviewDecision,statusCheckRollup')
+                 '--json', 'number,title,state,url,updatedAt,reviewDecision,statusCheckRollup,headRefOid')
         if not isinstance(prs, list):
             raise ValueError('Invalid PR list')
         for pr in prs:
@@ -717,6 +718,7 @@ class Pipeline:
                     or not isinstance(pr.get('title'), str) or not isinstance(pr.get('url'), str)):
                 raise ValueError('Invalid PR record')
             if pr['state'] == 'OPEN':
+                pr['ci'] = observe_ci(repo, pr, gh)
                 for field, endpoint in (('comments', f"issues/{pr['number']}/comments"),
                                         ('inline_comments', f"pulls/{pr['number']}/comments"),
                                         ('reviews', f"pulls/{pr['number']}/reviews")):

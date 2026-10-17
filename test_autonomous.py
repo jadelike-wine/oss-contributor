@@ -271,6 +271,31 @@ class AutonomousTests(unittest.TestCase):
                 self.assertFalse(self.engine.feedback(self.key, data))
                 self.assertTrue(any(c.args[0][:3] == ['gh', 'pr', 'edit'] for c in cmd.call_args_list))
 
+    def test_ci_approval_wait_does_not_call_model_or_failed_logs(self):
+        data = {'stage': 'PR_OPEN', 'pr_number': 3, 'attempts': {}}
+        self.engine.store(self.key, data, 'PR_OPEN')
+        pr = {'state': 'OPEN', 'body': 'Description', 'headRefOid': 'exact-head',
+              'statusCheckRollup': [{'name': 'test', 'conclusion': 'ACTION_REQUIRED',
+                                    'detailsUrl': 'https://github.com/owner/repo/actions/runs/7'}]}
+        def github(*args):
+            if args[0] == 'pr':
+                return pr
+            if '/actions/runs?' in args[-1]:
+                return [{'workflow_runs': [{'id': 7, 'head_sha': 'exact-head', 'status': 'completed',
+                                           'conclusion': 'action_required', 'name': 'test'}]}]
+            return [[]]
+        with patch('autonomous.gh', side_effect=github), \
+                patch.object(self.engine, 'model', return_value={'needs_changes': False}) as model, \
+                patch('autonomous.command', return_value='') as command:
+            self.assertFalse(self.engine.feedback(self.key, data))
+            self.assertFalse(self.engine.feedback(self.key, data))
+            model.assert_not_called()
+            command.assert_not_called()
+        self.assertEqual({'stage': 'PR_OPEN', 'pr_number': 3, 'attempts': {}}, self.engine.load(self.key))
+        ci = json.loads((self.engine.packet_dir(self.key) / 'pr-ci.json').read_text())
+        self.assertEqual('approval_required', ci['state'])
+        self.assertEqual([], ci['failed_checks'])
+
     def test_existing_pr_stays_first_during_repair(self):
         other = self.p.hunt('owner/repo', 'higher score new task')
         with self.p.db:

@@ -173,5 +173,25 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual("MERGED", self.p.followup()[0]["state"])
             self.assertEqual([], self.p.followup())
 
+    def test_followup_detects_workflow_approval_hidden_by_green_rollup(self):
+        pr = {'number': 1, 'title': 'fix', 'state': 'OPEN', 'url': 'https://github.com/owner/repo/pull/1',
+              'updatedAt': 'unchanged', 'headRefOid': 'exact-head',
+              'statusCheckRollup': [{'name': 'standards', 'conclusion': 'SUCCESS'}]}
+        workflow = {'id': 7, 'workflow_id': 9, 'head_sha': 'exact-head', 'name': 'test',
+                    'status': 'completed', 'conclusion': 'action_required'}
+        def github(*args):
+            if args[0] == 'pr':
+                return [pr.copy()]
+            if '/actions/runs?' in args[-1]:
+                return [{'workflow_runs': [workflow.copy()]}]
+            return [[]]
+        with patch('contribute.gh', side_effect=github):
+            observed = self.p.followup()[0]
+            self.assertIn('ci', observed)
+            self.assertEqual('approval_required', observed['ci']['state'])
+            self.assertEqual([], self.p.followup())
+            workflow['conclusion'] = 'success'
+            self.assertEqual('observed_checks_passed', self.p.followup()[0]['ci']['state'])
+
 if __name__ == "__main__":
     unittest.main()

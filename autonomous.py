@@ -9,6 +9,7 @@ import subprocess
 import datetime as dt
 
 from contribute import ContributionPaused, command, execute, gh, now, opencode_executable, save
+from ci_status import observe_ci
 
 
 def json_answer(text):
@@ -610,7 +611,9 @@ class Autonomous:
         # Association is not a review filter: repository bots are often CONTRIBUTOR.
         # This does not change the strict maintainer-approval gate for new issues.
         comments = [x for x in comments if x.get('body') or x.get('state') == 'CHANGES_REQUESTED']
-        failed = [x for x in (pr.get('statusCheckRollup') or []) if x.get('conclusion') in ('FAILURE', 'TIMED_OUT', 'ACTION_REQUIRED') or x.get('state') in ('FAILURE', 'ERROR')]
+        ci = observe_ci(task['repo'], pr, gh)
+        save(self.packet_dir(task_id) / 'pr-ci.json', ci)
+        failed = ci['failed_checks']
         missing = [h for h in re.findall(r'^#{1,6} .+$', self.pr_template(task), re.MULTILINE) if h not in pr.get('body', '')]
         packet = {'comments': comments, 'failed_checks': failed, 'missing_template_headings': missing}
         digest = hashlib.sha256(json.dumps(packet, sort_keys=True).encode()).hexdigest()
@@ -619,10 +622,14 @@ class Autonomous:
         for check in failed:
             match = re.search(r'/actions/runs/(\d+)', check.get('detailsUrl', '') or '')
             if match:
-                check['log'] = command(['gh', 'run', 'view', match[1], '-R', task['repo'], '--log-failed'])[-10000:]
-        context = {**packet, 'current_pr': pr, 'current_diff': command(['git', 'diff', task['base_sha'], '--'], cwd=task['workspace'])}
+                try:
+                    check['log'] = command(['gh', 'run', 'view', match[1], '-R', task['repo'], '--log-failed'])[-10000:]
+                except (RuntimeError, OSError, subprocess.TimeoutExpired) as error:
+                    check['log_error'] = str(error)
+        context = {**packet, 'ci': ci, 'current_pr': pr, 'current_diff': command(['git', 'diff', task['base_sha'], '--'], cwd=task['workspace'])}
         result = self.model(task_id, 'feedback', 'Determine which upstream requests remain unaddressed in the CURRENT diff and PR body. '
             'Green CI does not override compliance comments. Consider bot, inline and community feedback on its merits; '
+            'CI awaiting approval, pending or unknown is not a test failure and is not a reason to edit code or the PR. '
             'community praise is not maintainer approval. Ignore already satisfied or outdated requests. Do not edit files. '
             'Return only JSON {"needs_changes":true|false,"needs_body_changes":true|false,"reason":"..."}. '
             'needs_changes means code/test changes, needs_body_changes means description/template corrections. '

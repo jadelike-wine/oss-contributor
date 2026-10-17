@@ -1,0 +1,492 @@
+{
+  "fixture_only": true,
+  "provenance": "Real local stage timings and red/green tests; model and GitHub API mocked; NOT a real PR",
+  "report": {
+    "runs": [
+      {
+        "run_id": "543199dcff2144aa8325c1bb243ec937",
+        "entry": "task",
+        "started": "2026-10-17T15:38:09.198985+00:00",
+        "ended": "2026-10-17T15:38:12.556128+00:00",
+        "elapsed": 3.3589999999385327,
+        "outcome": "success",
+        "stop_reason": null,
+        "counters": {
+          "transition_PLAN": 1,
+          "commands": 42,
+          "transition_REPRODUCE": 1,
+          "command_failures": 2,
+          "transition_REPAIR": 1,
+          "transition_PATCH_READY": 1,
+          "transition_AUTO_REVIEW": 1,
+          "transition_PUBLISH": 1,
+          "transition_PR_OPEN": 1
+        },
+        "stages": [
+          {
+            "stage_id": "8e8e91f6303b480da0f03b014af9f2b6",
+            "run_id": "543199dcff2144aa8325c1bb243ec937",
+            "task": "owner--repo--hunt-f16d05ec6b29",
+            "name": "task",
+            "started": "2026-10-17T15:38:09.199735+00:00",
+            "ended": "2026-10-17T15:38:12.555444+00:00",
+            "elapsed": 3.3589999999385327,
+            "outcome": "success",
+            "reason": null
+          },
+          {
+            "stage_id": "bd14a382e8914de1a09bc0345dac6912",
+            "run_id": "543199dcff2144aa8325c1bb243ec937",
+            "task": "owner--repo--hunt-f16d05ec6b29",
+            "name": "maintainer_observation",
+            "started": "2026-10-17T15:38:09.200365+00:00",
+            "ended": "2026-10-17T15:38:09.207277+00:00",
+            "elapsed": 0.015999999945051968,
+            "outcome": "success",
+            "reason": null
+          },
+          {
+            "stage_id": "83b3f4629f9442ddad76882ab0ac2cde",
+            "run_id": "543199dcff2144aa8325c1bb243ec937",
+            "task": "owner--repo--hunt-f16d05ec6b29",
+            "name": "planning",
+            "started": "2026-10-17T15:38:09.208281+00:00",
+            "ended": "2026-10-17T15:38:09.424635+00:00",
+            "elapsed": 0.21799999999348074,
+            "outcome": "success",
+            "reason": null
+          },
+          {
+            "stage_id": "2daccc1cb6f34290827a24c5a4cf20a0",
+            "run_id": "543199dcff2144aa8325c1bb243ec937",
+            "task": "owner--repo--hunt-f16d05ec6b29",
+            "name": "prepare",
+            "started": "2026-10-17T15:38:09.209410+00:00",
+            "ended": "2026-10-17T15:38:09.212490+00:00",
+            "elapsed": 0.0,
+            "outcome": "success",
+            "reason": null
+          },
+          {
+            "stage_id": "2e2888ebf63548af87a5cf0a0f29690c",
+            "run_id": "543199dcff2144aa8325c1bb243ec937",
+            "task": "owner--repo--hunt-f16d05ec6b29",
+            "name": "reproduction",
+            "started": "2026-10-17T15:38:09.425670+00:00",
+            "ended": "2026-10-17T15:38:09.957946+00:00",
+            "elapsed": 0.5320000000065193,
+            "outcome": "success",
+            "reason": null
+          },
+          {
+            "stage_id": "95e3ae7570924e9ba83cf997460fb7a2",
+            "run_id": "543199dcff2144aa8325c1bb243ec937",
+            "task": "owner--repo--hunt-f16d05ec6b29",
+            "name": "implementation",
+            "started": "2026-10-17T15:38:09.957946+00:00",
+            "ended": "2026-10-17T15:38:09.966754+00:00",
+            "elapsed": 0.0,
+            "outcome": "success",
+            "reason": null
+          },
+          {
+            "stage_id": "f11f03c92cbc49ecb1fa693fa8301b51",
+            "run_id": "543199dcff2144aa8325c1bb243ec937",
+            "task": "owner--repo--hunt-f16d05ec6b29",
+            "name": "testing",
+            "started": "2026-10-17T15:38:09.967757+00:00",
+            "ended": "2026-10-17T15:38:10.782609+00:00",
+            "elapsed": 0.8279999999795109,
+            "outcome": "success",
+            "reason": null
+          },
+          {
+            "stage_id": "24491af0ec13457998597e8b3fefe48d",
+            "run_id": "543199dcff2144aa8325c1bb243ec937",
+            "task": "owner--repo--hunt-f16d05ec6b29",
+            "name": "test",
+            "started": "2026-10-17T15:38:09.971550+00:00",
+            "ended": "2026-10-17T15:38:10.773952+00:00",
+            "elapsed": 0.7970000000204891,
+            "outcome": "success",
+            "reason": null
+          },
+          {
+            "stage_id": "875088c3130549cb8900cdc3e4d2c3ba",
+            "run_id": "543199dcff2144aa8325c1bb243ec937",
+            "task": "owner--repo--hunt-f16d05ec6b29",
+            "name": "auto_review",
+            "started": "2026-10-17T15:38:10.783825+00:00",
+            "ended": "2026-10-17T15:38:11.403761+00:00",
+            "elapsed": 0.609000000054948,
+            "outcome": "success",
+            "reason": null
+          },
+          {
+            "stage_id": "bd30343eb80d41ebb19f4b5f0fba5947",
+            "run_id": "543199dcff2144aa8325c1bb243ec937",
+            "task": "owner--repo--hunt-f16d05ec6b29",
+            "name": "pr_publication",
+            "started": "2026-10-17T15:38:11.404979+00:00",
+            "ended": "2026-10-17T15:38:12.553258+00:00",
+            "elapsed": 1.1559999999590218,
+            "outcome": "success",
+            "reason": null
+          },
+          {
+            "stage_id": "837a098070a1441291c74b3640140715",
+            "run_id": "543199dcff2144aa8325c1bb243ec937",
+            "task": "owner--repo--hunt-f16d05ec6b29",
+            "name": "deduplication",
+            "started": "2026-10-17T15:38:11.652401+00:00",
+            "ended": "2026-10-17T15:38:11.655144+00:00",
+            "elapsed": 0.0,
+            "outcome": "success",
+            "reason": null
+          }
+        ],
+        "usage": {
+          "calls": 0,
+          "token_known_calls": 0,
+          "input_tokens": null,
+          "output_tokens": null,
+          "actual_cost_usd": null,
+          "cost_known_calls": 0,
+          "token_status": "unavailable"
+        },
+        "models": []
+      },
+      {
+        "run_id": "30c905a3dd37418a945592143935dd87",
+        "entry": "task",
+        "started": "2026-10-17T15:38:08.588701+00:00",
+        "ended": "2026-10-17T15:38:09.197493+00:00",
+        "elapsed": 0.609000000054948,
+        "outcome": "waiting_maintainer",
+        "stop_reason": null,
+        "counters": {
+          "commands": 9,
+          "researched_candidates": 1,
+          "candidate_feature": 1,
+          "transition_ISSUE": 1,
+          "transition_WAITING_MAINTAINER": 1
+        },
+        "stages": [
+          {
+            "stage_id": "9880bc00670d4ec39ee62321fa701565",
+            "run_id": "30c905a3dd37418a945592143935dd87",
+            "task": "owner--repo--hunt-f16d05ec6b29",
+            "name": "task",
+            "started": "2026-10-17T15:38:08.589725+00:00",
+            "ended": "2026-10-17T15:38:09.197493+00:00",
+            "elapsed": 0.609000000054948,
+            "outcome": "success",
+            "reason": null
+          },
+          {
+            "stage_id": "ec3cfd8a06a8407da7832bbe2df09535",
+            "run_id": "30c905a3dd37418a945592143935dd87",
+            "task": "owner--repo--hunt-f16d05ec6b29",
+            "name": "planning",
+            "started": "2026-10-17T15:38:08.590871+00:00",
+            "ended": "2026-10-17T15:38:09.003844+00:00",
+            "elapsed": 0.4220000000204891,
+            "outcome": "success",
+            "reason": null
+          },
+          {
+            "stage_id": "a4006038d4694a388e84555974853c3e",
+            "run_id": "30c905a3dd37418a945592143935dd87",
+            "task": "owner--repo--hunt-f16d05ec6b29",
+            "name": "prepare",
+            "started": "2026-10-17T15:38:08.590871+00:00",
+            "ended": "2026-10-17T15:38:08.594275+00:00",
+            "elapsed": 0.015000000013969839,
+            "outcome": "success",
+            "reason": null
+          },
+          {
+            "stage_id": "0c795949f60c49bcbeae862676872690",
+            "run_id": "30c905a3dd37418a945592143935dd87",
+            "task": "owner--repo--hunt-f16d05ec6b29",
+            "name": "research",
+            "started": "2026-10-17T15:38:08.595281+00:00",
+            "ended": "2026-10-17T15:38:09.000141+00:00",
+            "elapsed": 0.40700000000651926,
+            "outcome": "success",
+            "reason": null
+          },
+          {
+            "stage_id": "98091d0fdc96477fa45504fc07cf9f4a",
+            "run_id": "30c905a3dd37418a945592143935dd87",
+            "task": "owner--repo--hunt-f16d05ec6b29",
+            "name": "prepare",
+            "started": "2026-10-17T15:38:08.604587+00:00",
+            "ended": "2026-10-17T15:38:08.607033+00:00",
+            "elapsed": 0.0,
+            "outcome": "success",
+            "reason": null
+          },
+          {
+            "stage_id": "c858fdbf02f646cd85fe39f6caebb510",
+            "run_id": "30c905a3dd37418a945592143935dd87",
+            "task": "owner--repo--hunt-f16d05ec6b29",
+            "name": "deduplication",
+            "started": "2026-10-17T15:38:08.982875+00:00",
+            "ended": "2026-10-17T15:38:08.987491+00:00",
+            "elapsed": 0.01600000006146729,
+            "outcome": "success",
+            "reason": null
+          },
+          {
+            "stage_id": "061812ff0bc54298aa4dbc0274cbc74a",
+            "run_id": "30c905a3dd37418a945592143935dd87",
+            "task": "owner--repo--hunt-f16d05ec6b29",
+            "name": "issue_publication",
+            "started": "2026-10-17T15:38:09.003844+00:00",
+            "ended": "2026-10-17T15:38:09.195465+00:00",
+            "elapsed": 0.18700000003445894,
+            "outcome": "success",
+            "reason": null
+          },
+          {
+            "stage_id": "c14f99ce96294caf9462cbc1a0011dd4",
+            "run_id": "30c905a3dd37418a945592143935dd87",
+            "task": "owner--repo--hunt-f16d05ec6b29",
+            "name": "deduplication",
+            "started": "2026-10-17T15:38:09.004846+00:00",
+            "ended": "2026-10-17T15:38:09.009518+00:00",
+            "elapsed": 0.0,
+            "outcome": "success",
+            "reason": null
+          }
+        ],
+        "usage": {
+          "calls": 0,
+          "token_known_calls": 0,
+          "input_tokens": null,
+          "output_tokens": null,
+          "actual_cost_usd": null,
+          "cost_known_calls": 0,
+          "token_status": "unavailable"
+        },
+        "models": []
+      }
+    ],
+    "stage_outcomes_all_time": [
+      {
+        "name": "auto_review",
+        "outcome": "success",
+        "reason": null,
+        "attempts": 1,
+        "average_seconds": 0.609000000054948
+      },
+      {
+        "name": "deduplication",
+        "outcome": "success",
+        "reason": null,
+        "attempts": 3,
+        "average_seconds": 0.00533333335382243
+      },
+      {
+        "name": "implementation",
+        "outcome": "success",
+        "reason": null,
+        "attempts": 1,
+        "average_seconds": 0.0
+      },
+      {
+        "name": "issue_publication",
+        "outcome": "success",
+        "reason": null,
+        "attempts": 1,
+        "average_seconds": 0.18700000003445894
+      },
+      {
+        "name": "maintainer_observation",
+        "outcome": "success",
+        "reason": null,
+        "attempts": 1,
+        "average_seconds": 0.015999999945051968
+      },
+      {
+        "name": "planning",
+        "outcome": "success",
+        "reason": null,
+        "attempts": 2,
+        "average_seconds": 0.3200000000069849
+      },
+      {
+        "name": "pr_publication",
+        "outcome": "success",
+        "reason": null,
+        "attempts": 1,
+        "average_seconds": 1.1559999999590218
+      },
+      {
+        "name": "prepare",
+        "outcome": "success",
+        "reason": null,
+        "attempts": 3,
+        "average_seconds": 0.005000000004656613
+      },
+      {
+        "name": "reproduction",
+        "outcome": "success",
+        "reason": null,
+        "attempts": 1,
+        "average_seconds": 0.5320000000065193
+      },
+      {
+        "name": "research",
+        "outcome": "success",
+        "reason": null,
+        "attempts": 1,
+        "average_seconds": 0.40700000000651926
+      },
+      {
+        "name": "task",
+        "outcome": "success",
+        "reason": null,
+        "attempts": 2,
+        "average_seconds": 1.9839999999967404
+      },
+      {
+        "name": "test",
+        "outcome": "success",
+        "reason": null,
+        "attempts": 1,
+        "average_seconds": 0.7970000000204891
+      },
+      {
+        "name": "testing",
+        "outcome": "success",
+        "reason": null,
+        "attempts": 1,
+        "average_seconds": 0.8279999999795109
+      }
+    ],
+    "candidate_queues": [
+      {
+        "category": "feature",
+        "queue": "READY_TO_IMPLEMENT",
+        "candidates": 1
+      }
+    ],
+    "task_states": [
+      {
+        "state": "PR_OPEN",
+        "tasks": 1
+      }
+    ],
+    "quality_all_time": {
+      "researched_unique_candidates": 1,
+      "source_evidence": {
+        "numerator": 1,
+        "denominator": 1,
+        "ratio": 1.0,
+        "scope": "unique indexed candidates; legacy evidence not backfilled"
+      },
+      "feature_candidates": {
+        "numerator": 1,
+        "denominator": 1,
+        "ratio": 1.0,
+        "scope": "unique indexed candidates"
+      },
+      "bug_candidates": {
+        "numerator": 0,
+        "denominator": 1,
+        "ratio": 0.0,
+        "scope": "unique indexed candidates"
+      },
+      "multi_peer_complete": {
+        "numerator": 1,
+        "denominator": 1,
+        "ratio": 1.0,
+        "scope": "at least three peers with no unknown statuses"
+      },
+      "policy_paused": {
+        "numerator": 0,
+        "denominator": 1,
+        "ratio": 0.0,
+        "scope": "current candidate queues"
+      },
+      "needs_maintainer": {
+        "numerator": 0,
+        "denominator": 1,
+        "ratio": 0.0,
+        "scope": "current candidate queues"
+      },
+      "implementation": {
+        "numerator": 1,
+        "denominator": 1,
+        "ratio": 1.0,
+        "scope": "distinct tasks with observed stage attempts; not upstream acceptance"
+      },
+      "baseline_reproduction": {
+        "numerator": 1,
+        "denominator": 1,
+        "ratio": 1.0,
+        "scope": "distinct tasks with observed stage attempts; not upstream acceptance"
+      },
+      "patch_tests": {
+        "numerator": 1,
+        "denominator": 1,
+        "ratio": 1.0,
+        "scope": "distinct tasks with observed stage attempts; not upstream acceptance"
+      },
+      "automated_review": {
+        "numerator": 1,
+        "denominator": 1,
+        "ratio": 1.0,
+        "scope": "distinct tasks with observed stage attempts; not upstream acceptance"
+      },
+      "pr_creation": {
+        "numerator": 1,
+        "denominator": 1,
+        "ratio": 1.0,
+        "scope": "distinct tasks with observed stage attempts; not upstream acceptance"
+      },
+      "submitted_unique_prs": 1,
+      "merged_prs": 0,
+      "pending_observation_prs": 1,
+      "ci_observed_passed": {
+        "numerator": 0,
+        "denominator": 1,
+        "ratio": 0.0,
+        "scope": "submitted PRs; unobserved is not passed; branch protection not inferred"
+      },
+      "maintainer_response": {
+        "numerator": 0,
+        "denominator": 1,
+        "ratio": 0.0,
+        "scope": "submitted PRs with verified maintainer association; not approval"
+      },
+      "merge_rate": {
+        "numerator": 0,
+        "denominator": 1,
+        "ratio": 0.0,
+        "scope": "submitted PRs; open PRs remain pending"
+      },
+      "duplicate_research_attempts": {
+        "numerator": 0,
+        "denominator": 1,
+        "ratio": 0.0,
+        "scope": "research attempts, not unique candidates"
+      },
+      "insufficient_evidence_attempts": {
+        "numerator": 0,
+        "denominator": 1,
+        "ratio": 0.0,
+        "scope": "research attempts, not unique candidates"
+      },
+      "qualified_candidate_mean_seconds": 3.9679999999934807,
+      "qualified_candidate_actual_cost_usd": null,
+      "submitted_pr_mean_seconds": 3.9679999999934807,
+      "submitted_pr_actual_cost_usd": null
+    },
+    "cost_status": "unavailable: adapters do not report reliable billable usage",
+    "cost_caps_enforced": false,
+    "note": "Running records without ended are incomplete, never assumed successful. Stage attempts are not unique contributions."
+  }
+}

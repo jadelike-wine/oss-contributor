@@ -635,4 +635,8 @@ class Autonomous:
                     print(f"{row['id']}: {result}")
 
     def candidates(self):
-        return self.db.execute("SELECT id,state FROM tasks WHERE state NOT IN ('HOLD','SKIPPED','CLOSED','MERGED','FAILED') ORDER BY CASE WHEN state='PR_OPEN' THEN 0 WHEN state='WAITING_MAINTAINER' THEN 1 WHEN state='DISCOVERED' THEN 3 ELSE 2 END,score DESC,id").fetchall()
+        return self.db.execute("""SELECT tasks.id,tasks.state FROM tasks LEFT JOIN automation ON automation.task=tasks.id
+            WHERE tasks.state NOT IN ('HOLD','SKIPPED','CLOSED','MERGED','FAILED')
+            ORDER BY CASE WHEN json_extract(automation.data,'$.pr_number') IS NOT NULL OR state='PR_OPEN' THEN 0
+                          WHEN state='WAITING_MAINTAINER' THEN 1 WHEN state='DISCOVERED' THEN 3 ELSE 2 END,
+                     score DESC,id""").fetchall()

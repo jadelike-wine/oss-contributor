@@ -261,6 +261,15 @@ class AutonomousTests(unittest.TestCase):
                 self.assertFalse(self.engine.feedback(self.key, data))
                 self.assertTrue(any(c.args[0][:3] == ['gh', 'pr', 'edit'] for c in cmd.call_args_list))
 
+    def test_existing_pr_stays_first_during_repair(self):
+        other = self.p.hunt('owner/repo', 'higher score new task')
+        with self.p.db:
+            self.p.db.execute("UPDATE tasks SET score=100,state='PLAN' WHERE id=?", (other,))
+        data = self.engine.load(self.key)
+        data['pr_number'] = 3
+        self.engine.move(self.key, data, 'REPAIR')
+        self.assertEqual(self.key, self.engine.candidates()[0]['id'])
+
     def test_scan_failure_does_not_block_existing_work(self):
         from contribute import main
         import io

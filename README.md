@@ -40,7 +40,7 @@ python -X utf8 contribute.py catalog --verify
 python -X utf8 contribute.py scan
 
 # 遍历全部已核验研究仓库，扫描已有 Issue、固定源码版本并逐仓库静态分诊
-# 默认不受原贡献白名单 8 个仓库或 research-batch 每轮 3 个候选的限制
+# 默认不受原贡献白名单或 research-batch 每轮 3 个候选的限制
 python -X utf8 catalog_sweep.py --output runs/catalog-sweep
 # 网络采集和模型分析可分开运行；成功结果保留，失败结果保持 unknown
 python -X utf8 catalog_sweep.py --output runs/catalog-sweep --collect-only
@@ -63,7 +63,7 @@ python -X utf8 contribute.py tick
 
 `auto --dry-run` 不调用模型或发布，但仍可能进行只读健康核验。`metrics/candidates/matrix/catalog`（不带 `--verify`）使用本地资料；`metrics/candidates/matrix` 通过 SQLite `mode=ro` 连接，不触发迁移。旧 `scan/status/followup/prepare/analyze/repair/verify/review/hunt/unlock` CLI 保留。
 
-`scan` 和 `tick` 的扫描阶段默认使用完整的已核验研究目录，当前为 32 个仓库，不受八仓库贡献白名单、`peer_repositories` 同行子集或每轮三个模型研究候选的限制。扫描仍排除过期、暂停、拒绝、退役、归档、禁用及未授予研究权限的目录项。没有目录文件的旧配置继续使用原白名单；已有目录却没有合格项时会明确报错，提示 `catalog --verify`，不会静默退回八个仓库。单独 `scan` 无需核验贡献看板权限；`tick` 后续的实现和发布继续使用原有贡献及维护者门禁。
+`scan` 和 `tick` 的扫描阶段默认使用完整的已核验研究目录，当前为 32 个仓库，不受 `peer_repositories` 同行子集或每轮三个模型研究候选的限制。扫描仍排除过期、暂停、拒绝、退役、归档、禁用及未授予研究权限的目录项。没有目录文件的旧配置继续使用原白名单；已有目录却没有合格项时会明确报错，提示 `catalog --verify`，不会静默退回白名单。单独 `scan` 无需核验贡献看板权限；`tick` 后续的实现和发布继续使用原有贡献及维护者门禁。
 
 每轮 `runs/scan-summary.json` 保存计划范围、全部仓库、逐仓库 Issue / PR 数及总数。网络失败记为 `unknown`，中断后尚未访问的项保留 `not_scanned`；成功记录逐仓库保存，进程正常退出也不表示所有仓库都成功。此摘要仅记录扫描，源码采集和模型研究仍通过下述入口推进。
 
@@ -127,7 +127,7 @@ README 没有提到功能不构成缺失证据；README 声称支持也不能替
 
 | 目录状态 | 数量 | 含义 |
 | --- | ---: | --- |
-| `research_only` | 32 | 实际读取并核验公开源码、测试、文档及可识别开源许可证；仅授予研究权限 |
+| `research_only` | 32 | 实际读取并核验公开源码、测试、文档及可识别开源许可证；默认进入研究池，也计入贡献白名单（见下） |
 | `active` | 0 | 本次目录核验没有新增自动贡献授权 |
 | `paused` | 10 | 网络/404、迁移旧地址、长期无推送、停止维护/归档等，逐条记录原因 |
 | `rejected` | 8 | 当前有界准入无法确认合格开源许可或源码/测试/文档覆盖；不是宣称所有这些项目都闭源 |
@@ -135,7 +135,7 @@ README 没有提到功能不构成缺失证据；README 声称支持也不能替
 
 GitHub 对复杂/混合许可证可能返回 `NOASSERTION`。这类仓库目前不自动准入，需另行逐目录许可证审查。临时失败只暂停，不永久退役；已退役记录刷新时不会自动恢复。OpenInterpreter 和 Instructor 的原名称保留迁移状态，官方规范名称另行核验后进入研究池。
 
-- `repositories`：原有八仓库扫描/贡献白名单，保持不变；仍需当轮健康检查和每个任务的政策判断。
+- `repositories`：贡献白名单，默认包含全部 33 个已核验仓库（原 8 个 + 25 个目录核验 `research_only`）；仍需当轮健康检查和每个任务的政策判断。
 - `repository_catalog`：完整核验目录文件路径，默认 `repository-catalog.json`。
 - `peer_repositories`：可选的研究池子集，仅过滤已核验目录，不能直接授权未知仓库。
 - 目录超过 `research.catalog_max_age_days`（默认 30 天）不再作为研究准入依据，需 `catalog --verify`。

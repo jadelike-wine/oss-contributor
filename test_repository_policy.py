@@ -53,7 +53,7 @@ class RepositoryPolicyTests(unittest.TestCase):
         stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
         return stack
 
-    def test_eight_shared_targets_and_two_retired_identifiers(self):
+    def test_shared_targets_and_two_retired_identifiers(self):
         self.assertEqual(self.config['repositories'], REPOSITORIES)
         self.assertEqual(set(self.config['repository_checks']['retired']),
                          {'continuedev/continue', 'SWE-agent/SWE-agent'})

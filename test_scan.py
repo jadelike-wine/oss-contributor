@@ -13,11 +13,7 @@ from argparse import Namespace
 from telemetry import BudgetExhausted
 
 
-REPOSITORIES = [
-    'QwenLM/qwen-code', 'google-gemini/gemini-cli', 'anomalyco/opencode',
-    'cline/cline', 'OpenHands/OpenHands', 'Kilo-Org/kilocode',
-    'aaif-goose/goose', 'SWE-agent/mini-swe-agent',
-]
+REPOSITORIES = json.loads(Path(__file__).with_name('config.json').read_text(encoding='utf-8'))['repositories']
 
 
 class ScanTests(unittest.TestCase):
@@ -65,13 +61,13 @@ class ScanTests(unittest.TestCase):
 
     def test_legacy_config_without_catalog_keeps_allowlist_limits_scores_and_repeat_scan(self):
         self.assertEqual(self.config['repositories'], REPOSITORIES)
-        self.assertEqual(len(set(self.config['repositories'])), 8)
+        self.assertEqual(len(set(self.config['repositories'])), len(REPOSITORIES))
         self.assertEqual(self.config['scan_limit'], 100)
         self.issues[REPOSITORIES[0]][0]['labels'].append({'name': 'priority/p1'})
-        self.assertEqual(self.scan(), 8)
+        self.assertEqual(self.scan(), len(REPOSITORIES))
         self.assertEqual(self.visited, REPOSITORIES)
-        self.assertEqual(sum(args[0] == 'issue' for args in self.calls), 8)
-        self.assertEqual(sum(args[0] == 'pr' for args in self.calls), 8)
+        self.assertEqual(sum(args[0] == 'issue' for args in self.calls), len(REPOSITORIES))
+        self.assertEqual(sum(args[0] == 'pr' for args in self.calls), len(REPOSITORIES))
         for repo in REPOSITORIES:
             task = self.p.task(repo.replace('/', '--') + '--12')
             self.assertEqual(task['repo'], repo)
@@ -80,7 +76,7 @@ class ScanTests(unittest.TestCase):
         report = (self.root / 'runs/queue.md').read_text(encoding='utf-8')
         self.assertLess(report.index('QwenLM--qwen-code--12'), report.index('cline--cline--12'))
         self.assertEqual(self.scan(), 0)
-        self.assertEqual(self.p.db.execute('SELECT count(*) FROM tasks').fetchone()[0], 8)
+        self.assertEqual(self.p.db.execute('SELECT count(*) FROM tasks').fetchone()[0], len(REPOSITORIES))
 
     def catalog(self):
         repos = REPOSITORIES + [f'catalog/project-{i}' for i in range(24)]
@@ -102,17 +98,17 @@ class ScanTests(unittest.TestCase):
         (self.root / 'repository-catalog.json').write_text(json.dumps({'repositories': records}), encoding='utf-8')
         return repos
 
-    def test_default_scan_visits_all_32_catalog_repositories_without_authorizing_contributions(self):
+    def test_default_scan_visits_all_catalog_repositories_without_authorizing_contributions(self):
         repos = self.catalog()
         self.p.config['peer_repositories'] = [repos[0]]
         with patch.object(self.p, 'effective_repositories', side_effect=AssertionError('scan must not probe contribution boards')):
-            self.assertEqual(self.scan(), 32)
+            self.assertEqual(self.scan(), len(repos))
         self.assertEqual(self.visited, repos)
         summary = json.loads((self.root / 'runs/scan-summary.json').read_text())
         self.assertEqual(summary['scope'], 'verified_catalog')
-        self.assertEqual(summary['planned_repositories'], 32)
+        self.assertEqual(summary['planned_repositories'], len(repos))
         self.assertTrue(summary['completed'])
-        self.assertEqual(summary['totals'], {'scanned_repositories': 32, 'issues': 32, 'prs': 0, 'changed': 32})
+        self.assertEqual(summary['totals'], {'scanned_repositories': len(repos), 'issues': len(repos), 'prs': 0, 'changed': len(repos)})
         self.assertTrue(all(r['status'] == 'scanned' for r in summary['repositories']))
         self.assertEqual(self.p.config['repositories'], REPOSITORIES)
         with self.assertRaises(ContributionPaused):
@@ -143,7 +139,7 @@ class ScanTests(unittest.TestCase):
             self.scan(gh=github)
         summary = json.loads((self.root / 'runs/scan-summary.json').read_text())
         self.assertFalse(summary['completed'])
-        self.assertEqual(summary['planned_repositories'], 32)
+        self.assertEqual(summary['planned_repositories'], len(repos))
         self.assertEqual(summary['repositories'][0]['status'], 'scanned')
         self.assertEqual(summary['repositories'][1]['status'], 'unknown')
         self.assertIn('test_budget', summary['repositories'][1]['error'])
@@ -157,13 +153,13 @@ class ScanTests(unittest.TestCase):
             if args == ('api', 'repos/' + repos[8]):
                 raise RuntimeError('HTTP 503')
             return self.fake_gh(*args)
-        self.assertEqual(self.scan(gh=github), 31)
+        self.assertEqual(self.scan(gh=github), len(repos) - 1)
         summary = json.loads((self.root / 'runs/scan-summary.json').read_text())
         self.assertEqual(summary['repositories'][8]['status'], 'unknown')
         self.assertIn('503', summary['repositories'][8]['error'])
         self.assertEqual(summary['repositories'][-1]['status'], 'scanned')
-        self.assertEqual(summary['planned_repositories'], 32)
-        self.assertEqual(summary['totals']['scanned_repositories'], 31)
+        self.assertEqual(summary['planned_repositories'], len(repos))
+        self.assertEqual(summary['totals']['scanned_repositories'], len(repos) - 1)
 
     def test_existing_catalog_without_eligible_repositories_does_not_silently_fall_back_to_eight(self):
         (self.root / 'repository-catalog.json').write_text('{"repositories": []}')
@@ -201,7 +197,7 @@ class ScanTests(unittest.TestCase):
 
                 self.scan(gh=fail)
                 self.assertEqual(self.visited, REPOSITORIES)
-                self.assertEqual(self.p.db.execute('SELECT count(*) FROM tasks').fetchone()[0], 7)
+                self.assertEqual(self.p.db.execute('SELECT count(*) FROM tasks').fetchone()[0], len(REPOSITORIES) - 1)
                 self.assertIn(f'scan {bad}: FAILED', self.log.getvalue())
                 self.assertIn(f'scan {REPOSITORIES[-1]}: OK', self.log.getvalue())
                 event = self.p.db.execute('SELECT event FROM events WHERE task=? ORDER BY id DESC', ('scan:' + bad,)).fetchone()[0]
@@ -217,7 +213,7 @@ class ScanTests(unittest.TestCase):
                 result['archived'] = True
             return result
 
-        self.assertEqual(self.scan(gh=archived), 6)
+        self.assertEqual(self.scan(gh=archived), len(REPOSITORIES) - 2)
         self.assertIn(f'scan {REPOSITORIES[0]}: EMPTY', self.log.getvalue())
         self.assertIn(f'scan {REPOSITORIES[1]}: SKIPPED (archived)', self.log.getvalue())
 
@@ -237,7 +233,7 @@ class ScanTests(unittest.TestCase):
                 raise RuntimeError('gh failed (1): Not Found (HTTP 404)')
             return 'Rules'
 
-        self.assertEqual(self.scan(gh=github, command=command), 8)
+        self.assertEqual(self.scan(gh=github, command=command), len(REPOSITORIES))
         self.assertFalse(rules.exists())
         self.assertIn(f'scan {repo}: WARNING no contributing guide', self.log.getvalue())
         self.assertIn(f'scan {repo}: OK', self.log.getvalue())
@@ -256,7 +252,7 @@ class ScanTests(unittest.TestCase):
                 raise RuntimeError('Not Found (HTTP 404)')
             return 'Discovered rules' if args[2] == url else 'Rules'
 
-        self.assertEqual(self.scan(gh=github, command=command), 8)
+        self.assertEqual(self.scan(gh=github, command=command), len(REPOSITORIES))
         rules = self.root / 'runs/snapshots' / repo.replace('/', '--') / 'CONTRIBUTING.md'
         self.assertEqual(rules.read_text(encoding='utf-8'), 'Discovered rules')
 
@@ -266,7 +262,7 @@ class ScanTests(unittest.TestCase):
                 raise RuntimeError('HTTP 403: forbidden')
             return 'Rules'
 
-        self.assertEqual(self.scan(command=command), 7)
+        self.assertEqual(self.scan(command=command), len(REPOSITORIES) - 1)
         self.assertIn('FAILED (RuntimeError): HTTP 403', self.log.getvalue())
         self.assertNotIn('WARNING no contributing guide', self.log.getvalue())
 
@@ -283,7 +279,7 @@ class ScanTests(unittest.TestCase):
                 raise RuntimeError('Not Found (HTTP 404)')
             return 'Rules'
 
-        self.assertEqual(self.scan(gh=github, command=command), 7)
+        self.assertEqual(self.scan(gh=github, command=command), len(REPOSITORIES) - 1)
         self.assertIn('FAILED (ValueError): Invalid community profile', self.log.getvalue())
         self.assertIn(f'scan {REPOSITORIES[-1]}: OK', self.log.getvalue())
 
@@ -297,7 +293,7 @@ class ScanTests(unittest.TestCase):
             return rank(issue)
 
         with patch('contribute.rank', side_effect=failing_rank):
-            self.assertEqual(self.scan(), 7)
+            self.assertEqual(self.scan(), len(REPOSITORIES) - 1)
         self.assertEqual(self.p.db.execute('SELECT count(*) FROM tasks WHERE repo=?', (repo,)).fetchone()[0], 0)
 
     def test_legacy_ids_active_states_and_schema_survive_reopen_and_updates(self):
@@ -309,12 +305,12 @@ class ScanTests(unittest.TestCase):
         original = self.p.task(key)
         self.p.db.close()
         self.p = Pipeline(self.root)
-        self.assertEqual(self.scan(), 8)
+        self.assertEqual(self.scan(), len(REPOSITORIES))
         self.assertEqual(self.scan(), 0)
         task = self.p.task(key)
         for field in ('id', 'repo', 'number', 'source', 'state', 'workspace', 'base_sha'):
             self.assertEqual(task[field], original[field])
-        self.assertEqual(self.p.db.execute('SELECT count(*) FROM tasks').fetchone()[0], 8)
+        self.assertEqual(self.p.db.execute('SELECT count(*) FROM tasks').fetchone()[0], len(REPOSITORIES))
         self.assertEqual(self.p.db.execute('SELECT name,sql FROM sqlite_master ORDER BY name').fetchall(), schema)
         self.issues[repo][0]['title'] = 'Updated report'
         self.assertEqual(self.scan(), 1)
@@ -325,7 +321,7 @@ class ScanTests(unittest.TestCase):
         for repo in REPOSITORIES:
             self.prs[repo] = [{'number': 20, 'url': f'https://github.com/{repo}/pull/20',
                               'body': 'Fixes #12', 'closingIssuesReferences': [{'number': 12}]}]
-        self.assertEqual(self.scan(), 8)
+        self.assertEqual(self.scan(), len(REPOSITORIES))
         for task in self.p.db.execute('SELECT * FROM tasks'):
             self.assertEqual(task['state'], 'HOLD')
             self.assertIn(f"https://github.com/{task['repo']}/pull/20", task['holds'])

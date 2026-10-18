@@ -25,7 +25,7 @@
 | `contribute.py` | 安全重复迁移、新 CLI、原子 JSON 保存、研究/贡献权限分离、按用途超时及预算截断 |
 | `repository_policy.py` | 修复组织共享贡献指南的官方 profile 404 回退，仅信任同组织 `.github` |
 | `verify_ci.py` | 保留专用精确补丁收据逻辑，轮询上限纳入配置及剩余运行预算 |
-| `config.json` | 新研究、预算、超时、目录和 review_model 配置；保留原八仓库与退役/Goose 规则 |
+| `config.json` | 新研究、预算、超时、目录和 review_model 配置；贡献白名单默认含全部已核验仓库，保留退役/Goose 规则 |
 | `test_feature_matrix.py`、`test_repository_catalog.py`、`test_cross_harness_flow.py`、`test_telemetry.py`（新增） | 矩阵、目录、跨 Harness 闭环、观测和预算验证 |
 | `test_ci.py`、`test_duplicates.py`、`test_repository_policy.py`、`test_research.py` | 补齐模块复制、真实 SQLite 观测依赖、显式空配置及研究调度隔离；未放宽安全断言 |
 | `README.md`、本记录及 `examples/*.fixture.json` | 实际用法、数据关系、迁移、限制和执行生成的模拟示例 |
@@ -51,7 +51,7 @@
 
 ## 仓库核验结果
 
-32 个 `research_only`、0 个新增 `active`、10 个 `paused`、8 个 `rejected`、2 个 `retired`。研究资格不授予 Issue/PR/推送权限；原八仓库仍由既有白名单及实时贡献门禁控制。
+32 个 `research_only`、0 个新增 `active`、10 个 `paused`、8 个 `rejected`、2 个 `retired`。研究池默认进入贡献白名单，但实时健康检查与每个任务的政策门禁仍决定是否可发布。
 
 未准入/暂停/退役的逐项结果：
 

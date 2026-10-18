@@ -122,7 +122,7 @@ def route(answer, matrix, *, reviewed=False, duplicate_clear=False, maintainer=F
         return 'RESEARCH_ONLY', 0, 'private_or_no_candidate'
     allowed = answer.get('policy', {})
     if (not allowed.get('automated_pr') or policy.get('human_pr_review_required')
-            or policy.get('manual_issue_submission') or policy.get('research_only')):
+            or policy.get('manual_issue_submission')):
         return 'PAUSED_POLICY', 0, 'automation_or_personal_review_policy'
     if not reviewed or not duplicate_clear:
         return 'RESEARCH_ONLY', 0, 'review_or_duplicate_gate_pending'
@@ -143,7 +143,6 @@ def route(answer, matrix, *, reviewed=False, duplicate_clear=False, maintainer=F
 
 def persist(engine, task, answer, matrix, **gates):
     policy = dict(engine.p.config.get('repository_checks', {}).get('policies', {}).get(task['repo'], {}))
-    policy['research_only'] = task['repo'] not in engine.p.config['repositories']
     queue, priority, reason = route(answer, matrix, policy=policy, **gates)
     if matrix is None:
         # Legacy candidates keep their existing state machine and get a conservative index.

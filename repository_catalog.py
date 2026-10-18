@@ -142,7 +142,7 @@ def research_pool(pipeline, *, respect_peer_filter=True):
     path = pipeline.root / pipeline.config.get('repository_catalog', 'repository-catalog.json')
     retired = {r.lower() for r in pipeline.config.get('repository_checks', {}).get('retired', {})}
     if not path.exists():
-        # Compatibility with existing eight-repository configurations: live health checked.
+        # Compatibility with allowlist-only configurations: live health checked.
         return [r for r in pipeline.effective_repositories() if r.lower() not in retired]
     catalog = json.loads(path.read_text(encoding='utf-8'))
     allowed = pipeline.config.get('peer_repositories') if respect_peer_filter else None

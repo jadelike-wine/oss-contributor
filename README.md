@@ -127,15 +127,15 @@ README 没有提到功能不构成缺失证据；README 声称支持也不能替
 
 | 目录状态 | 数量 | 含义 |
 | --- | ---: | --- |
-| `research_only` | 94 | 已核验公开源码、测试、文档及可识别开源许可证，进入默认研究和扫描范围 |
-| `active` | 0 | 目录核验没有直接授予自动贡献权限 |
+| `research_only` | 94 | 已核验公开源码、测试、文档及可识别开源许可证，进入默认研究和扫描范围；其中白名单内 94 项标记 `automatic_contribution` / `pr_submission: allowlisted`，允许自动贡献（仍受实时门禁约束） |
+| `active` | 0 | 目录核验不绕过运行时健康/政策门禁；白名单内项目的贡献授权记录在 `automatic_contribution` |
 | `paused` | 13 | 迁移旧地址、长期无推送、停止维护/归档、贡献限制等，逐条记录原因 |
 | `rejected` | 23 | 有界准入无法确认开源许可或源码/测试/文档覆盖，保留待审查 |
 | `retired` | 2 | `continuedev/continue`、`SWE-agent/SWE-agent`，保持显式退役 |
 
 GitHub 对复杂/混合许可证可能返回 `NOASSERTION`。这类仓库目前不自动准入，需另行逐目录许可证审查。临时失败只暂停，不永久退役；已退役记录刷新时不会自动恢复。OpenInterpreter 和 Instructor 的原名称保留迁移状态，官方规范名称另行核验后进入研究池。
 
-- `repositories`：贡献目标白名单，保留原 33 个目标并追加本次核验通过的项目，当前 94 个；仍需当轮健康检查和每个任务的政策判断。
+- `repositories`：贡献目标白名单，保留原 33 个目标并追加本次核验通过的项目，当前 94 个；白名单内且目录核验为 `research_only` 的仓库记录 `automatic_contribution` 与 `pr_submission: allowlisted`，允许进入自动贡献流程，但仍需当轮健康检查、每个任务的政策判断及发布门禁。
 - `repository_catalog`：完整核验目录文件路径，默认 `repository-catalog.json`。
 - `peer_repositories`：可选的研究池子集，仅过滤已核验目录，不能直接授权未知仓库。
 - 目录超过 `research.catalog_max_age_days`（默认 30 天）不再作为研究准入依据，需 `catalog --verify`。

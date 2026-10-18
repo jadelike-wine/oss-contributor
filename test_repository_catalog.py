@@ -22,13 +22,17 @@ class CatalogTests(unittest.TestCase):
 
     def test_committed_catalog_has_thirty_verified_distinct_research_repositories(self):
         catalog = json.loads(Path(__file__).with_name('repository-catalog.json').read_text(encoding='utf-8'))
+        config = json.loads(Path(__file__).with_name('config.json').read_text(encoding='utf-8'))
+        allowlisted = set(config['repositories'])
         valid = [r for r in catalog['repositories'] if r['research_allowed']]
         self.assertGreaterEqual(len({r['canonical'].lower() for r in valid}), 30)
         for record in valid:
             self.assertRegex(record['sha'], r'^[a-f0-9]{40}$')
             self.assertFalse(record['archived'])
             self.assertFalse(record['disabled'])
-            self.assertFalse(record['automatic_contribution'])
+            self.assertEqual(record['automatic_contribution'], record['repo'] in allowlisted)
+            if record['automatic_contribution']:
+                self.assertEqual(record['policy']['pr_submission'], 'allowlisted')
             self.assertTrue({'source', 'test', 'documentation'}.issubset({f['file_type'] for f in record['files'].values()}))
             for path, evidence in record['files'].items():
                 self.assertEqual(evidence['file_type'], file_type(path))

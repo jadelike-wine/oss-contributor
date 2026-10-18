@@ -143,7 +143,12 @@ def inspect(repo, config):
             record.update(status='research_only', research_allowed=True,
                           reason='Pinned public source/test/documentation verified; automated contribution NOT granted')
         record['policy'].update(config.get('repository_checks', {}).get('policies', {}).get(repo, {}))
-        record['policy']['contribution_allowlisted'] = repo in config['repositories']
+        allowlisted = repo in config['repositories']
+        record['policy']['contribution_allowlisted'] = allowlisted
+        if allowlisted and record['status'] == 'research_only':
+            record['automatic_contribution'] = True
+            record['policy']['pr_submission'] = 'allowlisted'
+            record['reason'] = 'Pinned public source/test/documentation verified; allowlisted for automated contribution pending live gates'
         record['policy']['decision'] = 'Existing contribution allowlist still requires live health, task policy and publication gates; catalog never authorizes publication'
     except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired, KeyError, TypeError) as error:
         status = re.search(r'HTTP (\d{3})', str(error))

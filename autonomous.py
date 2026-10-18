@@ -441,6 +441,10 @@ class Autonomous:
         candidates = []
         searches = []
         search_complete = True
+        # A search is complete only when every reported result was inspected.
+        # Results beyond this cap cannot be reviewed and must pause for a
+        # narrower query, never be approved on partial evidence.
+        max_results = 100
         for query in queries[:2]:
             original_query = query
             # Repository scope belongs to the controller. A bare owner/repo in
@@ -452,12 +456,35 @@ class Autonomous:
                 raise ValueError('Duplicate search needs topic terms beyond repository scope')
             scope = 'is:pr ' if kind == 'pr' else ''
             response = gh('api', '-X', 'GET', 'search/issues', '-f', f"q=repo:{task['repo']} {scope}{query}", '-f', 'per_page=20')
+            items = list(response['items'])
+            retrieved = {x['number'] for x in items}
+            page = 1
+            while (not response.get('incomplete_results') and response['total_count'] > len(items)
+                   and len(items) < max_results):
+                page += 1
+                extra = gh('api', '-X', 'GET', 'search/issues', '-f', f"q=repo:{task['repo']} {scope}{query}",
+                           '-f', 'per_page=20', '-f', f'page={page}')
+                if extra.get('incomplete_results'):
+                    response['incomplete_results'] = True
+                response['total_count'] = max(response['total_count'], extra['total_count'])
+                new_items = [x for x in extra['items'] if x['number'] not in retrieved]
+                retrieved.update(x['number'] for x in new_items)
+                items.extend(new_items)
+                if not new_items:
+                    break  # Page added no retrievable results; remainder stays uninspected.
+            response['items'] = items
             searches.append({'query': query, 'original_query': original_query, 'response': response})
-            if response.get('incomplete_results') or response['total_count'] > 20:
+            if response.get('incomplete_results') or response['total_count'] > len(items):
                 search_complete = False
             save(self.packet_dir(task_id) / ('duplicate-search-' + kind + '.json'),
                  {'at': now(), 'searches': searches, 'search_complete': search_complete})
-            candidates.extend({'number': x['number'], 'title': x['title'], 'body': (x.get('body') or '')[:2500], 'url': x['html_url'], 'state': x.get('state'), 'pull_request': x.get('pull_request')} for x in response['items'] if x['number'] != task['number'] and (kind != 'pr' or x.get('pull_request')))
+            candidates.extend({'number': x['number'], 'title': x['title'], 'body': (x.get('body') or '')[:2500], 'url': x['html_url'], 'state': x.get('state'), 'pull_request': x.get('pull_request')} for x in items if x['number'] != task['number'] and (kind != 'pr' or x.get('pull_request')))
+        # Overlapping queries can report the same item; the reviewer should see
+        # each candidate once regardless of which search returned it.
+        seen = set()
+        candidates = [x for x in candidates
+                      if (x['number'], bool(x.get('pull_request'))) not in seen
+                      and not seen.add((x['number'], bool(x.get('pull_request'))))]
         if candidates:
             gate = ('Approve only if none of these PRs already implements or supersedes the proposed fix. Related bug reports are not competing implementations. Inspect candidate scope; uncertainty about duplicate fixes means reject.' if kind == 'pr' else 'Approve only if none of these existing issues/PRs already covers the proposed bug report. Uncertainty means reject.')
             feature_request = kind == 'issue' and data['plan'].get('category') == 'feature'

@@ -60,6 +60,19 @@ class DuplicateTests(unittest.TestCase):
         self.assertEqual(20, packet['candidates'][0]['number'])
         self.engine.move.assert_called_once_with('task', self.data, 'SKIPPED')
 
+    def test_complete_paginated_search_can_approve(self):
+        self.data['plan']['duplicate_queries'] = ['broad topic']
+        self.engine.judge.return_value = {'approved': True, 'reason': 'no competing work'}
+        page = {'total_count': 21, 'incomplete_results': False,
+                'items': [{'number': n, 'title': 'hit', 'body': '', 'html_url': 'u', 'state': 'open'}
+                          for n in range(20, 40)]}
+        tail = {'total_count': 21, 'incomplete_results': False,
+                'items': [{'number': 40, 'title': 'hit', 'body': '', 'html_url': 'u', 'state': 'open'}]}
+        with patch('autonomous.gh', side_effect=[page, tail]):
+            self.assertTrue(self.engine.duplicates('task', self.data, 'issue'))
+        self.assertTrue(self.engine.judge.call_args.args[2]['search_complete'])
+        self.assertEqual(21, len(self.engine.judge.call_args.args[2]['candidates']))
+
     def test_partial_search_cannot_approve_or_reuse_feature_request(self):
         self.data['plan']['category'] = 'feature'
         self.engine.judge.return_value = {'approved': True, 'reason': 'reuse', 'existing_issue': 20}
@@ -77,6 +90,7 @@ class DuplicateTests(unittest.TestCase):
     def test_later_broad_query_does_not_discard_earlier_duplicate(self):
         self.data['plan']['duplicate_queries'] = ['precise topic', 'broad topic']
         responses = [{'total_count': 1, 'items': [self.issue]},
+                     {'total_count': 167, 'items': []},
                      {'total_count': 167, 'items': []}]
         with patch('autonomous.gh', side_effect=responses):
             self.assertFalse(self.engine.duplicates('task', self.data, 'issue'))

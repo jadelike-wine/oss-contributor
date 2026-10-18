@@ -51,6 +51,37 @@ class DuplicateTests(unittest.TestCase):
         self.engine.judge.assert_called_once()
         self.assertEqual(self.data['skip_reason'], 'existing report')
 
+    def test_broad_search_can_reject_an_inspected_duplicate(self):
+        response = {'total_count': 167, 'incomplete_results': False, 'items': [self.issue]}
+        with patch('autonomous.gh', return_value=response):
+            self.assertFalse(self.engine.duplicates('task', self.data, 'issue'))
+        packet = self.engine.judge.call_args.args[2]
+        self.assertFalse(packet['search_complete'])
+        self.assertEqual(20, packet['candidates'][0]['number'])
+        self.engine.move.assert_called_once_with('task', self.data, 'SKIPPED')
+
+    def test_partial_search_cannot_approve_or_reuse_feature_request(self):
+        self.data['plan']['category'] = 'feature'
+        self.engine.judge.return_value = {'approved': True, 'reason': 'reuse', 'existing_issue': 20}
+        for response in (
+            {'total_count': 167, 'incomplete_results': False, 'items': [self.issue]},
+            {'total_count': 1, 'incomplete_results': True, 'items': [self.issue]},
+            {'total_count': 167, 'incomplete_results': False, 'items': []},
+        ):
+            with self.subTest(response=response), patch('autonomous.gh', return_value=response):
+                with self.assertRaisesRegex(RuntimeError, 'incomplete.*refine'):
+                    self.engine.duplicates('task', self.data, 'issue')
+            self.assertNotIn('existing_issue', self.data)
+        self.engine.move.assert_not_called()
+
+    def test_later_broad_query_does_not_discard_earlier_duplicate(self):
+        self.data['plan']['duplicate_queries'] = ['precise topic', 'broad topic']
+        responses = [{'total_count': 1, 'items': [self.issue]},
+                     {'total_count': 167, 'items': []}]
+        with patch('autonomous.gh', side_effect=responses):
+            self.assertFalse(self.engine.duplicates('task', self.data, 'issue'))
+        self.assertFalse(self.engine.judge.call_args.args[2]['search_complete'])
+
     def test_feature_request_is_reused_without_authorizing_implementation(self):
         self.data['plan']['category'] = 'feature'
         self.engine.judge.return_value = {'approved': True, 'reason': 'Open demand; design unconfirmed', 'existing_issue': 20}

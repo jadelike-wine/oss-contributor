@@ -60,6 +60,8 @@ python -X utf8 contribute.py tick
 
 `auto --dry-run` 不调用模型或发布，但仍可能进行只读健康核验。`metrics/candidates/matrix/catalog`（不带 `--verify`）使用本地资料；`metrics/candidates/matrix` 通过 SQLite `mode=ro` 连接，不触发迁移。旧 `scan/status/followup/prepare/analyze/repair/verify/review/hunt/unlock` CLI 保留。
 
+后续正式流程实跑、查重修复及本轮发布结果见 [2026-10-18 续跑验收](docs/live-rerun-2026-10-18.md)。查重搜索不完整时，可以依据已读结果拒绝重复候选，不能据此放行实现或发布。
+
 `catalog_sweep.py` 默认遍历核验目录中的全部研究仓库，保存完整 `scope.json` 和 `results.json`，不会把缺失项当作无问题。每仓库最多扫描 100 个开放 Issue、200 个开放 PR，并有界读取固定 SHA 的规则、源码和测试；模型分析不是运行目标项目的测试。成功采集与分诊可恢复，失败保留 `unknown` 和诊断；原有模型预算仍生效。此入口不会自动实现或发布，静态候选的政策判断仅供后续核对，正式贡献仍须读取完整上游规则、查重、复现和验证。实际运行及上游贡献见 [2026-10-18 全目录运行记录](docs/catalog-sweep-2026-10-18.md)。
 
 `hunt` 和只读研究入口不再先探测全部贡献仓库的看板权限，仍通过已核验研究目录准入。`research-batch` 不自行创建新任务；先 `hunt` 或使用已有每周调查任务。`auto/tick` 默认创建每周调查、批量只读研究，再推进实现。已有成功研究不会被批量入口重复调用模型。研究失败按阶段最多尝试三次，预算暂停不消耗失败次数。实现保护按实际任务身份执行，即使多个已发布 PR 同时出现修改要求，同轮也只推进一个任务的代码阶段。

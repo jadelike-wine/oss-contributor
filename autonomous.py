@@ -440,6 +440,7 @@ class Autonomous:
             raise ValueError('Specific duplicate-search queries are required')
         candidates = []
         searches = []
+        search_complete = True
         for query in queries[:2]:
             original_query = query
             # Repository scope belongs to the controller. A bare owner/repo in
@@ -452,9 +453,10 @@ class Autonomous:
             scope = 'is:pr ' if kind == 'pr' else ''
             response = gh('api', '-X', 'GET', 'search/issues', '-f', f"q=repo:{task['repo']} {scope}{query}", '-f', 'per_page=20')
             searches.append({'query': query, 'original_query': original_query, 'response': response})
-            save(self.packet_dir(task_id) / ('duplicate-search-' + kind + '.json'), {'at': now(), 'searches': searches})
             if response.get('incomplete_results') or response['total_count'] > 20:
-                raise RuntimeError('Duplicate query too broad/incomplete; refine automatically on retry')
+                search_complete = False
+            save(self.packet_dir(task_id) / ('duplicate-search-' + kind + '.json'),
+                 {'at': now(), 'searches': searches, 'search_complete': search_complete})
             candidates.extend({'number': x['number'], 'title': x['title'], 'body': (x.get('body') or '')[:2500], 'url': x['html_url'], 'state': x.get('state'), 'pull_request': x.get('pull_request')} for x in response['items'] if x['number'] != task['number'] and (kind != 'pr' or x.get('pull_request')))
         if candidates:
             gate = ('Approve only if none of these PRs already implements or supersedes the proposed fix. Related bug reports are not competing implementations. Inspect candidate scope; uncertainty about duplicate fixes means reject.' if kind == 'pr' else 'Approve only if none of these existing issues/PRs already covers the proposed bug report. Uncertainty means reject.')
@@ -466,11 +468,19 @@ class Autonomous:
                         'existing discussion and return existing_issue as its integer issue number. Never interpret a '
                         'user request as maintainer approval. If no issue covers the feature, approve without existing_issue. '
                         'Uncertainty about scope or competing implementations means reject.')
-            verdict = self.judge(task_id, 'duplicates-' + kind, {'gate': gate, 'plan': data['plan'], 'candidates': candidates})
+            # Partial results can establish a duplicate, never its absence. Review
+            # already inspected hits before pausing so retries do not discard them.
+            if not search_complete:
+                gate += (' Search results are incomplete. You may reject based on the inspected candidates; '
+                         'approval cannot establish duplicate clearance or authorize publication.')
+            verdict = self.judge(task_id, 'duplicates-' + kind, {'gate': gate, 'plan': data['plan'],
+                                  'candidates': candidates, 'search_complete': search_complete})
             if not verdict['approved']:
                 data['skip_reason'] = verdict['reason']
                 self.move(task_id, data, 'SKIPPED')
                 return False
+            if not search_complete:
+                raise RuntimeError('Duplicate search incomplete; refine the saved queries before retry')
             if feature_request and verdict.get('existing_issue') is not None:
                 number = verdict['existing_issue']
                 existing = next((x for x in candidates if type(number) is int and x['number'] == number
@@ -478,6 +488,8 @@ class Autonomous:
                 if existing is None:
                     raise ValueError('Reviewer existing_issue must name an inspected open issue, not a PR')
                 data['existing_issue'] = existing
+        if not search_complete:
+            raise RuntimeError('Duplicate search incomplete; refine the saved queries before retry')
         return True
 
     @observed('issue_publication', task=True)

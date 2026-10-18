@@ -554,6 +554,88 @@ class Pipeline:
             self.event(task_id, "Prepared at " + sha)
             return str(work)
 
+    def clean_workspaces(self, all_worktrees=False, dry_run=False):
+        """Remove task worktrees; keep base clones so prepare re-creates without re-cloning.
+
+        By default only worktrees belonging to terminal tasks (SKIPPED, CLOSED,
+        MERGED, FAILED), every ``base-*`` scratch worktree, and orphaned
+        worktrees with no task row are removed. ``all_worktrees=True`` also
+        removes worktrees of in-flight tasks, whose workspace/base_sha columns
+        are then cleared so the next ``prepare`` rebuilds them at the pinned
+        SHA instead of failing on a missing recorded workspace. ``dry_run``
+        reports what would be freed without deleting. Logs and telemetry are
+        never touched.
+        """
+        workspace_root = self.root / 'workspaces'
+        terminal = {'SKIPPED', 'CLOSED', 'MERGED', 'FAILED'}
+        scratch = re.compile(r'base-[0-9a-f]{12,}\Z')
+        removed, kept, freed = [], [], 0
+        for entry in sorted(workspace_root.iterdir()):
+            if not entry.is_dir() or entry.name.startswith('.'):
+                continue
+            gitfile = entry / '.git'
+            is_worktree = gitfile.is_file() or scratch.fullmatch(entry.name)
+            if not is_worktree:
+                continue  # Bare/no-checkout base clone: retained as the worktree parent and fetch cache.
+            task = self.db.execute('SELECT state FROM tasks WHERE id=?', (entry.name,)).fetchone()
+            eligible = (all_worktrees or scratch.fullmatch(entry.name)
+                        or task is None or task['state'] in terminal)
+            if not eligible:
+                kept.append(entry.name)
+                continue
+            # Bounded size estimate: dependency folders (node_modules, bun
+            # caches) can hold ~1M entries and take minutes to enumerate, so
+            # the figure is a lower bound once the cap is hit.
+            size, counted, capped = 0, 0, False
+            for dirpath, dirnames, filenames in os.walk(entry):
+                dirnames[:] = [d for d in dirnames if d != '.git']
+                for name in filenames:
+                    try:
+                        size += os.path.getsize(os.path.join(dirpath, name))
+                    except OSError:
+                        pass
+                    counted += 1
+                    if counted >= 30000:
+                        capped = True
+                        break
+                if capped:
+                    break
+            if not dry_run:
+                # Remove through the owning base clone so its worktree
+                # registration is dropped; fall back to the filesystem when
+                # the parent clone is already gone.
+                base = None
+                if gitfile.is_file():
+                    try:
+                        target = gitfile.read_text(encoding='utf-8').strip()
+                        if target.startswith('gitdir:'):
+                            base = Path(target.split(':', 1)[1].strip()).parent.parent.parent
+                    except OSError:
+                        base = None
+                try:
+                    if base is not None and base.is_dir():
+                        command(['git', 'worktree', 'remove', '--force', str(entry)], cwd=base)
+                    else:
+                        shutil.rmtree(entry, ignore_errors=True)
+                except (RuntimeError, OSError):
+                    shutil.rmtree(entry, ignore_errors=True)
+                with self.db:
+                    self.db.execute('UPDATE tasks SET workspace=NULL,base_sha=NULL WHERE id=? AND workspace=?',
+                                    (entry.name, str(entry)))
+            removed.append({'name': entry.name, 'bytes': size, 'size_capped': capped})
+            freed += size
+        if not dry_run:
+            # Prune stale registrations once, in every retained base clone.
+            for candidate in workspace_root.iterdir():
+                if candidate.is_dir() and (candidate / '.git').is_dir():
+                    subprocess.run(['git', 'worktree', 'prune'], cwd=candidate,
+                                   capture_output=True, timeout=60)
+        result = {'removed': removed, 'kept': kept, 'freed_bytes_estimate': freed,
+                  'dry_run': dry_run, 'scope': 'all worktrees' if all_worktrees else 'terminal and orphaned worktrees'}
+        if not dry_run:
+            self.event('clean-workspaces', json.dumps(result, ensure_ascii=False))
+        return result
+
     @observed('analyze', task=True)
     def analyze(self, task_id, mode="analyze"):
         if mode == 'analyze' and self.task(task_id)['source'] == 'hunt':
@@ -850,6 +932,10 @@ def main():
     p = sub.add_parser("unlock")
     p.add_argument("name")
     p.add_argument("--process-stopped", action="store_true", required=True)
+    clean = sub.add_parser("clean-workspaces", help="Remove task worktrees; keep base clones and all logs")
+    clean.add_argument("--all", dest="all_worktrees", action="store_true",
+                       help="Also remove worktrees of in-flight tasks (they re-prepare at the pinned SHA next run)")
+    clean.add_argument("--dry-run", action="store_true", help="Report what would be freed without deleting")
     args = parser.parse_args()
     if args.action in ('metrics', 'candidates', 'matrix', 'catalog'):
         if args.action == 'catalog':
@@ -873,7 +959,7 @@ def main():
         return
     pipeline = Pipeline()
     from telemetry import run
-    if args.action in ('status', 'unlock') or (args.action == 'auto' and args.dry_run):
+    if args.action in ('status', 'unlock', 'clean-workspaces') or (args.action == 'auto' and args.dry_run):
         return dispatch(pipeline, args)
     with run(pipeline, args.action):
         return dispatch(pipeline, args)
@@ -882,7 +968,7 @@ def main():
 def dispatch(pipeline, args):
     research_only = (args.action in ('scan', 'hunt', 'research-batch') or
                      (args.action == 'analyze' and pipeline.task(args.task)['source'] == 'hunt'))
-    if args.action not in ('status', 'unlock') and not research_only:
+    if args.action not in ('status', 'unlock', 'clean-workspaces') and not research_only:
         pipeline.effective_repositories()
     if args.action == 'research-batch':
         from autonomous import Autonomous
@@ -955,6 +1041,9 @@ def dispatch(pipeline, args):
     elif args.action == "unlock":
         with pipeline.db:
             pipeline.db.execute("DELETE FROM locks WHERE name=?", (args.name,))
+    elif args.action == "clean-workspaces":
+        print(json.dumps(pipeline.clean_workspaces(all_worktrees=args.all_worktrees, dry_run=args.dry_run),
+                         ensure_ascii=False, indent=2))
     else:
         print(getattr(pipeline, args.action)(args.task))
 

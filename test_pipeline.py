@@ -173,6 +173,66 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual("MERGED", self.p.followup()[0]["state"])
             self.assertEqual([], self.p.followup())
 
+    def workspace_fixture(self):
+        """Real base clone + two linked worktrees; one terminal task, one in-flight."""
+        base = self.root / "workspaces" / "owner--repo"
+        base.mkdir(parents=True)
+        def git(*args, cwd=base):
+            return subprocess.check_output(["git", *args], cwd=cwd, text=True).strip()
+        git("init", "-q")
+        (base / "code.py").write_text("x = 1\n", encoding="utf-8")
+        git("add", "code.py")
+        git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base")
+        sha = git("rev-parse", "HEAD")
+        done = self.p.hunt("owner/repo", "done focus")
+        live = self.p.hunt("owner/repo", "live focus")
+        # Worktree directories are named after the task id, matching prepare().
+        for tid in (done, live):
+            git("worktree", "add", "--detach", str(self.root / "workspaces" / tid), sha)
+            with self.p.db:
+                self.p.db.execute("UPDATE tasks SET workspace=?,base_sha=? WHERE id=?",
+                                  (str(self.root / "workspaces" / tid), sha, tid))
+        with self.p.db:
+            self.p.db.execute("UPDATE tasks SET state='SKIPPED' WHERE id=?", (done,))
+            self.p.db.execute("UPDATE tasks SET state='PLAN' WHERE id=?", (live,))
+        # Orphaned worktree with no task row.
+        git("worktree", "add", "--detach", str(self.root / "workspaces" / "owner--repo--orphan"), sha)
+        return base, sha, done, live
+
+    def test_clean_workspaces_removes_terminal_and_orphans_only(self):
+        base, sha, done, live = self.workspace_fixture()
+        result = self.p.clean_workspaces()
+        removed = {x['name'] for x in result['removed']}
+        self.assertIn(done, removed)
+        self.assertIn('owner--repo--orphan', removed)
+        self.assertEqual({live}, set(result['kept']))
+        self.assertTrue((self.root / 'workspaces' / live).is_dir())
+        self.assertFalse((self.root / 'workspaces' / done).exists())
+        self.assertFalse((self.root / 'workspaces/owner--repo--orphan').exists())
+        # Workspace columns cleared so prepare re-creates instead of erroring.
+        task = self.p.task(done)
+        self.assertIsNone(task['workspace'])
+        self.assertIsNone(task['base_sha'])
+        # Git registration pruned: only base + live remain.
+        listed = subprocess.check_output(["git", "worktree", "list"], cwd=base, text=True)
+        self.assertIn(live, listed)
+        self.assertNotIn(done, listed)
+
+    def test_clean_workspaces_all_removes_in_flight_and_dry_run_changes_nothing(self):
+        base, sha, done, live = self.workspace_fixture()
+        self.p.clean_workspaces(dry_run=True)
+        self.assertTrue((self.root / 'workspaces' / done).is_dir())
+        self.assertIsNotNone(self.p.task(done)['workspace'])
+        result = self.p.clean_workspaces(all_worktrees=True)
+        removed = {x['name'] for x in result['removed']}
+        self.assertIn(live, removed)
+        for tid in (done, live):
+            self.assertFalse((self.root / 'workspaces' / tid).exists(), tid)
+            self.assertIsNone(self.p.task(tid)['workspace'])
+        self.assertFalse((self.root / 'workspaces/owner--repo--orphan').exists())
+        # Base clone itself survives.
+        self.assertTrue((base / '.git').is_dir())
+
     def test_followup_detects_workflow_approval_hidden_by_green_rollup(self):
         pr = {'number': 1, 'title': 'fix', 'state': 'OPEN', 'url': 'https://github.com/owner/repo/pull/1',
               'updatedAt': 'unchanged', 'headRefOid': 'exact-head',

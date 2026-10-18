@@ -59,6 +59,12 @@ python -X utf8 contribute.py research-batch
 python -X utf8 contribute.py auto --dry-run
 python -X utf8 contribute.py auto
 python -X utf8 contribute.py tick
+
+# 清理任务 worktree：默认只删终态(SKIPPED/CLOSED/MERGED/FAILED)任务、base-* 临时副本和孤儿 worktree
+# 保留 base clone 与全部日志/遥测；--all 连同进行中任务一起删（下轮 prepare 按固定 SHA 重建）
+python -X utf8 contribute.py clean-workspaces --dry-run
+python -X utf8 contribute.py clean-workspaces
+python -X utf8 contribute.py clean-workspaces --all
 ```
 
 `auto --dry-run` 不调用模型或发布，但仍可能进行只读健康核验。`metrics/candidates/matrix/catalog`（不带 `--verify`）使用本地资料；`metrics/candidates/matrix` 通过 SQLite `mode=ro` 连接，不触发迁移。旧 `scan/status/followup/prepare/analyze/repair/verify/review/hunt/unlock` CLI 保留。

@@ -259,6 +259,32 @@ class Autonomous:
         self.p.report()
         return result
 
+    def planning_baseline(self, task):
+        """Distinguish retained local drafts from immutable upstream evidence."""
+        paths = changed_files(task['workspace'])
+        if len(paths) > 15:
+            raise RuntimeError('Planning baseline exceeds 15 changed files; inspect retained drafts')
+        files, remaining = {}, 120000
+        if paths:
+            tracked = set(command(['git', '--literal-pathspecs', 'ls-tree', '-r', '--name-only', '-z',
+                                   task['base_sha'], '--', *paths], cwd=task['workspace']).split('\0'))
+            for path in paths:
+                entry = {'present_at_base': path in tracked}
+                if entry['present_at_base']:
+                    ref = task['base_sha'] + ':' + path
+                    size = int(command(['git', 'cat-file', '-s', ref], cwd=task['workspace']).strip())
+                    entry['baseline_bytes'] = size
+                    if size > 60000 or remaining == 0:
+                        entry.update(baseline_excerpt='', truncated=True)
+                    else:
+                        text = command(['git', 'show', ref], cwd=task['workspace'])
+                        excerpt = text[:remaining]
+                        entry.update(baseline_excerpt=excerpt, truncated=len(excerpt) < len(text))
+                        remaining -= len(excerpt)
+                files[path] = entry
+        return {'sha': task['base_sha'], 'workspace_changes': files,
+                'scope': 'Only changed paths; excerpts may be truncated. Local drafts are not upstream coverage.'}
+
     @observed('planning', task=True)
     def plan(self, task_id, data):
         task = self.p.task(task_id)
@@ -314,9 +340,15 @@ class Autonomous:
                   'use the supplied argv prefix arrays, followed by SEPARATE argument strings. Shell shims are forbidden. '
                   'For example regression=["node","path/to/vitest.mjs","run","test/file.test.ts"], never [[...]]. '
                   'Never combine arguments such as "run build" or "pnpm install" into one string. '
+                  'For Bun scripts use ["bun","run","--cwd","packages/example","typecheck"], '
+                  'never ["bun","--cwd","packages/example","run","typecheck"]. '
+                  'Retained workspace changes can be drafts from failed planning attempts. They are NOT upstream '
+                  'tests or proof that the baseline is fixed. Use planning_baseline to distinguish them; '
+                  'do not cite a local test as existing baseline coverage. Preserve retained user changes. '
                   'Keep at most 15 source reads. '
                   'Do not publish or delegate.\n' + json.dumps({'task': task, 'issue': issue, 'platform': os.name,
                   'last_error': data.get('last_error'), 'research': data.get('research'),
+                  'planning_baseline': self.planning_baseline(task),
                   'maintainer_approved': data.get('maintainer_approved', False),
                   'contributing_guide': self.p.contributing_path(task['repo']),
                   'tools': runtime_tools()}, ensure_ascii=False, indent=2))

@@ -71,6 +71,8 @@ Kilo #14924 的第一次规划留下了尚未验证的回归测试。针对 Bun 
 
 回归使用真实临时 Git 仓库：先让无效方案留下新测试，再修改已有测试，重试输入必须证明新测试在基线不存在，并提供已有测试的原文，而不是修改后的内容。另测超大基线文件不被读取。对实际 Kilo 任务保存原跳过理由和固定 SHA，记录审计事件，保留已有重试计数后重新进入 PLAN；这只纠正输入和错误引用，不批准实现或发布。
 
+这次真实续跑为 `ff637f9f6e8a4a1c8700916fd49f3833`，北京时间 11:23:46–11:30:39，耗时 412.766 秒。模型输入实际包含固定基线下 23,181 字节的测试文件原文，明确没有本地新增的 rate-limit 测试。最终规划正确区分了草稿，并依据生产代码已有的重试/压缩上限作保守 SKIPPED，未执行测试或发布。模型理由中还声称草稿“already passes under the current baseline”，但控制器没有运行该测试；这句话没有执行证据，不能作为测试通过或不存在缺陷的事实。最终结果仅是未建立可执行基线失败的静态初筛。
+
 ## 本地验证
 
 原始基线：154 项通过，119.451 秒。所有修复后全量 **163 项通过，124.884 秒，无失败或跳过**。新增回归覆盖大命中清单、旧检查点无需重新读取、真实 Windows 文件占用、短暂占用重试、持续拒绝访问时保留旧文件、JSON 语法失败共享一次纠正额度，以及规划重试区分本地草稿和不可变基线。最终测试日志为 `runs/acceptance-final-baseline-tests-20261018.log`，运行材料与数据库保持 Git 忽略。
@@ -81,6 +83,15 @@ Kilo #14924 的第一次规划留下了尚未验证的回归测试。针对 Bun 
 - `runs/acceptance-checkpoint-recovery-20261018.log`：两份真实检查点恢复及材料哈希对比。
 - `runs/acceptance-openhands-resume-20261018.log`：OpenHands 采集恢复。
 - `runs/acceptance-live-auto-retry-20261018.log`：修复后的新进程继续自动推进。
+- `runs/acceptance-live-json-retry-20261018.log`：真实 JSON 语法失败的一次纠正与查重门禁。
+- `runs/acceptance-live-kilo-retry-20261018.log`：Bun 反馈后的重试及后续发现的基线误判。
+- `runs/acceptance-live-kilo-baseline-retry-20261018.log`：基线区分修复后的最终续跑。
 - `state/tasks.db`：规范任务、阶段、模型入口调用及队列；可用 `metrics/candidates/matrix` 只读查看。
 
 这些日志不是全部成功的声明。模型格式失败、证据失败、政策暂停和维护者等待应按各自真实状态读取。
+
+## 最终结论
+
+完成一轮 tick、一轮 auto 和三次定向续跑，共 14 次真实模型 CLI 入口调用。项目能读取现有 Issue、提出候选，并恢复到后续规划阶段；本次没有新建任何目标上游 Issue 或 PR，没有完成新的上游红绿测试、项目检查或 CI 验证，因而没有验证自动发布闭环成功。
+
+本项目实跑中发现的上下文清单、Windows 原子保存恢复、JSON 语法纠正入口、规划基线混淆四类问题已修复，相关代码、测试和本报告提交到 `codex/live-run-recovery`，修复 PR 为 [oss-contributor #1](https://github.com/jadelike-wine/oss-contributor/pull/1)。它不计为自动流程新完成的目标上游贡献。未验证的 Kilo 测试草稿保留在本机忽略的任务工作区，没有向上游推送；旧任务和既有工作区改动保持保留。最终数据库 `integrity_check=ok`，无遗留进程锁。

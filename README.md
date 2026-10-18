@@ -36,6 +36,15 @@ python -X utf8 contribute.py catalog
 # 有界 GitHub 只读核验；更新本地目录，不授予贡献权限
 python -X utf8 contribute.py catalog --verify
 
+# 遍历全部已核验研究仓库，扫描已有 Issue、固定源码版本并逐仓库静态分诊
+# 默认不受原贡献白名单 8 个仓库或 research-batch 每轮 3 个候选的限制
+python -X utf8 catalog_sweep.py --output runs/catalog-sweep
+# 网络采集和模型分析可分开运行；成功结果保留，失败结果保持 unknown
+python -X utf8 catalog_sweep.py --output runs/catalog-sweep --collect-only
+python -X utf8 catalog_sweep.py --output runs/catalog-sweep --analyze-only --attempts 1
+# 定向补跑仍保留完整目录和逐仓库结果
+python -X utf8 catalog_sweep.py --output runs/catalog-sweep --analyze-only --repo QwenLM/qwen-code
+
 # 创建本地研究任务；目标可以来自研究目录，也可以来自原贡献白名单
 python -X utf8 contribute.py hunt SWE-agent/mini-swe-agent "Compare session recovery and checkpoints"
 python -X utf8 contribute.py analyze <上一步任务ID>
@@ -50,6 +59,8 @@ python -X utf8 contribute.py tick
 ```
 
 `auto --dry-run` 不调用模型或发布，但仍可能进行只读健康核验。`metrics/candidates/matrix/catalog`（不带 `--verify`）使用本地资料；`metrics/candidates/matrix` 通过 SQLite `mode=ro` 连接，不触发迁移。旧 `scan/status/followup/prepare/analyze/repair/verify/review/hunt/unlock` CLI 保留。
+
+`catalog_sweep.py` 默认遍历核验目录中的全部研究仓库，保存完整 `scope.json` 和 `results.json`，不会把缺失项当作无问题。每仓库最多扫描 100 个开放 Issue、200 个开放 PR，并有界读取固定 SHA 的规则、源码和测试；模型分析不是运行目标项目的测试。成功采集与分诊可恢复，失败保留 `unknown` 和诊断；原有模型预算仍生效。此入口不会自动实现或发布，静态候选的政策判断仅供后续核对，正式贡献仍须读取完整上游规则、查重、复现和验证。实际运行及上游贡献见 [2026-10-18 全目录运行记录](docs/catalog-sweep-2026-10-18.md)。
 
 `hunt` 和只读研究入口不再先探测全部贡献仓库的看板权限，仍通过已核验研究目录准入。`research-batch` 不自行创建新任务；先 `hunt` 或使用已有每周调查任务。`auto/tick` 默认创建每周调查、批量只读研究，再推进实现。已有成功研究不会被批量入口重复调用模型。研究失败按阶段最多尝试三次，预算暂停不消耗失败次数。实现保护按实际任务身份执行，即使多个已发布 PR 同时出现修改要求，同轮也只推进一个任务的代码阶段。
 

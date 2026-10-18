@@ -1,15 +1,67 @@
+import json
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from autonomous import json_answer, runtime_tools, validate_spec
-from contribute import execute
+from contribute import execute, save
 
 
 class RuntimeTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows checkpoint sharing')
+    def test_atomic_save_recovers_after_real_windows_reader_closes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'checkpoint.json'
+            save(path, {'version': 1})
+            with path.open(encoding='utf-8') as reader:
+                release = threading.Timer(0.15, reader.close)
+                release.start()
+                try:
+                    save(path, {'version': 2})
+                finally:
+                    release.cancel()
+                    release.join()
+            self.assertEqual(json.loads(path.read_text()), {'version': 2})
+
+    def test_atomic_save_retries_windows_sharing_violation(self):
+        import os
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'checkpoint.json'
+            save(path, {'version': 1})
+            replace = os.replace
+            blocked = PermissionError('checkpoint is open in a reader')
+            blocked.winerror = 32
+            calls = []
+            def once(source, target):
+                calls.append(source)
+                if len(calls) == 1:
+                    self.assertEqual(json.loads(path.read_text()), {'version': 1})
+                    raise blocked
+                replace(source, target)
+            with patch('contribute.os.replace', side_effect=once), patch('time.sleep') as sleep:
+                save(path, {'version': 2})
+            self.assertEqual(json.loads(path.read_text()), {'version': 2})
+            self.assertEqual(len(calls), 2)
+            sleep.assert_called_once()
+            self.assertEqual(list(path.parent.glob('*.tmp')), [])
+
+    def test_atomic_save_preserves_predecessor_when_access_stays_denied(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'checkpoint.json'
+            save(path, {'version': 1})
+            blocked = PermissionError('access denied')
+            blocked.winerror = 5
+            with patch('contribute.os.replace', side_effect=blocked) as replace, patch('time.sleep'):
+                with self.assertRaises(PermissionError):
+                    save(path, {'version': 2})
+            self.assertLessEqual(replace.call_count, 5)
+            self.assertEqual(json.loads(path.read_text()), {'version': 1})
+            self.assertEqual(list(path.parent.glob('*.tmp')), [])
+
     @unittest.skipUnless(sys.platform == 'win32', 'Windows launcher resolution')
     def test_bare_corepack_runs_through_node_without_shell(self):
         import shutil

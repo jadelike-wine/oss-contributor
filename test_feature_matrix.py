@@ -66,6 +66,44 @@ class MatrixTests(unittest.TestCase):
     def test_content_search_no_hits_is_not_a_command_failure(self):
         self.assertEqual([], search_target(self.work, self.base, 'nonexistentcapability', ['value.py']))
 
+    def test_large_search_inventory_does_not_exhaust_source_context(self):
+        task = self.p.task(self.key)
+        matches = [f'src/session/{i:05d}/' + 'x' * 80 + '.py' for i in range(5000)]
+        self.p.config['research'] = {'context_characters': 24000}
+        with patch('repository_catalog.research_pool', return_value=[]), \
+                patch('research.search_target', return_value=matches), patch('research.gh', return_value=[]):
+            packet = collect(self.engine, task)
+        search = packet['target']['content_search']
+        self.assertEqual(search['matched_count'], len(matches))
+        self.assertTrue(search['matched_paths_truncated'])
+        self.assertLessEqual(len(search['matched_paths']), 100)
+        self.assertLessEqual(len(json.dumps(packet, ensure_ascii=False)), 24000)
+        self.assertIn('value.py', packet['target']['files'])
+        self.assertTrue(packet['complete'])
+
+    def test_oversized_legacy_search_checkpoint_resumes_without_rereading_sources(self):
+        task = self.p.task(self.key)
+        with patch('repository_catalog.research_pool', return_value=[]), patch('research.gh', return_value=[]):
+            packet = collect(self.engine, task)
+        original_files = copy.deepcopy(packet['target']['files'])
+        matches = ['src/' + 'x' * 200 + str(i) + '.py' for i in range(5000)]
+        packet['target']['content_search']['matched_paths'] = matches
+        packet['target']['content_search'].pop('matched_count', None)
+        packet['target']['content_search'].pop('matched_paths_truncated', None)
+        checkpoint = self.engine.packet_dir(self.key) / 'research-context.json'
+        checkpoint.write_text(json.dumps(packet), encoding='utf-8')
+        with patch('research.command') as command, patch('research.gh') as remote:
+            resumed = collect(self.engine, task)
+            again = collect(self.engine, task)
+        command.assert_not_called()
+        remote.assert_not_called()
+        self.assertEqual(resumed['target']['files'], original_files)
+        self.assertEqual(resumed['target']['content_search']['matched_count'], len(matches))
+        self.assertTrue(resumed['target']['content_search']['matched_paths_truncated'])
+        self.assertLessEqual(len(json.dumps(resumed['target']['content_search']['matched_paths'])), 12002)
+        self.assertEqual(again, resumed)
+        self.assertTrue(resumed['complete'])
+
     def test_legacy_status_nesting_keeps_all_evidence_checks(self):
         task, packet, answer = self.fixture()
         answer['feature_status'] = answer['feature_matrix'].pop('feature_status')

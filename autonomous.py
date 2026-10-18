@@ -905,8 +905,9 @@ class Autonomous:
             except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as error:
                 data['attempts']['RESEARCH'] = data['attempts'].get('RESEARCH', 0) + 1
                 data['stop_reason'] = type(error).__name__
+                data['research_error'] = str(error)
                 self.store(row['id'], data)
-                self.p.event(row['id'], 'Read-only research stopped: ' + type(error).__name__)
+                self.p.event(row['id'], 'Read-only research stopped: ' + type(error).__name__ + ': ' + str(error))
             completed.append(row['id'])
         return completed
 

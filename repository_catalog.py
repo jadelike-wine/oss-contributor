@@ -13,7 +13,7 @@ from contribute import command, gh, now, repo_name, save
 from repository_policy import inspect_repository
 from feature_matrix import file_type
 
-CANDIDATES = '''QwenLM/qwen-code google-gemini/gemini-cli anomalyco/opencode cline/cline
+LEGACY_CANDIDATES = '''QwenLM/qwen-code google-gemini/gemini-cli anomalyco/opencode cline/cline
 OpenHands/OpenHands Kilo-Org/kilocode aaif-goose/goose SWE-agent/mini-swe-agent
 anthropics/claude-code openai/codex Aider-AI/aider zed-industries/zed github/copilot-cli
 microsoft/vscode mistralai/mistral-vibe plandex-ai/plandex TabbyML/tabby bytedance/trae-agent
@@ -24,13 +24,46 @@ microsoft/semantic-kernel huggingface/smolagents mcp-use/mcp-use NousResearch/he
 langchain-ai/langchain run-llama/llama_index ag2ai/ag2 BerriAI/litellm OpenBMB/ChatDev julep-ai/julep
 agno-agi/agno mastra-ai/mastra FlowiseAI/Flowise langflow-ai/langflow instructor-ai/instructor
 e2b-dev/code-interpreter cloudwego/eino stanfordnlp/dspy'''.split()
+
+# User-requested expansion, in the supplied category and repository order.
+CANDIDATE_GROUPS = {
+    'frontend_frameworks': '''react/react vuejs/core sveltejs/svelte angular/angular
+solidjs/solid preactjs/preact vitejs/vite vitest-dev/vitest withastro/astro nuxt/nuxt
+vercel/next.js TanStack/query TanStack/router TanStack/table pmndrs/zustand pmndrs/jotai
+reduxjs/redux-toolkit react-hook-form/react-hook-form colinhacks/zod vueuse/vueuse'''.split(),
+    'ui_infrastructure': '''shadcn-ui/ui radix-ui/primitives mui/material-ui ant-design/ant-design
+mantinedev/mantine chakra-ui/chakra-ui heroui-inc/heroui tailwindlabs/headlessui
+tailwindlabs/tailwindcss saadeghi/daisyui lucide-icons/lucide tabler/tabler phosphor-icons/core
+element-plus/element-plus vuetifyjs/vuetify vueComponent/ant-design-vue primefaces/primereact
+primefaces/primevue tusen-ai/naive-ui arco-design/arco-design DouyinFE/semi-design
+Tencent/tdesign-react Tencent/tdesign-vue-next recharts/recharts apache/echarts xyflow/xyflow
+ueberdosis/tiptap facebook/lexical udecode/plate mermaid-js/mermaid clauderic/dnd-kit
+fullcalendar/fullcalendar marmelab/react-admin refinedev/refine carbon-design-system/carbon'''.split(),
+    'ai_applications': '''vercel/ai CopilotKit/CopilotKit assistant-ui/assistant-ui vercel/ai-elements
+ag-ui-protocol/ag-ui gradio-app/gradio streamlit/streamlit open-webui/open-webui lobehub/lobehub
+LibreChat-AI/LibreChat Mintplex-Labs/anything-llm langgenius/dify huggingface/chat-ui
+langflow-ai/langflow onlook-dev/onlook dyad-sh/dyad stackblitz/bolt.new Comfy-Org/ComfyUI
+invoke-ai/InvokeAI CherryHQ/cherry-studio'''.split(),
+    'agents_workflows': '''anomalyco/opencode openai/codex google-gemini/gemini-cli QwenLM/qwen-code
+cline/cline Kilo-Org/kilocode continuedev/continue Aider-AI/aider earendil-works/pi
+OpenHands/OpenHands SWE-agent/SWE-agent aaif-goose/goose langchain-ai/langgraph mastra-ai/mastra
+pydantic/pydantic-ai crewAIInc/crewAI agno-agi/agno microsoft/semantic-kernel
+modelcontextprotocol/typescript-sdk ComposioHQ/composio browser-use/browser-use
+triggerdotdev/trigger.dev inngest/inngest n8n-io/n8n activepieces/activepieces'''.split(),
+}
+CANDIDATES = list(dict.fromkeys([*LEGACY_CANDIDATES,
+                               *(repo for repos in CANDIDATE_GROUPS.values() for repo in repos)]))
+VERIFY_BATCH_SIZE = 80
 LICENSES = {'MIT', 'Apache-2.0', 'BSD-3-Clause', 'BSD-2-Clause', 'MPL-2.0', 'GPL-3.0',
             'GPL-3.0-only', 'AGPL-3.0', 'AGPL-3.0-only', 'LGPL-3.0', 'ISC', 'Unlicense'}
 
 
 def inspect(repo, config):
+    category = next((name for name, repos in CANDIDATE_GROUPS.items()
+                     if repo.lower() in {r.lower() for r in repos}),
+                    'coding_harness' if repo in LEGACY_CANDIDATES[:20] else 'agent_infrastructure')
     record = {'repo': repo, 'url': 'https://github.com/' + repo, 'checked_at': now(),
-              'status': 'paused', 'category': 'coding_harness' if repo in CANDIDATES[:20] else 'agent_infrastructure',
+              'status': 'paused', 'category': category,
               'research_allowed': False, 'automatic_contribution': False,
               'policy': {'automation': 'unconfirmed', 'issue_submission': 'unconfirmed',
                          'pr_submission': 'unconfirmed', 'scope': 'bounded root and discovered guide inspection'},
@@ -121,20 +154,26 @@ def inspect(repo, config):
 def verify_catalog(root, config, repositories=None):
     path = Path(root) / config.get('repository_catalog', 'repository-catalog.json')
     previous = json.loads(path.read_text(encoding='utf-8'))['repositories'] if path.exists() else []
-    saved = {item['repo']: item for item in previous}
-    repositories = list(dict.fromkeys(repositories or [*CANDIDATES, *saved, *config.get('repository_checks', {}).get('retired', {})]))
-    if len(repositories) > 80:
-        raise ValueError('Catalog verification is capped at 80 repositories per batch')
+    saved = {item['repo'].lower(): item for item in previous}
+    requested = repositories if repositories is not None else [
+        *CANDIDATES, *(item['repo'] for item in saved.values()),
+        *config.get('repository_checks', {}).get('retired', {})]
+    unique = {}
+    for repo in requested:
+        unique.setdefault(repo.lower(), saved.get(repo.lower(), {'repo': repo})['repo'])
+    repositories = list(unique.values())
     def check(repo):
-        if saved.get(repo, {}).get('status') == 'retired':
-            return saved[repo]  # Explicit retirement cannot be silently reversed by refreshing a catalog.
+        if saved.get(repo.lower(), {}).get('status') == 'retired':
+            return saved[repo.lower()]  # Explicit retirement cannot be silently reversed by refreshing a catalog.
         return inspect(repo, config)
     # Each check has at most 25 reads, no pagination or mutations; concurrency capped at four.
     with ThreadPoolExecutor(max_workers=4) as pool:
-        for record in pool.map(check, repositories):
-            saved[record['repo']] = record
-            print(record['repo'] + ': ' + record['status'] + ' - ' + record['reason'], flush=True)
-            save(path, {'schema_version': 1, 'checked_at': now(), 'repositories': list(saved.values())})
+        for offset in range(0, len(repositories), VERIFY_BATCH_SIZE):
+            batch = repositories[offset:offset + VERIFY_BATCH_SIZE]
+            for record in pool.map(check, batch):
+                saved[record['repo'].lower()] = record
+                print(record['repo'] + ': ' + record['status'] + ' - ' + record['reason'], flush=True)
+                save(path, {'schema_version': 1, 'checked_at': now(), 'repositories': list(saved.values())})
     return dict(Counter(r['status'] for r in saved.values()))
 
 

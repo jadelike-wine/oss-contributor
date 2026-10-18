@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from repository_catalog import inspect, research_pool, verify_catalog
+from repository_catalog import CANDIDATE_GROUPS, CANDIDATES, inspect, research_pool, verify_catalog
 from repository_policy import contributing_guide
 from telemetry import utc
 from feature_matrix import file_type
@@ -40,6 +40,56 @@ class CatalogTests(unittest.TestCase):
             record = inspect('OLD/RETIRED', self.config)
         self.assertEqual(record['status'], 'retired')
         remote.assert_not_called()
+
+    def test_expanded_default_refresh_batches_and_preserves_saved_entries(self):
+        retired = {'repo': 'saved/retired', 'status': 'retired', 'reason': 'prior retirement',
+                   'research_allowed': False}
+        custom = {'repo': 'Custom/Project', 'status': 'paused', 'reason': 'retry', 'research_allowed': False}
+        (self.root / 'repository-catalog.json').write_text(json.dumps({'repositories': [custom, retired]}))
+        checked = []
+        def fake_inspect(repo, config):
+            checked.append(repo)
+            return {'repo': repo, 'status': 'research_only', 'reason': 'fixture', 'research_allowed': True}
+        with patch('repository_catalog.inspect', side_effect=fake_inspect), patch('builtins.print'):
+            counts = verify_catalog(self.root, self.config)
+        records = json.loads((self.root / 'repository-catalog.json').read_text())['repositories']
+        expected = {r.lower() for r in [*CANDIDATES, 'Custom/Project', 'saved/retired', 'old/retired']}
+        self.assertGreater(len(checked), 80)
+        self.assertEqual({r['repo'].lower() for r in records}, expected)
+        self.assertEqual(len(records), len(expected))
+        self.assertEqual(records[0]['repo'], 'Custom/Project')
+        self.assertEqual(records[1], retired)
+        self.assertNotIn('saved/retired', checked)
+        self.assertEqual(counts['retired'], 1)
+
+    def test_explicit_refresh_is_case_insensitive_and_does_not_expand_scope(self):
+        retired = {'repo': 'Saved/Retired', 'status': 'retired', 'reason': 'prior retirement',
+                   'research_allowed': False}
+        (self.root / 'repository-catalog.json').write_text(json.dumps({'repositories': [retired]}))
+        with patch('repository_catalog.inspect', return_value={
+                'repo': 'Owner/Project', 'status': 'paused', 'reason': 'HTTP 503', 'research_allowed': False}) as remote, \
+                patch('builtins.print'):
+            verify_catalog(self.root, self.config, ['Owner/Project', 'owner/project', 'SAVED/RETIRED'])
+        remote.assert_called_once_with('Owner/Project', self.config)
+        records = json.loads((self.root / 'repository-catalog.json').read_text())['repositories']
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[0], retired)
+        with patch('repository_catalog.inspect') as remote:
+            verify_catalog(self.root, self.config, [])
+        remote.assert_not_called()
+
+    def test_requested_expansion_contains_one_hundred_distinct_candidates(self):
+        self.assertEqual([len(group) for group in CANDIDATE_GROUPS.values()], [20, 35, 20, 25])
+        requested = [r.lower() for group in CANDIDATE_GROUPS.values() for r in group]
+        self.assertEqual(len(set(requested)), 100)
+        self.assertTrue(set(requested).issubset({r.lower() for r in CANDIDATES}))
+
+    def test_committed_catalog_contains_every_requested_repository_without_duplicates(self):
+        catalog = json.loads(Path(__file__).with_name('repository-catalog.json').read_text(encoding='utf-8'))
+        names = [r['repo'].lower() for r in catalog['repositories']]
+        requested = {r.lower() for group in CANDIDATE_GROUPS.values() for r in group}
+        self.assertFalse(requested - set(names))
+        self.assertEqual(len(names), len(set(names)))
 
     def test_archived_or_missing_repository_cannot_be_activated(self):
         meta = {'full_name': 'owner/archived', 'default_branch': 'main', 'pushed_at': utc(),

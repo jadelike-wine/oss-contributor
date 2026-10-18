@@ -63,7 +63,7 @@ python -X utf8 contribute.py tick
 
 `auto --dry-run` 不调用模型或发布，但仍可能进行只读健康核验。`metrics/candidates/matrix/catalog`（不带 `--verify`）使用本地资料；`metrics/candidates/matrix` 通过 SQLite `mode=ro` 连接，不触发迁移。旧 `scan/status/followup/prepare/analyze/repair/verify/review/hunt/unlock` CLI 保留。
 
-`scan` 和 `tick` 的扫描阶段默认使用完整的已核验研究目录，当前为 32 个仓库，不受 `peer_repositories` 同行子集或每轮三个模型研究候选的限制。扫描仍排除过期、暂停、拒绝、退役、归档、禁用及未授予研究权限的目录项。没有目录文件的旧配置继续使用原白名单；已有目录却没有合格项时会明确报错，提示 `catalog --verify`，不会静默退回白名单。单独 `scan` 无需核验贡献看板权限；`tick` 后续的实现和发布继续使用原有贡献及维护者门禁。
+`scan` 和 `tick` 的扫描阶段默认使用完整的已核验研究目录，当前为 94 个仓库，不受 `peer_repositories` 同行子集或每轮三个模型研究候选的限制。扫描仍排除过期、暂停、拒绝、退役、归档、禁用及未授予研究权限的目录项。没有目录文件的旧配置继续使用原白名单；已有目录却没有合格项时会明确报错，提示 `catalog --verify`，不会静默退回白名单。单独 `scan` 无需核验贡献看板权限；`tick` 后续的实现和发布继续使用原有贡献及维护者门禁。
 
 每轮 `runs/scan-summary.json` 保存计划范围、全部仓库、逐仓库 Issue / PR 数及总数。网络失败记为 `unknown`，中断后尚未访问的项保留 `not_scanned`；成功记录逐仓库保存，进程正常退出也不表示所有仓库都成功。此摘要仅记录扫描，源码采集和模型研究仍通过下述入口推进。
 
@@ -123,24 +123,24 @@ README 没有提到功能不构成缺失证据；README 声称支持也不能替
 
 ## 仓库目录与准入
 
-本次核验完整结果见 [repository-catalog.json](repository-catalog.json)：原 48 个候选、两个官方迁移后的名称、两个保留退役项目，共 52 条记录。核验记录带 UTC 时间、规范名称、默认分支、推送时间、归档/禁用标志、许可证、固定 SHA、文件摘要/哈希、贡献政策材料及原因。
+最新核验结果见 [repository-catalog.json](repository-catalog.json)：保留原 52 条记录，追加本次清单中未重复的 80 个项目，共 132 条记录。用户提供的 100 个项目全部纳入目录，按前端框架、UI 基础设施、AI 应用、Agent 与工作流四类组织。核验记录带 UTC 时间、规范名称、默认分支、推送时间、归档/禁用标志、许可证、固定 SHA、文件摘要/哈希、贡献政策材料及原因。逐项结果见 [100 项仓库扩容记录](docs/catalog-expansion-2026-10-18.md)。
 
 | 目录状态 | 数量 | 含义 |
 | --- | ---: | --- |
-| `research_only` | 32 | 实际读取并核验公开源码、测试、文档及可识别开源许可证；默认进入研究池，也计入贡献白名单（见下） |
-| `active` | 0 | 本次目录核验没有新增自动贡献授权 |
-| `paused` | 10 | 网络/404、迁移旧地址、长期无推送、停止维护/归档等，逐条记录原因 |
-| `rejected` | 8 | 当前有界准入无法确认合格开源许可或源码/测试/文档覆盖；不是宣称所有这些项目都闭源 |
+| `research_only` | 94 | 已核验公开源码、测试、文档及可识别开源许可证，进入默认研究和扫描范围 |
+| `active` | 0 | 目录核验没有直接授予自动贡献权限 |
+| `paused` | 13 | 迁移旧地址、长期无推送、停止维护/归档、贡献限制等，逐条记录原因 |
+| `rejected` | 23 | 有界准入无法确认开源许可或源码/测试/文档覆盖，保留待审查 |
 | `retired` | 2 | `continuedev/continue`、`SWE-agent/SWE-agent`，保持显式退役 |
 
 GitHub 对复杂/混合许可证可能返回 `NOASSERTION`。这类仓库目前不自动准入，需另行逐目录许可证审查。临时失败只暂停，不永久退役；已退役记录刷新时不会自动恢复。OpenInterpreter 和 Instructor 的原名称保留迁移状态，官方规范名称另行核验后进入研究池。
 
-- `repositories`：贡献白名单，默认包含全部 33 个已核验仓库（原 8 个 + 25 个目录核验 `research_only`）；仍需当轮健康检查和每个任务的政策判断。
+- `repositories`：贡献目标白名单，保留原 33 个目标并追加本次核验通过的项目，当前 94 个；仍需当轮健康检查和每个任务的政策判断。
 - `repository_catalog`：完整核验目录文件路径，默认 `repository-catalog.json`。
 - `peer_repositories`：可选的研究池子集，仅过滤已核验目录，不能直接授权未知仓库。
 - 目录超过 `research.catalog_max_age_days`（默认 30 天）不再作为研究准入依据，需 `catalog --verify`。
 
-`catalog --verify` 最多检查 80 个名称，最多四个并行只读检查；每个项目至多 25 次 API/内容读取，每次 30 秒。部分失败不影响其余记录，逐条原子保存，刷新保留原有额外候选和退役项。GitHub 的组织共享贡献指南仅接受官方 community profile 指向同一组织 `.github` 的路径，并额外固定其 SHA。
+`catalog --verify` 按每批最多 80 个名称顺序刷新完整目录，最多四个并行只读检查，目录扩容后也不会截断或因总数超过 80 而失败。名称按大小写不敏感去重；每个项目至多 25 次 API/内容读取，每次 30 秒。部分失败不影响其余记录，逐条原子保存，刷新保留原有额外候选和退役项。GitHub 的组织共享贡献指南仅接受官方 community profile 指向同一组织 `.github` 的路径，并额外固定其 SHA。
 
 Goose 的指定看板 `Ready`、`manual_issue_submission`、`human_pr_review_required` 原样保留。无法核验看板权限仍暂停贡献；只读研究无需自动发布权限。研究目录的认可不会修改这些规则，也不会把组织共享指南当成本项目任意路径的执行指令。
 

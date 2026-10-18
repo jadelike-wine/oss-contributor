@@ -78,8 +78,8 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(self.scan(), 0)
         self.assertEqual(self.p.db.execute('SELECT count(*) FROM tasks').fetchone()[0], len(REPOSITORIES))
 
-    def catalog(self):
-        repos = REPOSITORIES + [f'catalog/project-{i}' for i in range(24)]
+    def catalog(self, extra=24):
+        repos = REPOSITORIES + [f'catalog/project-{i}' for i in range(extra)]
         records = []
         for repo in repos:
             records.append({'repo': repo, 'checked_at': now(), 'status': 'research_only',
@@ -97,6 +97,15 @@ class ScanTests(unittest.TestCase):
             records.append({**records[0], 'repo': repo, **fields})
         (self.root / 'repository-catalog.json').write_text(json.dumps({'repositories': records}), encoding='utf-8')
         return repos
+
+    def test_expanded_catalog_scans_every_repository_beyond_eighty(self):
+        repos = self.catalog(extra=100)
+        self.assertEqual(self.scan(), len(repos))
+        self.assertEqual(self.visited, repos)
+        summary = json.loads((self.root / 'runs/scan-summary.json').read_text())
+        self.assertTrue(summary['completed'])
+        self.assertEqual(summary['totals']['scanned_repositories'], len(repos))
+        self.assertEqual(self.p.config['repositories'], REPOSITORIES)
 
     def test_default_scan_visits_all_catalog_repositories_without_authorizing_contributions(self):
         repos = self.catalog()

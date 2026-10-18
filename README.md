@@ -155,7 +155,7 @@ Goose 的指定看板 `Ready`、`manual_issue_submission`、`human_pr_review_req
 | `timeouts.remote_ci_seconds` | 现有专用远端 CI 轮询最多 1,800 秒，再受运行预算限制 |
 | `budgets.run_model_calls` | 单轮最多 16 次模型入口调用，审查计入 |
 | `budgets.task_model_calls` | 单任务跨轮累计最多 40 次入口调用 |
-| `budgets.daily_model_calls` | UTC 日累计最多 80 次入口调用 |
+| `budgets.daily_model_calls` | 默认 `null`，每日模型调用次数不限；设置数字可恢复上限 |
 | `budgets.run_seconds` / `task_seconds` | 单轮 5,400 秒；单任务本轮 3,600 秒 |
 | `budgets.daily_seconds` | UTC 日累计已记录运行时间最多 21,600 秒 |
 | `budgets.run_cost_usd` / `daily_cost_usd` | 默认 null；当前无可信账单数据，金额限制不执行，依靠调用/时间限制 |

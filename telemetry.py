@@ -112,13 +112,16 @@ class Run:
         self.remaining()
         checks = [('run_model_calls', 16, 'run_id=?', (self.id,)),
                   ('task_model_calls', 40, 'task=?', (task,)),
-                  ('daily_model_calls', 80, 'started>=?', (self.started[:10],))]
+                  ('daily_model_calls', None, 'started>=?', (self.started[:10],))]
         # Reserve before launching, including failed/interrupted calls. A crash cannot refund it.
         with self.db:
             self.db.execute('BEGIN IMMEDIATE')
             for key, default, where, params in checks:
+                limit = self.options.get(key, default)
+                if limit is None:
+                    continue
                 count = self.db.execute('SELECT count(*) FROM model_calls WHERE ' + where, params).fetchone()[0]
-                if count >= self.options.get(key, default):
+                if count >= limit:
                     self.db.rollback()
                     self.stop(key + '_exhausted')
             call_id = uuid.uuid4().hex

@@ -66,7 +66,7 @@
   "budgets": {
     "run_model_calls": 16,
     "task_model_calls": 40,
-    "daily_model_calls": 80,
+    "daily_model_calls": null,
     "run_seconds": 5400,
     "task_seconds": 3600,
     "daily_seconds": 21600,

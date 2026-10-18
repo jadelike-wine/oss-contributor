@@ -84,6 +84,21 @@ class TelemetryTests(unittest.TestCase):
             with run(self.p, 'third') as current:
                 current.remaining()
 
+    def test_unlimited_daily_calls_preserve_history_and_other_limits(self):
+        with run(self.p, 'history') as previous:
+            with self.p.db:
+                self.p.db.executemany(
+                    'INSERT INTO model_calls(call_id,run_id,task,started,outcome) VALUES (?,?,?,?,?)',
+                    [(f'history-{i}', previous.id, 'old-task', previous.started, 'failed') for i in range(90)])
+        for options in ({'run_model_calls': 1}, {'run_model_calls': 1, 'daily_model_calls': None}):
+            self.p.config['budgets'] = options
+            with self.subTest(options=options), self.assertRaisesRegex(BudgetExhausted, 'run_model_calls'):
+                with run(self.p, 'unlimited-day') as current:
+                    current.reserve_call('new-task', 'allowed', 'model', 'mock')
+                    current.reserve_call('new-task', 'run-limit', 'model', 'mock')
+        self.assertEqual(self.p.db.execute('SELECT count(*) FROM model_calls').fetchone()[0], 92)
+        self.assertEqual(self.p.db.execute("SELECT count(*) FROM model_calls WHERE outcome='failed'").fetchone()[0], 90)
+
     def test_command_timeout_is_capped_by_run_and_partial_state_retained(self):
         self.p.config['budgets'] = {'run_seconds': .1}
         task = self.p.hunt('owner/repo', 'preserve me')

@@ -90,7 +90,7 @@ python -X utf8 contribute.py matrix <任务ID或feature_id>
 python -X utf8 contribute.py metrics --limit 10
 ```
 
-配置细节见 README。默认每轮研究 3 个候选，每候选 3 个 peer（最多 5）；每轮 16、单任务累计 40、UTC 日 80 次模型入口尝试；单轮 5400、单任务本轮活跃时间 3600、UTC 日已记录时间 21600 秒。单任务时间不错误计入其他候选的研究时间。
+配置细节见 README。默认每轮研究 3 个候选，每候选 3 个 peer（最多 5）；每轮 16、单任务累计 40 次模型入口尝试，每日调用次数不限（`daily_model_calls: null`）；单轮 5400、单任务本轮活跃时间 3600、UTC 日已记录时间 21600 秒。单任务时间不错误计入其他候选的研究时间。
 
 金额预算当前不执行，可靠账单费用不可获取；报告明确显示 null 和 `cost_caps_enforced=false`。原生 token 可用时记录，并标明完整/部分/不可获取覆盖率；CLI 尝试与内部模型步骤分开统计。
 

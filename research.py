@@ -80,6 +80,21 @@ def search_target(work, sha, focus, paths):
                    if line.startswith(sha + ':') and line[len(sha) + 1:] in allowed})
 
 
+def bounded_search_inventory(search):
+    """Bound diagnostic paths, never source excerpts or the selection input."""
+    matches = search.get('matched_paths', [])
+    selected, size = [], 0
+    for path in matches:
+        encoded_size = len(json.dumps(path, ensure_ascii=False)) + 2
+        if len(selected) >= 100 or size + encoded_size > 12000:
+            break
+        selected.append(path)
+        size += encoded_size
+    count = search.get('matched_count', len(matches))
+    return {**search, 'matched_paths': selected, 'matched_count': count,
+            'matched_paths_truncated': bool(search.get('matched_paths_truncated') or len(selected) < len(matches))}
+
+
 def select_peers(pipeline, task, pool, count):
     """Use verified categories and bounded inventories for relevance, rotate equal matches."""
     catalog_file = pipeline.root / pipeline.config.get('repository_catalog', 'repository-catalog.json')
@@ -200,6 +215,10 @@ def collect(engine, task):
             packet['target'] = {'repo': task['repo'], 'sha': task['base_sha'], 'files': files, 'checked_paths': selected,
                                 'content_search': {'terms': focus_terms(task['title']), 'matched_paths': matches,
                                                    'scope': 'eligible tracked baseline text; matches are not absence proof'}}
+        # Also repair older checkpoints whose diagnostic inventory exceeded the
+        # context cap. Preserve all pinned source evidence and peer identities.
+        if 'content_search' in packet['target']:
+            packet['target']['content_search'] = bounded_search_inventory(packet['target']['content_search'])
             persist()
         for peer in packet['selected_peers']:
             if any(s['repo'] == peer and not s.get('error') for s in packet['peers']):
@@ -375,13 +394,21 @@ def run(engine, task_id, data):
         data['research_pending'] = pending
         data.pop('research')
         engine.store(task_id, data)
+    parse_error = None
     if pending.get('base_sha') == task['base_sha'] and pending.get('fingerprint') == before:
         answer = pending['opportunity']
     else:
-        answer = research_answer(engine, task_id, 'research', prompt)
+        try:
+            answer = research_answer(engine, task_id, 'research', prompt)
+        except json.JSONDecodeError as error:
+            # Syntax failures share the existing single correction allowance;
+            # keep the raw response rather than guessing a repaired JSON value.
+            parse_error, answer = error, {}
     if p.fingerprint(task['workspace']) != before:
         raise ValueError('Read-only research changed the workspace')
     try:
+        if parse_error is not None:
+            raise parse_error
         validate(answer, task, packet)
         matrix = build(answer, task, packet) if packet.get('schema_version') == 2 and answer['decision'] == 'candidate' else None
     except ValueError as error:
@@ -390,11 +417,13 @@ def run(engine, task_id, data):
             ACTIVE.get().count('insufficient_evidence')
         # One bounded correction, using exactly the same evidence. Never coerce bad
         # claims into passing evidence or loop indefinitely on an incompatible model.
-        save(engine.packet_dir(task_id) / 'research-invalid.json', {'answer': answer, 'error': str(error)})
-        correction = (prompt + '\nYour previous response failed validation:\n' + correction_feedback(answer, packet, error) +
+        previous = parse_error.doc if parse_error is not None else answer
+        save(engine.packet_dir(task_id) / 'research-invalid.json', {'answer': previous, 'error': str(error)})
+        feedback = str(error) if parse_error is not None else correction_feedback(answer, packet, error)
+        correction = (prompt + '\nYour previous response failed validation:\n' + feedback +
                       '\nReturn a corrected COMPLETE JSON object. Recheck every field type and every exact quote. '
                       'Use unknown for unsupported peer capabilities; return none if no grounded candidate remains. '
-                      'Do not add facts or claim new searches/tests. Previous response:\n' + json.dumps(answer, ensure_ascii=False))
+                      'Do not add facts or claim new searches/tests. Previous response:\n' + json.dumps(previous, ensure_ascii=False))
         answer = research_answer(engine, task_id, 'research-correction', correction)
         if p.fingerprint(task['workspace']) != before:
             raise ValueError('Read-only research correction changed the workspace')

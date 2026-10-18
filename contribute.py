@@ -14,6 +14,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 from urllib.parse import unquote, urlsplit
 from repository_policy import contributing_guide, inspect_repository, project_items, ready_issue
 from ci_status import observe_ci
@@ -42,7 +43,16 @@ def save(path, value):
             json.dump(value, file, ensure_ascii=False, indent=2)
             file.flush()
             os.fsync(file.fileno())
-        os.replace(temporary, path)
+        for attempt in range(5):
+            try:
+                os.replace(temporary, path)
+                break
+            except PermissionError as error:
+                # Readers and virus scanners can briefly block replacement on
+                # Windows. Retry the same complete file, never write in place.
+                if getattr(error, 'winerror', None) not in (5, 32, 33) or attempt == 4:
+                    raise
+                time.sleep(0.05 * 2 ** attempt)
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)

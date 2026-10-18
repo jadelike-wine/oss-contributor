@@ -123,6 +123,50 @@ class AutonomousTests(unittest.TestCase):
         self.assertTrue(evidence['passed'])
         self.assertEqual([1, 0, 0], [r['exit_code'] for r in evidence['results']])
 
+    def test_planning_retry_separates_local_tests_from_pinned_baseline(self):
+        tracked = self.work / 'existing_test.py'
+        tracked.write_text('assert True\n', encoding='utf-8')
+        self.git('add', '.')
+        self.git('commit', '-qm', 'existing upstream test')
+        with self.p.db:
+            self.p.db.execute('UPDATE tasks SET base_sha=? WHERE id=?', (self.git('rev-parse', 'HEAD'), self.key))
+        tracked.write_text('assert "LOCAL_DRAFT"\n', encoding='utf-8')
+        invalid = json.loads(json.dumps(self.plan))
+        invalid['spec']['regression'] = [invalid['spec']['regression']]
+        with self.mocks(), patch.object(self.engine, 'model', side_effect=lambda *args, **kwargs:
+                (self.model(*args, **kwargs), invalid)[1]):
+            with self.assertRaises(ValueError):
+                self.engine.plan(self.key, self.engine.load(self.key))
+        def retry(key, purpose, prompt, edit=False):
+            context = json.loads(prompt.split('Do not publish or delegate.\n', 1)[1])
+            baseline = context['planning_baseline']
+            self.assertEqual(baseline['sha'], self.p.task(self.key)['base_sha'])
+            self.assertFalse(baseline['workspace_changes']['test_value.py']['present_at_base'])
+            self.assertEqual(baseline['workspace_changes']['existing_test.py']['baseline_excerpt'], 'assert True\n')
+            self.assertNotIn('LOCAL_DRAFT', baseline['workspace_changes']['existing_test.py']['baseline_excerpt'])
+            return {'decision': 'wait', 'reason': 'Local drafts are not proof of upstream coverage'}
+        with self.mocks(), patch.object(self.engine, 'model', side_effect=retry):
+            self.engine.plan(self.key, self.engine.load(self.key))
+        self.assertEqual(tracked.read_text(), 'assert "LOCAL_DRAFT"\n')
+        self.assertTrue((self.work / 'test_value.py').exists())
+        self.assertEqual([], self.created_prs)
+
+    def test_planning_baseline_does_not_read_large_baseline_blob(self):
+        path = self.work / 'large_test.py'
+        path.write_text('x' * 60001, encoding='utf-8')
+        self.git('add', '.')
+        self.git('commit', '-qm', 'large baseline file')
+        task = self.p.task(self.key)
+        task['base_sha'] = self.git('rev-parse', 'HEAD')
+        path.write_text('local draft', encoding='utf-8')
+        with patch('autonomous.command', wraps=command) as read:
+            baseline = self.engine.planning_baseline(task)
+        entry = baseline['workspace_changes']['large_test.py']
+        self.assertTrue(entry['present_at_base'])
+        self.assertTrue(entry['truncated'])
+        self.assertEqual(entry['baseline_excerpt'], '')
+        self.assertFalse(any(c.args[0][:2] == ['git', 'show'] for c in read.call_args_list))
+
     def test_lost_pr_response_is_reconciled_without_duplicate(self):
         self.lose_pr_response = True
         with self.mocks():

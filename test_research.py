@@ -122,6 +122,31 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(2, model.call_count)
         self.assertFalse(self.engine.load(self.key).get('research'))
 
+    def test_malformed_json_gets_one_correction_with_original_response(self):
+        packet = self.packet()
+        raw = '{"decision":"candidate" "reason":"missing comma"}'
+        error = json.JSONDecodeError("Expecting ',' delimiter", raw, 24)
+        with self.research_mocks({}, packet), patch.object(self.engine, 'model', side_effect=[
+                error, {'decision': 'none', 'reason': 'Insufficient evidence'}]) as model:
+            result = self.engine.research(self.key, self.engine.load(self.key))
+        self.assertEqual(result['opportunity']['decision'], 'none')
+        self.assertEqual(['research', 'research-correction'], [c.args[1] for c in model.call_args_list])
+        saved = json.loads((self.engine.packet_dir(self.key) / 'research-invalid.json').read_text())
+        self.assertEqual(saved['answer'], raw)
+        self.assertIn('missing comma', model.call_args_list[1].args[2])
+        self.assertEqual([], self.created_issues)
+        self.assertEqual([], self.created_prs)
+
+    def test_malformed_correction_still_fails_without_third_model_call(self):
+        packet = self.packet()
+        error = json.JSONDecodeError('Unterminated JSON', '{', 1)
+        with self.research_mocks({}, packet), patch.object(self.engine, 'model', side_effect=error) as model:
+            with self.assertRaises(json.JSONDecodeError):
+                self.engine.research(self.key, self.engine.load(self.key))
+        self.assertEqual(model.call_count, 2)
+        self.assertFalse(self.engine.load(self.key).get('research'))
+        self.assertEqual([], self.created_prs)
+
     def test_reviewer_feedback_revises_once_and_cannot_loop(self):
         packet = self.packet()
         with self.research_mocks(opportunity(), packet), patch.object(self.engine, 'judge', return_value={

@@ -368,36 +368,63 @@ class Pipeline:
             raise ValueError(f"Unknown task: {task_id}")
         return dict(row)
 
+    def scan_repositories(self):
+        """Scan every admitted research target; peer selection grants no contribution rights."""
+        from repository_catalog import research_pool
+        repos = research_pool(self, respect_peer_filter=False)
+        if not repos:
+            raise ContributionPaused('No eligible scan repositories; refresh with catalog --verify')
+        return repos
+
     @observed('scan')
     def scan(self):
         changed = 0
         with self.lock("scan"):
-            for repo in self.effective_repositories():
-                try:
-                    # One transaction per repository: malformed responses must not leave partial updates.
-                    with self.db:
-                        result = self.scan_repository(repo)
-                except BudgetExhausted:
-                    raise
-                except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired, KeyError, TypeError) as error:
-                    message = f"scan {repo}: FAILED ({type(error).__name__}): {error}"
+            repos = self.scan_repositories()
+            scope = 'verified_catalog' if (self.root / self.config.get('repository_catalog', 'repository-catalog.json')).exists() else 'legacy_allowlist'
+            summary = {'started': now(), 'scope': scope, 'planned_repositories': len(repos), 'completed': False,
+                       'repositories': [{'repo': repo, 'status': 'not_scanned'} for repo in repos]}
+            summary_path = self.root / 'runs/scan-summary.json'
+            save(summary_path, summary)
+            print(f'scan scope: {scope} ({len(repos)} repositories)', file=sys.stderr)
+            try:
+                for record in summary['repositories']:
+                    repo = record['repo']
+                    try:
+                        # One transaction per repository: malformed responses must not leave partial updates.
+                        with self.db:
+                            result = self.scan_repository(repo)
+                    except BudgetExhausted as error:
+                        record.update(status='unknown', error=str(error))
+                        raise
+                    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired, KeyError, TypeError) as error:
+                        record.update(status='unknown', error=f'{type(error).__name__}: {error}')
+                        message = f"scan {repo}: FAILED ({type(error).__name__}): {error}"
+                    else:
+                        if result is None:
+                            record.update(status='skipped', reason='archived')
+                            message = f"scan {repo}: SKIPPED (archived)"
+                        else:
+                            count, issues, prs = result
+                            record.update(status='scanned', changed=count, issues=issues, prs=prs)
+                            from telemetry import ACTIVE
+                            if ACTIVE.get():
+                                ACTIVE.get().count('scanned_repositories')
+                                ACTIVE.get().count('scanned_issues', issues)
+                                ACTIVE.get().count('scanned_prs', prs)
+                                ACTIVE.get().count('new_or_updated_issues', count)
+                            changed += count
+                            message = f"scan {repo}: {'OK' if issues else 'EMPTY'} ({issues} open issues, {prs} open PRs, {count} new/updated)"
                     self.event('scan:' + repo, message)
+                    save(summary_path, summary)
                     print(message, file=sys.stderr)
-                    continue
-                if result is None:
-                    message = f"scan {repo}: SKIPPED (archived)"
-                else:
-                    count, issues, prs = result
-                    from telemetry import ACTIVE
-                    if ACTIVE.get():
-                        ACTIVE.get().count('scanned_repositories')
-                        ACTIVE.get().count('scanned_issues', issues)
-                        ACTIVE.get().count('new_or_updated_issues', count)
-                    changed += count
-                    message = f"scan {repo}: {'OK' if issues else 'EMPTY'} ({issues} open issues, {prs} open PRs, {count} new/updated)"
-                self.event('scan:' + repo, message)
-                print(message, file=sys.stderr)
-            self.report()
+                summary['completed'] = True
+                self.report()
+            finally:
+                summary['ended'] = now()
+                summary['totals'] = {'scanned_repositories': sum(r['status'] == 'scanned' for r in summary['repositories']),
+                                     **{field: sum(r.get(field, 0) for r in summary['repositories']) for field in ('issues', 'prs', 'changed')}}
+                save(summary_path, summary)
         return changed
 
     def scan_repository(self, repo):
@@ -853,7 +880,7 @@ def main():
 
 
 def dispatch(pipeline, args):
-    research_only = (args.action in ('hunt', 'research-batch') or
+    research_only = (args.action in ('scan', 'hunt', 'research-batch') or
                      (args.action == 'analyze' and pipeline.task(args.task)['source'] == 'hunt'))
     if args.action not in ('status', 'unlock') and not research_only:
         pipeline.effective_repositories()

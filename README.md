@@ -36,6 +36,9 @@ python -X utf8 contribute.py catalog
 # 有界 GitHub 只读核验；更新本地目录，不授予贡献权限
 python -X utf8 contribute.py catalog --verify
 
+# 默认扫描完整的已核验研究目录（当前 32 个），刷新 Issue / PR 队列
+python -X utf8 contribute.py scan
+
 # 遍历全部已核验研究仓库，扫描已有 Issue、固定源码版本并逐仓库静态分诊
 # 默认不受原贡献白名单 8 个仓库或 research-batch 每轮 3 个候选的限制
 python -X utf8 catalog_sweep.py --output runs/catalog-sweep
@@ -59,6 +62,12 @@ python -X utf8 contribute.py tick
 ```
 
 `auto --dry-run` 不调用模型或发布，但仍可能进行只读健康核验。`metrics/candidates/matrix/catalog`（不带 `--verify`）使用本地资料；`metrics/candidates/matrix` 通过 SQLite `mode=ro` 连接，不触发迁移。旧 `scan/status/followup/prepare/analyze/repair/verify/review/hunt/unlock` CLI 保留。
+
+`scan` 和 `tick` 的扫描阶段默认使用完整的已核验研究目录，当前为 32 个仓库，不受八仓库贡献白名单、`peer_repositories` 同行子集或每轮三个模型研究候选的限制。扫描仍排除过期、暂停、拒绝、退役、归档、禁用及未授予研究权限的目录项。没有目录文件的旧配置继续使用原白名单；已有目录却没有合格项时会明确报错，提示 `catalog --verify`，不会静默退回八个仓库。单独 `scan` 无需核验贡献看板权限；`tick` 后续的实现和发布继续使用原有贡献及维护者门禁。
+
+每轮 `runs/scan-summary.json` 保存计划范围、全部仓库、逐仓库 Issue / PR 数及总数。网络失败记为 `unknown`，中断后尚未访问的项保留 `not_scanned`；成功记录逐仓库保存，进程正常退出也不表示所有仓库都成功。此摘要仅记录扫描，源码采集和模型研究仍通过下述入口推进。
+
+默认范围修复及 32 仓库正式入口的实网结果见 [完整目录默认扫描验收](docs/default-catalog-scan-2026-10-18.md)。
 
 后续正式流程实跑、查重修复及本轮发布结果见 [2026-10-18 续跑验收](docs/live-rerun-2026-10-18.md)。查重搜索不完整时，可以依据已读结果拒绝重复候选，不能据此放行实现或发布。
 

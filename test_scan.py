@@ -8,7 +8,9 @@ import unittest
 from contextlib import redirect_stderr
 from unittest.mock import patch
 
-from contribute import Pipeline, rank
+from contribute import ContributionPaused, Pipeline, dispatch, now, rank
+from argparse import Namespace
+from telemetry import BudgetExhausted
 
 
 REPOSITORIES = [
@@ -61,7 +63,7 @@ class ScanTests(unittest.TestCase):
                 cmd.return_value = 'Rules'
             return self.p.scan()
 
-    def test_exact_allowlist_limits_origin_scores_sorting_and_repeat_scan(self):
+    def test_legacy_config_without_catalog_keeps_allowlist_limits_scores_and_repeat_scan(self):
         self.assertEqual(self.config['repositories'], REPOSITORIES)
         self.assertEqual(len(set(self.config['repositories'])), 8)
         self.assertEqual(self.config['scan_limit'], 100)
@@ -79,6 +81,95 @@ class ScanTests(unittest.TestCase):
         self.assertLess(report.index('QwenLM--qwen-code--12'), report.index('cline--cline--12'))
         self.assertEqual(self.scan(), 0)
         self.assertEqual(self.p.db.execute('SELECT count(*) FROM tasks').fetchone()[0], 8)
+
+    def catalog(self):
+        repos = REPOSITORIES + [f'catalog/project-{i}' for i in range(24)]
+        records = []
+        for repo in repos:
+            records.append({'repo': repo, 'checked_at': now(), 'status': 'research_only',
+                            'research_allowed': True, 'automatic_contribution': False})
+            self.issues.setdefault(repo, [{**self.issues[REPOSITORIES[0]][0],
+                                           'url': f'https://github.com/{repo}/issues/12'}])
+            self.prs.setdefault(repo, [])
+        for repo, fields in [('excluded/paused', {'status': 'paused'}),
+                             ('excluded/rejected', {'status': 'rejected'}),
+                             ('excluded/archived', {'archived': True}),
+                             ('excluded/disabled', {'disabled': True}),
+                             ('excluded/stale', {'checked_at': '2020-01-01T00:00:00+00:00'}),
+                             ('excluded/denied', {'research_allowed': False}),
+                             ('SWE-agent/SWE-agent', {})]:
+            records.append({**records[0], 'repo': repo, **fields})
+        (self.root / 'repository-catalog.json').write_text(json.dumps({'repositories': records}), encoding='utf-8')
+        return repos
+
+    def test_default_scan_visits_all_32_catalog_repositories_without_authorizing_contributions(self):
+        repos = self.catalog()
+        self.p.config['peer_repositories'] = [repos[0]]
+        with patch.object(self.p, 'effective_repositories', side_effect=AssertionError('scan must not probe contribution boards')):
+            self.assertEqual(self.scan(), 32)
+        self.assertEqual(self.visited, repos)
+        summary = json.loads((self.root / 'runs/scan-summary.json').read_text())
+        self.assertEqual(summary['scope'], 'verified_catalog')
+        self.assertEqual(summary['planned_repositories'], 32)
+        self.assertTrue(summary['completed'])
+        self.assertEqual(summary['totals'], {'scanned_repositories': 32, 'issues': 32, 'prs': 0, 'changed': 32})
+        self.assertTrue(all(r['status'] == 'scanned' for r in summary['repositories']))
+        self.assertEqual(self.p.config['repositories'], REPOSITORIES)
+        with self.assertRaises(ContributionPaused):
+            self.p.require_contribution(self.p.task('catalog--project-0--12'))
+
+    def test_tick_uses_the_same_full_catalog_scan(self):
+        repos = self.catalog()
+        with patch('contribute.gh', side_effect=self.fake_gh), patch('contribute.command', return_value='Rules'), \
+                patch.object(self.p, 'followup', return_value=[]), patch('autonomous.Autonomous.run') as auto:
+            dispatch(self.p, Namespace(action='tick', analyze=False))
+        self.assertEqual(self.visited, repos)
+        auto.assert_called_once()
+
+    def test_scan_cli_does_not_require_contribution_board_permissions(self):
+        repos = self.catalog()
+        with patch('contribute.gh', side_effect=self.fake_gh), patch('contribute.command', return_value='Rules'), \
+                patch.object(self.p, 'effective_repositories', side_effect=AssertionError('unrelated contribution health check')):
+            dispatch(self.p, Namespace(action='scan'))
+        self.assertEqual(self.visited, repos)
+
+    def test_budget_interruption_preserves_complete_scope_and_unvisited_repositories(self):
+        repos = self.catalog()
+        def github(*args):
+            if args == ('api', 'repos/' + repos[1]):
+                raise BudgetExhausted('test_budget_exhausted')
+            return self.fake_gh(*args)
+        with self.assertRaises(BudgetExhausted):
+            self.scan(gh=github)
+        summary = json.loads((self.root / 'runs/scan-summary.json').read_text())
+        self.assertFalse(summary['completed'])
+        self.assertEqual(summary['planned_repositories'], 32)
+        self.assertEqual(summary['repositories'][0]['status'], 'scanned')
+        self.assertEqual(summary['repositories'][1]['status'], 'unknown')
+        self.assertIn('test_budget', summary['repositories'][1]['error'])
+        self.assertTrue(all(r['status'] == 'not_scanned' for r in summary['repositories'][2:]))
+        self.assertEqual(summary['totals']['scanned_repositories'], 1)
+        self.assertEqual(self.p.db.execute('select count(*) from locks').fetchone()[0], 0)
+
+    def test_catalog_failure_is_unknown_and_other_repositories_still_scan(self):
+        repos = self.catalog()
+        def github(*args):
+            if args == ('api', 'repos/' + repos[8]):
+                raise RuntimeError('HTTP 503')
+            return self.fake_gh(*args)
+        self.assertEqual(self.scan(gh=github), 31)
+        summary = json.loads((self.root / 'runs/scan-summary.json').read_text())
+        self.assertEqual(summary['repositories'][8]['status'], 'unknown')
+        self.assertIn('503', summary['repositories'][8]['error'])
+        self.assertEqual(summary['repositories'][-1]['status'], 'scanned')
+        self.assertEqual(summary['planned_repositories'], 32)
+        self.assertEqual(summary['totals']['scanned_repositories'], 31)
+
+    def test_existing_catalog_without_eligible_repositories_does_not_silently_fall_back_to_eight(self):
+        (self.root / 'repository-catalog.json').write_text('{"repositories": []}')
+        with self.assertRaisesRegex(ContributionPaused, 'catalog --verify'):
+            self.scan()
+        self.assertEqual(self.visited, [])
 
     def test_failures_leave_other_repositories_a_turn_and_diagnostics(self):
         bad = REPOSITORIES[0]

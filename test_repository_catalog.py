@@ -61,6 +61,9 @@ class CatalogTests(unittest.TestCase):
         p = SimpleNamespace(root=self.root, config=self.config)
         self.assertEqual(research_pool(p), ['peer/one'])
         self.assertEqual(self.config['repositories'], ['owner/target'])
+        self.config['peer_repositories'] = ['unadmitted/project']
+        self.assertEqual(research_pool(p), [])
+        self.assertEqual(research_pool(p, respect_peer_filter=False), ['peer/one'])
 
     def test_batch_failure_is_isolated_and_previously_retired_record_preserved(self):
         retired = {'repo': 'saved/retired', 'status': 'retired', 'reason': 'prior retirement', 'research_allowed': False}

@@ -99,12 +99,25 @@ class CrossHarnessFlowTests(unittest.TestCase):
 
     def test_policy_paused_matrix_never_creates_public_proposal(self):
         packet, answer = self.packet()
+        answer['policy']['automated_issue'] = False
         answer['policy']['automated_pr'] = False
         with self.research_mocks(answer, packet):
             self.engine.advance(self.key)
         self.assertEqual(self.p.db.execute('SELECT queue FROM research_candidates').fetchone()[0], 'PAUSED_POLICY')
         self.assertEqual(self.created_issues, [])
         self.assertEqual(self.created_prs, [])
+
+    def test_automated_pr_ban_still_posts_discussion_issue(self):
+        packet, answer = self.packet()
+        answer['policy']['automated_pr'] = False
+        with self.research_mocks(answer, packet):
+            self.engine.advance(self.key)
+        self.assertEqual(self.p.db.execute('SELECT queue FROM research_candidates').fetchone()[0],
+                         'NEEDS_MAINTAINER_CONFIRMATION')
+        self.assertEqual(len(self.created_issues), 1)
+        self.assertIn('Maintainer direction requested', self.created_issues[0]['body'])
+        self.assertEqual(self.created_prs, [])
+        self.assertEqual(self.p.task(self.key)['state'], 'WAITING_MAINTAINER')
 
     def test_reviewer_model_is_configurable_and_identity_is_truthful(self):
         self.p.config['model'] = 'tokenking/devin/swe-2'

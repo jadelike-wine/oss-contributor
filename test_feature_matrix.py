@@ -217,7 +217,10 @@ class MatrixTests(unittest.TestCase):
             self.assertEqual(route(answer, matrix, policy=policy, **gates)[0], 'PAUSED_POLICY')
         matrix['feature_status'][task['repo']]['status'] = 'unknown'
         self.assertEqual(route(answer, matrix, **gates)[0], 'RESEARCH_ONLY')
+        # automated_pr=false routes through maintainer discussion, not a dead end.
         answer['policy']['automated_pr'] = False
+        self.assertEqual(route(answer, matrix, **gates)[0], 'RESEARCH_ONLY')
+        answer['policy']['automated_issue'] = False
         self.assertEqual(route(answer, matrix, **gates)[0], 'PAUSED_POLICY')
 
     def test_bug_remains_eligible_and_feature_priority_requires_gates(self):

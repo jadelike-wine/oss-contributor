@@ -119,13 +119,13 @@ README 没有提到功能不构成缺失证据；README 声称支持也不能替
 | `READY_TO_IMPLEMENT` | 证据、政策、查重和审查通过；需要的维护者方向已确认，仍须通过原有红绿测试和发布门禁 |
 | `NEEDS_MAINTAINER_CONFIRMATION` | 仅形成设计提案；政策允许时原状态机可先提交讨论，然后等待真实维护者回复 |
 | `RESEARCH_ONLY` | 证据不充分、目标已有等价功能、重复或审查未通过，不可实现/发布 |
-| `PAUSED_POLICY` | 自动化权限不明/禁止、仅研究目标、本人提交/审查要求或高风险人工门槛，暂停自动贡献 |
+| `PAUSED_POLICY` | 明确禁止自动 Issue（`automated_issue=false`）、本人提交/审查要求（`manual_issue_submission`/`human_pr_review_required`）或高风险人工门槛，暂停自动贡献。模型仅报告 `automated_pr=false` 不再判死——该候选降级为 `NEEDS_MAINTAINER_CONFIRMATION`，经讨论 Issue 等待维护者方向，不会自动实现或发 PR |
 
 数值优先级只在证据与政策门槛通过后产生：功能优先于 Bug，低风险略优先。价值、现有替代方案、架构成本、维护者方向、测试可行性和接受可能性的论据必须提供给审查者；没有这些依据的候选不能靠模型打高分进入实现。原有 Issue 初筛评分和功能标签的保守 hold 保留，主动功能研究由 hunt/batch 承担。
 
 查重由控制器统一仓库限定，清除模型查询中的仓库名普通词和自带 `repo:`，避免假阴性；记录原始及实际查询。结果超过第一页时控制器自动翻页拉取（每查询最多 100 条），全部命中都经审查后才算完整搜索；超过上限或上游 `incomplete_results` 仍记为不完整，可以依据已读结果拒绝，不能据此放行。功能查重区分已有实现/竞争 PR 和开放的功能请求：前者仍拒绝，后者须经审查确认关联已读取的开放 Issue，并等待维护者方向，不重复开 Issue，也不把用户需求当作维护者批准。
 
-队列是原有状态机的附加门禁，不替代状态机。旧任务继续按 `PLAN → REPRODUCE → ISSUE/REPAIR → PATCH_READY → AUTO_REVIEW → PUBLISH → PR_OPEN` 恢复。维护者确认不能覆盖 `automated_pr=false` 或本人审查要求。
+队列是原有状态机的附加门禁，不替代状态机。旧任务继续按 `PLAN → REPRODUCE → ISSUE/REPAIR → PATCH_READY → AUTO_REVIEW → PUBLISH → PR_OPEN` 恢复。维护者确认不能覆盖 `automated_issue=false` 或本人审查要求；`automated_pr=false` 只能阻止直接实现/发布，不阻止讨论 Issue。
 
 ## 仓库目录与准入
 

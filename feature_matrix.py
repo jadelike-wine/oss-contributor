@@ -121,9 +121,14 @@ def route(answer, matrix, *, reviewed=False, duplicate_clear=False, maintainer=F
     if answer.get('category') == 'security' or answer.get('decision') != 'candidate':
         return 'RESEARCH_ONLY', 0, 'private_or_no_candidate'
     allowed = answer.get('policy', {})
-    if (not allowed.get('automated_pr') or policy.get('human_pr_review_required')
-            or policy.get('manual_issue_submission')):
+    if policy.get('human_pr_review_required') or policy.get('manual_issue_submission'):
         return 'PAUSED_POLICY', 0, 'automation_or_personal_review_policy'
+    # automated_issue=false means even a discussion proposal cannot be posted.
+    if not allowed.get('automated_issue'):
+        return 'PAUSED_POLICY', 0, 'upstream_bans_automated_issues'
+    # automated_pr=false alone does not end the candidate: the feature may
+    # still proceed through a maintainer-discussion issue instead of an
+    # unsolicited pull request.
     if not reviewed or not duplicate_clear:
         return 'RESEARCH_ONLY', 0, 'review_or_duplicate_gate_pending'
     if matrix:
@@ -133,7 +138,8 @@ def route(answer, matrix, *, reviewed=False, duplicate_clear=False, maintainer=F
             return 'RESEARCH_ONLY', 0, 'insufficient_gap_or_peer_evidence'
     # Model value prose is retained for review; model numerical scores never determine admission.
     priority = (100 if answer['category'] == 'feature' else 40) + (10 if answer['risk'] == 'low' else 0)
-    discussion = answer['category'] == 'feature' or answer['risk'] != 'low' or allowed.get('maintainer_required')
+    discussion = (answer['category'] == 'feature' or answer['risk'] != 'low'
+                  or allowed.get('maintainer_required') or not allowed.get('automated_pr'))
     if discussion and not maintainer:
         return 'NEEDS_MAINTAINER_CONFIRMATION', priority, 'design_direction_requires_maintainer'
     if answer['risk'] == 'high':

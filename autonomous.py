@@ -937,7 +937,12 @@ class Autonomous:
                 if ACTIVE.get():
                     ACTIVE.get().remaining()
                 result = self.advance(row['id'])
-                if not waiting or result not in ('WAITING_MAINTAINER', 'PR_OPEN', 'ISSUE', 'PUBLISH'):
+                # A failed attempt that leaves the task at the same stage
+                # should not starve the rest of the candidate queue.
+                if not waiting:
+                    after = self.load(row['id'])
+                    used += result != data['stage'] or not after['attempts'].get(data['stage'])
+                elif result not in ('WAITING_MAINTAINER', 'PR_OPEN', 'ISSUE', 'PUBLISH'):
                     used += 1
                 if result != task['state']:
                     print(f"{row['id']}: {result}")

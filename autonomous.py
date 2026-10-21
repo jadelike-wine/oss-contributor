@@ -1003,8 +1003,13 @@ class Autonomous:
         policies = self.p.config.get('repository_checks', {}).get('policies', {})
         rows = [row for row in rows if row['repo'] in repos and
                 (row['number'] or not policies.get(row['repo'], {}).get('manual_issue_submission'))]
-        waiting, research = [], []
+        waiting, confirmed, research = [], [], []
         for row in rows:
-            target = waiting if self.load(row['id'])['stage'] in ('WAITING_MAINTAINER', 'PR_OPEN', 'ISSUE', 'PUBLISH') else research
-            target.append(row)
-        return waiting + self.p.fair_candidates(research)
+            data = self.load(row['id'])
+            if data['stage'] in ('WAITING_MAINTAINER', 'PR_OPEN', 'ISSUE', 'PUBLISH'):
+                waiting.append(row)
+            elif indexed.get(row['id'], {}).get('queue') == 'NEEDS_MAINTAINER_CONFIRMATION':
+                confirmed.append(row)  # Approved proposals ready to discuss; do not starve behind new research.
+            else:
+                research.append(row)
+        return waiting + confirmed + self.p.fair_candidates(research)

@@ -127,7 +127,7 @@ README 没有提到功能不构成缺失证据；README 声称支持也不能替
 
 队列是原有状态机的附加门禁，不替代状态机。旧任务继续按 `PLAN → REPRODUCE → ISSUE/REPAIR → PATCH_READY → AUTO_REVIEW → PUBLISH → PR_OPEN` 恢复。维护者确认不能覆盖 `automated_issue=false` 或本人审查要求；`automated_pr=false` 只能阻止直接实现/发布，不阻止讨论 Issue。
 
-编号 Issue 的 bug 修复不等待维护者逐一批准：Issue 带 `accepted`、`help wanted`、`good first issue`、`triaged` 或 `bug` 标签时，`WAITING_MAINTAINER` 直接进 `REPAIR`。上游对明确 bug 的惯例是欢迎 PR——错过窗口让别人抢先，风险大于提交一个可能被重定向的 PR。有 revert 历史、方向不明或维护者明确要求讨论的例外，模型仍以 `wait` 决策降级。
+编号 Issue 的 bug 修复不等待维护者逐一批准：Issue 带 `accepted`、`help wanted`、`good first issue`、`triaged` 或 `bug` 标签时，`WAITING_MAINTAINER` 直接进 `REPAIR`；无标签、无维护者评论时等待 `wait_maintainer_days`（默认 7 天）后自动放行。上游对明确 bug 的惯例是欢迎 PR——错过窗口让别人抢先，风险大于提交一个可能被重定向的 PR。高风险（`risk=high`）或 `automated_pr=false` 仍保持等待。有 revert 历史、方向不明或维护者明确要求讨论的例外，模型仍以 `wait` 决策降级。
 
 ## 仓库目录与准入
 

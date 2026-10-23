@@ -499,7 +499,11 @@ def run(engine, task_id, data):
 
 
 def needs_discussion(opportunity):
-    return (opportunity['category'] == 'feature' or opportunity['risk'] != 'low'
+    # Features always discuss first: unsolicited feature PRs are almost always
+    # closed. Bugs only wait for maintainer input when the work itself is
+    # high-risk or the upstream policy requires it; a medium-risk bug fix with
+    # reproduction evidence is a valid PR on its own.
+    return (opportunity['category'] == 'feature' or opportunity['risk'] == 'high'
             or opportunity['policy']['maintainer_required']
             or not opportunity['policy']['automated_pr'])
 

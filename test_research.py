@@ -72,6 +72,16 @@ class ResearchTests(unittest.TestCase):
         self.assertTrue(result['approved'])
         self.assertIn(self.base, result['opportunity']['evidence'][0]['url'])
 
+    def test_medium_risk_bug_runs_full_pipeline_without_waiting(self):
+        packet = self.packet()
+        answer = opportunity()
+        answer['risk'] = 'medium'
+        self.assertFalse(needs_discussion(answer))
+        with self.research_mocks(answer, packet):
+            self.assertEqual('PR_OPEN', self.engine.advance(self.key))
+        self.assertEqual(1, len(self.created_issues))
+        self.assertEqual(1, len(self.created_prs))
+
     def test_design_proposal_waits_before_any_test_or_repair_then_resumes(self):
         packet = self.packet()
         answer = opportunity()
@@ -190,7 +200,7 @@ class ResearchTests(unittest.TestCase):
     def test_lost_proposal_response_recovers_without_duplicate_or_implementation(self):
         packet = self.packet()
         answer = opportunity()
-        answer['risk'] = 'medium'
+        answer['risk'] = 'high'
         self.lose_issue_response = True
         with self.research_mocks(answer, packet):
             self.assertEqual('ISSUE', self.engine.advance(self.key))

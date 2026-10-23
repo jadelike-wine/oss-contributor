@@ -329,6 +329,11 @@ class Autonomous:
                   'or missing maintainer-approved behavior, not missing dependencies. For an approved feature, test the agreed '
                   'acceptance criteria within the research scope. If no defensible contribution exists or policy disallows it, decision=skip. If maintainer approval '
                   'is required but absent, decision=wait; cite the rule and do not edit files. '
+                  'For a numbered bug issue with clear upstream acceptance signals — labels such as bug, accepted, triaged, '
+                  'help wanted, good first issue, or a comment by OWNER/MEMBER/COLLABORATOR welcoming a fix — prefer decision=ready '
+                  'over wait; a well-scoped bug fix PR is the expected upstream etiquette, and waiting lets others fix it first. '
+                  'Wait only when the bug fix direction itself needs maintainer input: prior revert history, architectural '
+                  'uncertainty, competing approaches, or maintainer comments explicitly requesting discussion first. '
                   'Return JSON {"decision":"ready|skip|wait","reason":"...","title":"bug title",'
                   '"issue_body":"English issue body, say tests are pending; do not invent results",'
                   '"pr_title":"fix(scope): ...","pr_body":"English proposed PR explanation",'
@@ -592,17 +597,29 @@ class Autonomous:
             return False
         comments = [x for x in issue['comments_data'] if x.get('author_association') in ('OWNER', 'MEMBER', 'COLLABORATOR')]
         digest = hashlib.sha256(json.dumps(comments, sort_keys=True).encode()).hexdigest()
-        if not comments or digest == data.get('maintainer_digest'):
-            return False
-        verdict = self.judge(task_id, 'maintainer-decision', {'gate': 'Do these actual maintainer comments explicitly approve proceeding with this exact proposed scope? Approval of a different fix on the same issue, mere acknowledgement, a bot response or discussion is not approval.', 'issue': issue['title'], 'comments': comments, 'proposal': data.get('research', {}).get('opportunity')})
-        data['maintainer_digest'] = digest
-        self.store(task_id, data)
-        if verdict['approved']:
-            data['maintainer_approved'] = True
-            if data.pop('proposal_only', False):
-                data.pop('plan', None)  # A proposal is not an executable regression recipe.
-            self.move(task_id, data, 'REPAIR' if data.get('plan') else 'PLAN')
-            return True
+        if comments and digest != data.get('maintainer_digest'):
+            verdict = self.judge(task_id, 'maintainer-decision', {'gate': 'Do these actual maintainer comments explicitly approve proceeding with this exact proposed scope? Approval of a different fix on the same issue, mere acknowledgement, a bot response or discussion is not approval.', 'issue': issue['title'], 'comments': comments, 'proposal': data.get('research', {}).get('opportunity')})
+            data['maintainer_digest'] = digest
+            self.store(task_id, data)
+            if verdict['approved']:
+                data['maintainer_approved'] = True
+                if data.pop('proposal_only', False):
+                    data.pop('plan', None)  # A proposal is not an executable regression recipe.
+                self.move(task_id, data, 'REPAIR' if data.get('plan') else 'PLAN')
+                return True
+        # Fast-path: for a numbered bug issue with clear upstream acceptance
+        # signals (accepted/help-wanted/good-first-issue/triaged labels or a
+        # maintainer welcome comment), proceed without waiting for explicit
+        # approval on our proposal. Missing the race to an already-accepted
+        # bug is worse than a PR the maintainer might have redirected.
+        if task['number'] and not data.get('proposal_only'):
+            labels = {l['name'].lower() for l in (issue.get('labels') or [])}
+            welcome = labels & {'accepted', 'help wanted', 'good first issue', 'triaged', 'bug'}
+            if welcome:
+                self.p.event(task_id, 'Fast-path: maintainer acceptance labels detected: ' + ','.join(sorted(welcome)))
+                data['maintainer_approved'] = True
+                self.move(task_id, data, 'REPAIR' if data.get('plan') else 'PLAN')
+                return True
         return False
 
     @observed('implementation', task=True)

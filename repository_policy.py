@@ -1,7 +1,91 @@
 """Read-only repository health checks and upstream contribution gates (stdlib only)."""
 import datetime as dt
+import hashlib
+import json
 import re
 from urllib.parse import urlsplit, quote
+
+
+def contribution_constraints(rules, configured=None):
+    """Add explicit machine-checkable upstream gates; never infer permission.
+
+    This intentionally recognizes only unambiguous mandatory-label wording.
+    All other contribution rules still require the existing policy review.
+    Configured gates and live rules are combined, so configuration cannot relax
+    a requirement discovered in the official guide.
+    """
+    policy = dict(configured or {})
+    labels = policy.get('required_issue_labels', [])
+    if not isinstance(labels, list) or any(not isinstance(label, str) or not label.strip() for label in labels):
+        raise ValueError('required_issue_labels must be a list of nonempty label names')
+    required = {label.strip().casefold() for label in labels}
+    if policy.get('ready_label'):
+        if not isinstance(policy['ready_label'], str):
+            raise ValueError('ready_label must be a label name')
+        required.add(policy['ready_label'].strip().casefold())
+    plain = re.sub(r'\s+', ' ', rules or '')
+    patterns = [
+        r'only start work once[^.]{0,160}?added the [`\"]([^`\"]+)[`\"] label',
+        r'(?:linked )?issue is not labeled [`\"]([^`\"]+)[`\"][^.]{0,120}?closed automatically',
+        r'issues? must (?:have|carry) the [`\"]([^`\"]+)[`\"] label',
+    ]
+    for pattern in patterns:
+        required.update(match.strip().casefold() for match in re.findall(pattern, plain, flags=re.I))
+    policy['required_issue_labels'] = sorted(required)
+    return policy
+
+
+def issue_policy_reason(issue, policy):
+    """Return an unsatisfied hard gate, independent of model/maintainer claims."""
+    required = policy.get('required_issue_labels') or []
+    if not required:
+        return None
+    if not issue or issue.get('pull_request') or str(issue.get('state', '')).lower() != 'open':
+        return 'Upstream requires an OPEN issue with labels: ' + ', '.join(required)
+    labels = issue.get('labels')
+    if not isinstance(labels, list) or any(not isinstance(label, dict) or not isinstance(label.get('name'), str) for label in labels):
+        return 'Cannot verify required issue labels: ' + ', '.join(required)
+    missing = set(required) - {label['name'].casefold() for label in labels}
+    return 'Upstream requires issue labels: ' + ', '.join(sorted(missing)) if missing else None
+
+
+def human_maintainer_comments(comments):
+    """Association plus a verified human account is required for scope approval."""
+    result = []
+    for comment in comments:
+        user = comment.get('user') or {}
+        login = user.get('login')
+        if (comment.get('author_association') in ('OWNER', 'MEMBER', 'COLLABORATOR')
+                and user.get('type') == 'User' and isinstance(login, str) and login
+                and not login.casefold().endswith('[bot]') and comment.get('body')
+                and type(comment.get('id')) is int):
+            result.append(comment)
+    return result
+
+
+def approval_receipt(comments, verdict, at):
+    """Record interpreted scope approval separately from formal PR approval."""
+    humans = human_maintainer_comments(comments)
+    if not humans or verdict.get('approved') is not True:
+        raise ValueError('Scope approval requires reviewed human maintainer comments')
+    return {'source': 'human_comment_review', 'approved': True,
+            'comment_ids': sorted({c['id'] for c in humans}),
+            'digest': hashlib.sha256(json.dumps(humans, sort_keys=True).encode()).hexdigest(),
+            'reviewed_at': at, 'reason': verdict.get('reason'),
+            'review_identity': verdict.get('review_identity')}
+
+
+def has_scope_approval(data):
+    """Legacy booleans, labels and elapsed time cannot certify human approval."""
+    receipt = data.get('maintainer_approval')
+    if not isinstance(receipt, dict):
+        return False
+    ids = receipt.get('comment_ids')
+    digest = receipt.get('digest')
+    return (receipt.get('source') == 'human_comment_review' and receipt.get('approved') is True
+            and isinstance(ids, list) and bool(ids) and all(type(i) is int for i in ids)
+            and isinstance(digest, str) and bool(re.fullmatch('[0-9a-f]{64}', digest))
+            and isinstance(receipt.get('reviewed_at'), str) and bool(receipt['reviewed_at']))
 
 
 def contributing_guide(repo, gh, command):

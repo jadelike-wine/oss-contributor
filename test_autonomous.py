@@ -289,6 +289,22 @@ class AutonomousTests(unittest.TestCase):
                 self.assertEqual('REPAIR', data['stage'])
                 self.assertIn('Please remove the unrelated test.', model.call_args.args[2])
 
+    def test_unpublished_feedback_draft_does_not_repeat_model_work(self):
+        with self.mocks():
+            self.assertEqual('PR_OPEN', self.engine.advance(self.key))
+            self.p.allow_external_writes = False
+            self.comments = [{'id': 1, 'author_association': 'MEMBER', 'body': 'Please clarify the description.'}]
+            with patch.object(self.engine, 'model', return_value={'needs_changes': False, 'needs_body_changes': True}) as model, \
+                    patch.object(self.engine, 'pr_body', return_value='Reviewed local draft') as body, \
+                    patch('autonomous.command', side_effect=self.fake_command) as commands:
+                data = self.engine.load(self.key)
+                self.assertFalse(self.engine.feedback(self.key, data))
+                self.assertFalse(self.engine.feedback(self.key, self.engine.load(self.key)))
+            self.assertEqual(1, model.call_count)
+            self.assertEqual(1, body.call_count)
+            self.assertFalse(any(call.args[0][:3] == ['gh', 'pr', 'edit'] for call in commands.call_args_list))
+            self.assertTrue(self.engine.load(self.key)['pending_body_digest'])
+
     def test_description_only_feedback_edits_existing_pr_without_code_change(self):
         with self.mocks():
             self.assertEqual('PR_OPEN', self.engine.advance(self.key))

@@ -567,6 +567,9 @@ class Autonomous:
             body = self.issue_body(task_id, data)
             file = self.packet_dir(task_id) / 'issue-body.md'
             file.write_text(public_text(body), encoding='utf-8')
+            if not self.p.allow_external_writes:
+                data['publication_hold'] = 'external_writes_disabled'
+                self.store(task_id, data)
             self.p.require_external_write()
             data['issue_create_pending'] = True
             self.store(task_id, data)
@@ -860,7 +863,9 @@ class Autonomous:
         missing = [h for h in re.findall(r'^#{1,6} .+$', self.pr_template(task), re.MULTILINE) if h not in pr.get('body', '')]
         packet = {'comments': comments, 'failed_checks': failed, 'missing_template_headings': missing}
         digest = hashlib.sha256(json.dumps(packet, sort_keys=True).encode()).hexdigest()
-        if digest == data.get('feedback_digest') or not comments and not failed and not missing:
+        pending_body = data.get('pending_body_digest')
+        if ((digest == data.get('feedback_digest') and not (pending_body and self.p.allow_external_writes))
+                or not comments and not failed and not missing):
             return False
         for check in failed:
             match = re.search(r'/actions/runs/(\d+)', check.get('detailsUrl', '') or '')
@@ -884,8 +889,11 @@ class Autonomous:
             body = self.pr_body(task_id, data, pr.get('body', ''), packet)
             file = self.packet_dir(task_id) / 'pr-body.md'
             file.write_text(body, encoding='utf-8')
-            self.p.require_external_write()
-            command(['gh', 'pr', 'edit', str(n), '-R', task['repo'], '--body-file', str(file)])
+            if self.p.allow_external_writes is True:
+                command(['gh', 'pr', 'edit', str(n), '-R', task['repo'], '--body-file', str(file)])
+                data.pop('pending_body_digest', None)
+            else:
+                data['pending_body_digest'] = digest
             data['plan']['pr_body'] = body
         data['feedback_digest'] = digest
         self.store(task_id, data)
@@ -911,6 +919,9 @@ class Autonomous:
         for _ in range(12):
             stage = data['stage']
             if stage not in methods:
+                break
+            if (stage in ('ISSUE', 'PUBLISH') and data.get('publication_hold') == 'external_writes_disabled'
+                    and self.p.allow_external_writes is not True):
                 break
             from failures import retry_ready, record_failure
             if not retry_ready(data, stage):
@@ -1004,6 +1015,9 @@ class Autonomous:
             for row in rows:
                 task = self.p.task(row['id'])
                 data = self.load(row['id'])
+                if (data['stage'] in ('ISSUE', 'PUBLISH') and data.get('publication_hold') == 'external_writes_disabled'
+                        and self.p.allow_external_writes is not True):
+                    continue
                 if (self.p.config.get('research', {}).get('batch_on_auto', False) and task['source'] == 'hunt'
                         and not data.get('research', {}).get('approved')):
                     continue

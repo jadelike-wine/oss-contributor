@@ -8,17 +8,21 @@
 
 ```text
 核验研究目录（只读） + 核验原有贡献白名单
-  → 每轮最多研究 3 个候选
+  → 优先推进 PR 有效反馈、待提交补丁、已复现任务和研究通过的候选
+  → 有界串行：当前实现最多 6 个任务、维护最多 6 个任务、研究最多 5 个候选
   → 目标基线 SHA + 3–5 个不同 peer 的固定 SHA
   → 有界代码/测试/文档采集 + 精确引文校验
   → 功能矩阵 + 架构迁移分析 + 定向查重 + 审查
   → READY_TO_IMPLEMENT / NEEDS_MAINTAINER_CONFIRMATION / RESEARCH_ONLY / PAUSED_POLICY
   → 原有状态机：规划 → 基线真实失败 → 实现 → 同一测试通过 + 项目检查
-  → 单独审查通道 → 指纹及政策门禁 → 发布意图 → Issue/PR
+  → 单独审查通道 → 内容身份及政策门禁 → 本地待提交材料
+  → 仅有会话发布授权且显式启用外写时：发布意图 → Issue/PR
   → 精确 head SHA 的 CI 观察、维护者回应、合并或关闭
 ```
 
 默认实现模型与审查模型仍为 `tokenking/devin/swe-2`。当前研究通道显式配置为 Hermes，研究审查标识为 **`same_model_separate_invocation`**；OpenCode 实现与 Hermes 审查仍为 `same_model_separate_channel`，均不宣称两个独立模型。新功能必须获得维护者明确方向才进入实现；高风险候选在确认方向后仍暂停等待人工补丁审查，目前没有可绕过这一门槛的人工批准 CLI。
+
+默认禁止远端推送、创建 Issue/PR、修改 PR 和其他 GitHub 写操作。`automation.enabled=true` 和仓库白名单不授予本次会话的发布权限；只有已获明确授权时才可使用全局参数 `--allow-external-writes`。无外写授权时仍可运行模型、准备隔离补丁、验证、审查和生成本地发布材料。恢复规则见 [贡献恢复说明](docs/conversion-recovery-2026-10-31.md)，本轮验收进度见 [2026-10-31 工程记录](docs/conversion-progress-2026-10-31.md)。
 
 ## 快速使用
 
@@ -36,11 +40,11 @@ python -X utf8 contribute.py catalog
 # 有界 GitHub 只读核验；更新本地目录，不授予贡献权限
 python -X utf8 contribute.py catalog --verify
 
-# 默认扫描完整的已核验研究目录（当前 32 个），刷新 Issue / PR 队列
+# 扫描完整的已核验研究目录；允许复用有效扫描缓存
 python -X utf8 contribute.py scan
 
 # 遍历全部已核验研究仓库，扫描已有 Issue、固定源码版本并逐仓库静态分诊
-# 默认不受原贡献白名单或 research-batch 每轮 3 个候选的限制
+# 默认不受原贡献白名单或 research-batch 候选额度的限制
 python -X utf8 catalog_sweep.py --output runs/catalog-sweep
 # 网络采集和模型分析可分开运行；成功结果保留，失败结果保持 unknown
 python -X utf8 catalog_sweep.py --output runs/catalog-sweep --collect-only
@@ -52,13 +56,16 @@ python -X utf8 catalog_sweep.py --output runs/catalog-sweep --analyze-only --rep
 python -X utf8 contribute.py hunt SWE-agent/mini-swe-agent "Compare session recovery and checkpoints"
 python -X utf8 contribute.py analyze <上一步任务ID>
 
-# 研究已有 hunt 队列，最多 3 个候选；不会调用发布或实现入口
+# 研究已有 hunt 队列，当前最多 5 个候选；不会调用发布或实现入口
 python -X utf8 contribute.py research-batch
 
-# 下列入口保留原有自动发布能力，生产运行前应理解上游规则
+# 默认禁止外部写入；auto/tick 会推进本地实现及研究
 python -X utf8 contribute.py auto --dry-run
 python -X utf8 contribute.py auto
 python -X utf8 contribute.py tick
+
+# 仅在本次会话已明确授权对应远端写入时使用；参数本身不能代替授权
+# python -X utf8 contribute.py --allow-external-writes auto
 
 # 清理任务 worktree：默认只删终态(SKIPPED/CLOSED/MERGED/FAILED)任务、base-* 临时副本和孤儿 worktree
 # 保留 base clone 与全部日志/遥测；--all 连同进行中任务一起删（下轮 prepare 按固定 SHA 重建）
@@ -69,9 +76,11 @@ python -X utf8 contribute.py clean-workspaces --all
 
 `auto --dry-run` 不调用模型或发布，但仍可能进行只读健康核验。`metrics/candidates/matrix/catalog`（不带 `--verify`）使用本地资料；`metrics/candidates/matrix` 通过 SQLite `mode=ro` 连接，不触发迁移。旧 `scan/status/followup/prepare/analyze/repair/verify/review/hunt/unlock` CLI 保留。
 
-`scan` 和 `tick` 的扫描阶段默认使用完整的已核验研究目录，当前为 94 个仓库，不受 `peer_repositories` 同行子集或每轮三个模型研究候选的限制。扫描仍排除过期、暂停、拒绝、退役、归档、禁用及未授予研究权限的目录项。没有目录文件的旧配置继续使用原白名单；已有目录却没有合格项时会明确报错，提示 `catalog --verify`，不会静默退回白名单。单独 `scan` 无需核验贡献看板权限；`tick` 后续的实现和发布继续使用原有贡献及维护者门禁。
+`scan` 和 `tick` 保留完整的已核验研究目录范围，不受 `peer_repositories` 同行子集或模型研究候选额度的限制。`tick` 先推进已有任务和有预留份额的研究，再扫描及观察 PR；当前每轮最多实际请求 12 个尚未命中缓存的仓库，按持久游标续扫。单独 `scan` 不受该 12 项上限限制，仍遵守运行时间预算。两者都可复用当前配置的 6 小时成功扫描缓存；将 `scanning.cache_seconds` 设为 `0` 可关闭复用。缓存命中不延长原观察时间。
 
-每轮 `runs/scan-summary.json` 保存计划范围、全部仓库、逐仓库 Issue / PR 数及总数。网络失败记为 `unknown`，中断后尚未访问的项保留 `not_scanned`；成功记录逐仓库保存，进程正常退出也不表示所有仓库都成功。此摘要仅记录扫描，源码采集和模型研究仍通过下述入口推进。
+扫描仍排除过期、暂停、拒绝、退役、归档、禁用及未授予研究权限的目录项。没有目录文件的旧配置继续使用原白名单；已有目录却没有合格项时明确报错，提示 `catalog --verify`。单独 `scan` 无需核验贡献看板权限；实现和发布继续受贡献政策门禁约束。仓库健康检查另使用 `repository_checks.cache_seconds`，当前也是 6 小时；Issue/PR 发布前强制实时检查目标仓库与贡献规则，缓存不能授予发布资格。
+
+每轮 `runs/scan-summary.json` 保存完整计划范围、全部仓库、逐仓库 Issue / PR 数及总数。实际采集标为 `scanned`，有效复用标为 `cached`，网络失败记为 `unknown`，尚未访问的项保持 `not_scanned`。开始新轮前先保留所有有效旧检查点，中断后继续；失败项重新尝试，不能把未知当空结果。统计分别报告实际扫描和缓存数，进程正常退出也不表示全目录都已成功采集。
 
 默认范围修复及 32 仓库正式入口的实网结果见 [完整目录默认扫描验收](docs/default-catalog-scan-2026-10-18.md)。
 
@@ -79,13 +88,15 @@ python -X utf8 contribute.py clean-workspaces --all
 
 `catalog_sweep.py` 默认遍历核验目录中的全部研究仓库，保存完整 `scope.json` 和 `results.json`，不会把缺失项当作无问题。每仓库最多扫描 100 个开放 Issue、200 个开放 PR，并有界读取固定 SHA 的规则、源码和测试；模型分析不是运行目标项目的测试。成功采集与分诊可恢复，失败保留 `unknown` 和诊断；原有模型预算仍生效。此入口不会自动实现或发布，静态候选的政策判断仅供后续核对，正式贡献仍须读取完整上游规则、查重、复现和验证。实际运行及上游贡献见 [2026-10-18 全目录运行记录](docs/catalog-sweep-2026-10-18.md)。
 
-`hunt` 和只读研究入口不再先探测全部贡献仓库的看板权限，仍通过已核验研究目录准入。`research-batch` 不自行创建新任务；先 `hunt` 或使用已有每周调查任务。`auto/tick` 默认创建每周调查、批量只读研究，再推进实现。已有成功研究不会被批量入口重复调用模型。研究失败按阶段最多尝试三次，预算暂停不消耗失败次数。实现保护按实际任务身份执行，即使多个已发布 PR 同时出现修改要求，同轮也只推进一个任务的代码阶段。
+`hunt` 和只读研究入口通过已核验研究目录准入，不先探测全部贡献仓库的看板权限。`research-batch` 不自行创建新任务；`auto/tick` 优先推进已有任务，再注册或复用调查并批量研究。实现、维护和研究有独立的任务额度，同一任务跨阶段不重复占用同一类额度。研究与交付分别持久轮转，研究池包括只允许研究的仓库；已有工作优先不改写研究游标。
+
+跨周相同仓库、相同主题的调查复用既有任务，成功研究不因新一周重新调用模型。规范仓库名与 Issue 编号相同的历史任务通过 `task_aliases` 关联，不删除历史；已存在独立 PR 的任务仍保留维护。日历变化或无关默认分支 SHA 变化不是重评依据；相关源码、政策、用户需求或竞争实现出现完整新证据后才应审阅重评，失败采集仍是 unknown。
 
 ## 跨 Harness 研究与证据
 
 `research.py` 使用已核验目录的类别和有限路径清单选择相关 peer，并对同等匹配项确定性轮转。一个任务保存其 peer 集合，续跑不会悄悄换掉比较对象。可用项目不足时会保留实际数量，但少于三个 peer 的矩阵不会进入功能实现队列。
 
-目标文件由控制器从 `git show <base_sha>:<path>` 读取，同行文件从 GitHub 的 `contents?ref=<sha>` 读取。目标适用的贡献、安全和嵌套 `AGENTS.md` 优先纳入有限上下文；随后按主题选择源码、测试、文档及可用设计/更新材料。大于 60,000 字节的文件不进入候选读取范围；每个文件再受字符截断限制。截断以外的内容不能用于引文验证。
+目标文件由控制器从 `git show <base_sha>:<path>` 读取，同行文件从 GitHub 的 `contents?ref=<sha>` 读取。目标适用的贡献、安全和嵌套 `AGENTS.md` 优先纳入有限上下文；随后按主题选择源码、测试、文档及可用设计/更新材料。大于 60,000 字节的文件不进入候选读取范围；每个文件再受字符截断限制。截断以外的内容不能用于引文验证。控制器保存 `evidence_sources` 编号，绑定仓库、固定 SHA、路径和内容摘要；模型优先返回 `{evidence_id,quote}`，展开后仍精确校验引文，未知、过期或冲突编号均拒绝。旧 `{repo,path,quote}` 格式仍受相同证据门禁约束。
 
 目标采集先在固定 SHA 上进行主题内容检索，再按源码、测试和文档配额选择材料；贡献规则单独预留位置。文件名按词匹配，避免 `minisweagent` 这样的包名让所有文件误中 `agent`。配置和初始化辅助文件不再优先挤占功能源码。研究模型只接收这些有界材料：OpenCode 拒绝全部工具，Hermes 使用非空 `-t none`（空字符串会启用平台默认工具），并拒收包含工具事件的结果。研究模型不可自行读取更多文件、联网、执行命令或委派。实现/规划入口仍使用原有受限工具权限。文件采集完成后立即保存 checkpoint；预算中断会保留已完成的目标和 peer 快照。失败 peer 可以在下一次研究重试；请求失败不会变成能力缺失。
 
@@ -112,7 +123,7 @@ README 没有提到功能不构成缺失证据；README 声称支持也不能替
 
 [矩阵示例](examples/feature-matrix.fixture.json) 来自真实执行的**本地集成测试夹具**：`owner/repo` 和 peer 内容均为模拟材料。它展示序列化格式，不是完成过的真实上游研究成果。
 
-## 功能优先队列
+## 候选队列
 
 | 队列 | 行为 |
 | --- | --- |
@@ -121,13 +132,13 @@ README 没有提到功能不构成缺失证据；README 声称支持也不能替
 | `RESEARCH_ONLY` | 证据不充分、目标已有等价功能、重复或审查未通过，不可实现/发布 |
 | `PAUSED_POLICY` | 明确禁止自动 Issue（`automated_issue=false`）、本人提交/审查要求（`manual_issue_submission`/`human_pr_review_required`）或高风险人工门槛，暂停自动贡献。模型仅报告 `automated_pr=false` 不再判死——该候选降级为 `NEEDS_MAINTAINER_CONFIRMATION`，经讨论 Issue 等待维护者方向，不会自动实现或发 PR |
 
-数值优先级只在证据与政策门槛通过后产生：功能优先于 Bug，低风险略优先。价值、现有替代方案、架构成本、维护者方向、测试可行性和接受可能性的论据必须提供给审查者；没有这些依据的候选不能靠模型打高分进入实现。原有 Issue 初筛评分和功能标签的保守 hold 保留，主动功能研究由 hunt/batch 承担。
+数值优先级只在证据与政策门槛通过后产生：可实现候选优先于待确认提案，低风险略优先，功能类别本身不再固定加分。审查要求考虑明确需求、用户价值、范围、独立复现、验证成本、架构适配、候选时效及已有维护者/外部贡献观察；缺失信息保持 unknown，不编造接受概率。原有 Issue 初筛关键词分数只是分诊线索，不能代替证据、查重和政策门禁。高价值功能研究保留在单独研究份额中。
 
 查重由控制器统一仓库限定，清除模型查询中的仓库名普通词和自带 `repo:`，避免假阴性；记录原始及实际查询。结果超过第一页时控制器自动翻页拉取（每查询最多 100 条），全部命中都经审查后才算完整搜索；超过上限或上游 `incomplete_results` 仍记为不完整，可以依据已读结果拒绝，不能据此放行。功能查重区分已有实现/竞争 PR 和开放的功能请求：前者仍拒绝，后者须经审查确认关联已读取的开放 Issue，并等待维护者方向，不重复开 Issue，也不把用户需求当作维护者批准。
 
 队列是原有状态机的附加门禁，不替代状态机。旧任务继续按 `PLAN → REPRODUCE → ISSUE/REPAIR → PATCH_READY → AUTO_REVIEW → PUBLISH → PR_OPEN` 恢复。维护者确认不能覆盖 `automated_issue=false` 或本人审查要求；`automated_pr=false` 只能阻止直接实现/发布，不阻止讨论 Issue。
 
-编号 Issue 的 bug 修复不等待维护者逐一批准：Issue 带 `accepted`、`help wanted`、`good first issue`、`triaged` 或 `bug` 标签时，`WAITING_MAINTAINER` 直接进 `REPAIR`；无标签、无维护者评论时等待 `wait_maintainer_days`（默认 7 天）后自动放行。上游对明确 bug 的惯例是欢迎 PR——错过窗口让别人抢先，风险大于提交一个可能被重定向的 PR。高风险（`risk=high`）或 `automated_pr=false` 仍保持等待。有 revert 历史、方向不明或维护者明确要求讨论的例外，模型仍以 `wait` 决策降级。
+仓库明确规则高于通用分诊信号，例如 Agno 必须具有 `ready` 标签，普通 `bug` 标签不能替代。`WAITING_MAINTAINER` 不再按标签或等待天数自动认定维护者批准：仅审阅真实人类维护者的有效评论，并记录评论 ID、内容摘要和方向审查结果。普通讨论、机器人评论、旧 `maintainer_approved=true` 布尔值及超时均不是批准。贡献规则允许、需求清晰且可独立复现的小修复可以按正常门禁推进，不伪造维护者背书。
 
 ## 仓库目录与准入
 
@@ -158,8 +169,16 @@ Goose 的指定看板 `Ready`、`manual_issue_submission`、`human_pr_review_req
 
 | 配置 | 默认值/约束 |
 | --- | --- |
+| `automation.implementation_tasks_per_tick` | 当前 6；缺省沿用 `max_tasks_per_tick`，有界串行推进不同任务 |
+| `automation.maintenance_tasks_per_tick` | 当前 6；独立于实现/研究额度，PR 修复进入代码阶段后还需实现名额 |
+| `automation.max_infrastructure_attempts` | 默认/当前 3；基础设施故障与质量失败分别计数 |
+| `automation.infrastructure_cooldown_seconds` | 默认/当前 300 秒，指数退避，每次最多 3,600 秒；耗尽后停止自动重试 |
+| `automation.verification_max_age_seconds` | 缺省 86,400 秒；发布前验证收据超时须重跑红绿检查及审查 |
+| `scanning.repositories_per_tick` | 当前 12；每轮实际网络采集上限，保留完整目录和持久扫描游标 |
+| `scanning.cache_seconds` / `repository_checks.cache_seconds` | 当前均为 21,600 秒；旧配置缺省 0，设 0 禁用对应缓存 |
 | `research.model_channel` | `opencode` 或 `hermes`；缺省 OpenCode，当前配置 Hermes；不静默切换 |
-| `research.candidates_per_run` | 3，范围 1–10 |
+| `research.candidates_per_run` | 缺省 3，当前 5，范围 1–10 |
+| `research.reserve_model_calls` / `research.reserve_seconds` | 缺省预留 2 次调用和 600 秒给研究；从单轮既有总额度内分配，不增加总预算 |
 | `research.peers_per_candidate` | 3，范围 3–5 |
 | `research.files_per_peer` | 4，范围 2–6 |
 | `research.target_files` | 12，范围 3–25，包含规则文件 |
@@ -172,7 +191,7 @@ Goose 的指定看板 `Ready`、`manual_issue_submission`、`human_pr_review_req
 | `timeouts.model_seconds` / `test_seconds` | 当前 1,500 秒，缺省回退 `timeout_seconds` |
 | `timeouts.stage_seconds` | 单阶段 2,400 秒；auto/task 等包含多个阶段的观测跨度不另加阶段截止线 |
 | `timeouts.remote_ci_seconds` | 现有专用远端 CI 轮询最多 1,800 秒，再受运行预算限制 |
-| `budgets.run_model_calls` | 单轮最多 16 次模型入口调用，审查计入 |
+| `budgets.run_model_calls` | 缺省 16，当前 32 次模型入口调用；本轮未增加该总预算，审查计入 |
 | `budgets.task_model_calls` | 单任务跨轮累计最多 40 次入口调用 |
 | `budgets.daily_model_calls` | 默认 `null`，每日模型调用次数不限；设置数字可恢复上限 |
 | `budgets.run_seconds` / `task_seconds` | 单轮 5,400 秒；单任务本轮 3,600 秒 |
@@ -180,7 +199,9 @@ Goose 的指定看板 `Ready`、`manual_issue_submission`、`human_pr_review_req
 | `budgets.run_cost_usd` / `daily_cost_usd` | 默认 null；当前无可信账单数据，金额限制不执行，依靠调用/时间限制 |
 | `review_model` | `provider/model`，缺省沿用实现模型，默认没有切换供应商或模型 |
 
-所有受管命令都会被当前阶段、任务、运行及日预算的剩余时间进一步截短。达到预算后保留阶段、研究 checkpoint 和已预留调用，下一轮从保存处继续，不消耗普通失败重试。单任务累计调用耗尽不会自动清零，需要检查原因并明确调整预算。执行耗时使用单调时钟，追踪时间使用 UTC。普通命令失败、超时、失败阶段重试、暂停/跳过/等待维护者分别记录。
+所有受管命令都会被当前阶段、任务、运行及日预算的剩余时间进一步截短。达到预算后保留阶段、研究 checkpoint 和已预留调用，下一轮从保存处继续，不消耗普通失败重试。单任务累计调用耗尽不会自动清零，需要检查原因，不能通过提高预算掩盖重复失败。执行耗时使用单调时钟，追踪时间使用 UTC。
+
+网络、限流、证书、服务不可用、模型 JSON 格式、超时、证据不足、补丁错误和政策阻塞分别记录。前六类采用独立基础设施计数与有界冷却，不增加候选质量失败次数；证据和补丁问题仍走质量重试路径，政策暂停保持原阶段。模型通道同轮两次传输/服务故障后暂停该通道后续模型阶段，仍允许不依赖模型的本地阶段。不会关闭 TLS 校验或静默切换模型。详见 [恢复和故障处理](docs/conversion-recovery-2026-10-31.md)。
 
 每条调用记录是一次 **OpenCode/Hermes CLI 入口调用尝试**，在启动前预留，启动失败也消耗调用预算，不等于单个 HTTP 模型请求。OpenCode 一次入口内部可以有多个模型步骤；日志可取得时另记 `reported_provider_steps`。入口预算和运行时限是硬门槛，当前不提供每个内部步骤的实时费用熔断。研究入口禁用工具，不能依靠内部工具循环扩大源码读取范围。
 
@@ -208,18 +229,19 @@ Goose 的指定看板 `Ready`、`manual_issue_submission`、`human_pr_review_req
 
 ## SQLite 升级与恢复
 
-首次初始化 `Pipeline` 自动执行可重复的 `CREATE TABLE/INDEX IF NOT EXISTS`。新增五张表：`research_candidates`、`runs`、`stages`、`model_calls`、`pr_observations`。不删除、重建或清空 `state/tasks.db`，不改任务 ID、原有 tasks/automation/events/scheduler/locks 数据。
+首次初始化 `Pipeline` 自动执行兼容旧数据的增量迁移。研究和观测表继续保留，当前另增加 `task_aliases` 及 `runs.owner_pid`；不删除、重建或清空 `state/tasks.db`，不改历史任务 ID。重复任务通过别名关联，历史任务、事件、候选及发布记录均保留。
 
-迁移不依赖手工操作。复制旧数据库前应停止调度；需要备份时使用 SQLite backup API，避免只复制仍处于 WAL 模式的主文件。本次对真实数据库使用 backup API 保存了本地备份，并两次迁移校验：1,025 条任务、99 条事件、8 条 automation、1 条 scheduler、0 条锁，原表内容哈希全部一致，`integrity_check=ok`。数据库和备份继续由 `.gitignore` 排除。
+分析使用 SQLite backup API 保存一致性快照，不直接分析活动生产连接；修改生产状态前先核实控制器及子进程已停止并再次备份，避免只复制 WAL 数据库主文件。2026-10-31 的真实历史副本包含 20,031 条任务，相关历史表整行哈希保持不变，两次迁移与恢复幂等，`integrity_check=ok`；详见 [历史兼容与调度回放](docs/conversion-history-replay-2026-10-31.md)。该副本验证不表示生产库已执行恢复。数据库和备份由 `.gitignore` 排除。
 
-阶段/调用使用唯一 ID，结束时更新原记录；多次查看统计不累计计数。异常时保存已产生的观测；进程被强制杀死会留下未结束记录，已保存的部分耗时不是完整耗时。恢复依靠原有控制器/子进程 PID 锁和任务状态，不依靠指标完整性。矩阵和上下文文件使用原子替换，避免中断留下半份 JSON。旧候选和历史指标不会被猜测回填。
+阶段/调用使用唯一 ID，结束时更新原记录；多次查看统计不累计计数。被强制终止的运行可能留下 `running`，已保存耗时只是最后检查点。`recover_interrupted` 必须确认记录的 owner 和锁内父/子进程均已停止；旧版无 owner PID 的行默认不恢复，需完成进程核验后显式提供 `legacy_processes_checked=True`。恢复记录中断原因和保存的任务阶段，不推算缺失耗时，也不清除失败记录。矩阵和上下文文件通过原子替换保存。
 
 ## 保留的安全与发布门禁
 
 - 基线 worktree 上真实出现指定回归断言，补丁 worktree 上同一测试通过，项目检查通过。
-- 验证、审查、发布的补丁指纹保持一致；旧收据不能批准新补丁。
+- 验证、审查、发布使用 `tree-v2:<Git tree>` 内容身份；未跟踪、暂存、已提交和重启后的等价内容保持一致，真实内容变化必须重新验证和审查。旧格式收据不能自动换算，必须重跑。
 - worktree、进程/子进程锁、有限阶段重试及 SQLite 恢复保持有效。
-- Issue/PR 创建前持久化意图；远端响应丢失时先查找既有结果，不盲目重建。
+- Issue/PR 创建前持久化意图；响应丢失后按原身份对账，未找到时最多三次成功查询、间隔 15 分钟，之后转人工核验；网络失败不等同于空结果，pending 意图不会自动清空重发。
+- 提交前保存预期 tree；提交成功但响应丢失可恢复原提交。推送失败后按精确提交 SHA 核对远端分支，不强推；钩子改变内容会拒绝复用批准。
 - 发布文本和补丁继续检查凭据；安全候选保留本地，不能进入公开披露。
 - 本人提交、本人工程审查、看板门槛及自动贡献禁令高于模型或一般维护者回复。
 - 旧 PR 跟进、精确 head SHA 的 CI 观察、特殊 OpenCode Linux 验证收据继续保留。该远端 CI 配方仍只适用于原有特定任务，不是通用 CI 服务。
@@ -228,7 +250,9 @@ worktree 不是操作系统沙箱。实际测试/依赖安装会在本机执行�
 
 ## 验证与边界
 
-完整测试使用 `python -X utf8 -m unittest discover -v`。原始基线 96 项全部通过；最终 139 项（新增 43 项）全部通过，108.541 秒，无失败或跳过。新增测试覆盖多 peer 证据/矩阵、队列与维护者确认、目录准入、模型身份和 token、预算恢复、批量上限、只读统计和真实旧库迁移。测试使用临时 Git 仓库、本地 bare remote 和模拟 GitHub/模型接口，开发过程没有向真实上游创建 Issue、PR、推送或合并。
+完整测试使用 `python -X utf8 -m unittest discover -v`。测试分为三类报告：临时 Git/bare remote、模拟 GitHub/模型接口的回归测试；完整真实历史数据库副本的兼容与调度回放；真实网络/模型/上游源码上的有界运行和补丁验证。三类不能相互替代，模拟发布不计为上游提交，调度额度通过不计为完成修复。
+
+早期工程记录中的 96→139 项测试、1,025 条旧库记录等是 2026-10-17 的历史结果，不是当前验收数量。2026-10-31 的检查、真实验证、剩余事项和最终测试结果以 [当前工程记录](docs/conversion-progress-2026-10-31.md) 为准；未完成项不会据本地测试或机器人回应宣称完成，也不据短样本宣称合并率提高。
 
 当前限制：有界路径选择可能遗漏实现，此时必须保持 scope 限定或 unknown；复杂许可证与组织规则仍需人工进一步核验；政策的自然语言语义和功能价值依赖有证据的审查；默认审查模型相同；可靠费用不可获取；CLI 调用预算不是每个模型内部步骤的硬计数器；历史运行不补造指标；统计只能在未来真实贡献得到回应/合并后反映接受率。
 

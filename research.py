@@ -240,6 +240,8 @@ def collect(engine, task):
             packet['recent_releases'] = [
                 {k: str(item.get(k) or '')[:2000] for k in ('tag_name', 'body', 'html_url')}
                 for item in request('api', f"repos/{task['repo']}/releases?per_page=3")]
+        from feature_matrix import evidence_catalog
+        packet['evidence_sources'] = evidence_catalog(packet)
         if len(json.dumps(packet, ensure_ascii=False)) > options['context_characters']:
             raise BudgetExhausted('research_context_characters_exhausted')
         packet['complete'] = True
@@ -275,12 +277,17 @@ def validate(answer, task, packet):
     if not isinstance(policy, dict) or any(type(policy.get(k)) is not bool for k in
             ('automated_issue', 'automated_pr', 'maintainer_required')) or not policy.get('reason'):
         raise ValueError('Explicit upstream policy assessment required')
+    # Resolve controller references before exact checks; supplied/stale IDs grant no trust.
+    from feature_matrix import evidence_catalog, resolve_evidence
+    catalog = evidence_catalog(packet)
     # Quotes are checked against actual pinned files, not model-provided URLs.
     for group in ('evidence', 'policy_evidence'):
         evidence = answer.get(group)
         if not isinstance(evidence, list) or not evidence:
             raise ValueError('Missing research evidence: ' + group)
-        for item in evidence:
+        for index, item in enumerate(evidence):
+            item = resolve_evidence(item, catalog)
+            evidence[index] = item
             if not isinstance(item, dict) or not all(isinstance(item.get(k), str) and item[k].strip() for k in ('repo', 'path', 'quote')):
                 raise ValueError('Invalid source evidence')
             if item['repo'] == task['repo']:
@@ -299,6 +306,8 @@ def validate(answer, task, packet):
                 sha = peer.get('sha')
             if item['quote'] not in text or not text:
                 raise ValueError('Research quote does not match source: ' + item['path'])
+            if item.get('sha', sha) != sha:
+                raise ValueError('Research evidence SHA mismatch')
             item['sha'] = sha
             from feature_matrix import file_type
             item['file_type'] = file_type(item['path'])
@@ -337,7 +346,14 @@ def correction_feedback(answer, packet, error):
             for path in (status.get('checked_paths') or []):
                 if not isinstance(path, str) or path not in sources.get(repo, {}).get('files', {}):
                     errors.append('Unread checked_path for ' + repo + ': ' + str(path))
+    from feature_matrix import evidence_catalog, resolve_evidence
+    catalog = evidence_catalog(packet)
     for claim in claims:
+        try:
+            claim = resolve_evidence(claim, catalog)
+        except ValueError as failure:
+            errors.append(str(failure))
+            continue
         source = sources.get(claim.get('repo'), {}).get('files', {})
         path, excerpt = claim.get('path'), claim.get('quote')
         if not isinstance(path, str) or not isinstance(excerpt, str) or not excerpt or excerpt not in source.get(path, ''):
@@ -355,7 +371,10 @@ def run(engine, task_id, data):
     packet = collect(engine, task)
     from feature_matrix import PROMPT, build, persist
     from telemetry import ACTIVE
-    prompt = ('Prioritize valuable feature development; bugs are supplementary. Research ONE valuable opportunity, or return none. Read actual target code, docs, tests, '
+    prompt = ('Research ONE valuable opportunity, or return none. Prefer explicit user demand, bounded scope, '
+        'independently reproducible failures and affordable verification under the current architecture and policy. '
+        'Retain valuable feature ideas, but unconfirmed direction must wait separately from deliverable fixes. '
+        'Read actual target code, docs, tests, '
         'designs and changelogs and compare supplied official peer evidence. Cover features, performance, '
         'security, UX/accessibility and reliability as relevant to the focus. A seemingly missing feature is '
         'not evidence: assess the supplied implementations, tests and design docs; consider project scope. '
@@ -367,7 +386,8 @@ def run(engine, task_id, data):
         'Return ONLY JSON with decision=candidate|none|private, reason. For candidate include category='
         'feature|performance|security|ux|reliability|bug|tests, risk=low|medium|high, '
         + ', '.join(FIELDS) + ' (EVERY one of these fields must be a nonempty STRING, not an array/object), duplicate_queries (1-2 precise searches), '
-        'evidence and policy_evidence arrays of {repo,path,quote} with EXACT source excerpts. '
+        'evidence and policy_evidence arrays of {evidence_id,quote}, using controller evidence_sources IDs '
+        'and EXACT source excerpts. Legacy {repo,path,quote} is accepted only for actually supplied files. '
         'Prefer short contiguous quotes under 200 characters; never join separated lines or paraphrase a quote. '
         'policy={automated_issue:bool,automated_pr:bool,maintainer_required:bool,reason:string}. '
         'automated_pr describes whether upstream POLICY permits automated implementation/PRs once all '
@@ -375,11 +395,15 @@ def run(engine, task_id, data):
         'An explicit automation ban or unverifiable policy means automated_pr=false, which approval cannot override. '
         'Describe cost in effort. acceptance means maintainer acceptance LIKELIHOOD with evidence and rationale, '
         'not test acceptance criteria. State who requested this or which contribution priority it fits; '
+        'consider validation cost, architecture fit, candidate age, actual maintainer responses and prior '
+        'external contribution acceptance when supplied; label missing observations unknown. '
         'do not invent maintainer approval. Keep test acceptance criteria in validation. Include concrete validation commands, '
         'expected result and affected files in scope. Policy evidence must quote applicable contribution rules. '
         'Features, architecture changes, uncertain designs and non-low risks always need maintainer direction '
         'before any implementation. Small proven bugs/tests/performance/UX can proceed only if policy permits. '
-        'issue_body must be English, accurate about static evidence and pending tests. At most 25 source reads.\n'
+        'issue_body must be English, accurate about static evidence and pending tests. Be concise: '
+        'one or two sentences per prose field, at most three evidence entries per group, no repeated '
+        'quotations in rationale or issue_body. Do not echo source files or the input packet.\n'
         + (PROMPT if packet.get('schema_version') == 2 else '') + json.dumps(packet, ensure_ascii=False))
     if packet.get('schema_version') == 2:
         prompt += ('\nEND OF SOURCE DATA. Output schema reminder:\n' + PROMPT +
@@ -453,17 +477,38 @@ def run(engine, task_id, data):
         data['reason'] = candidate.get('skip_reason')
         engine.move(task_id, data, 'SKIPPED')
         return result
+    local_candidates = []
+    for row in engine.db.execute('SELECT task,queue,matrix FROM research_candidates WHERE lower(repo)=lower(?) AND task!=? ORDER BY updated_at DESC LIMIT 20', (task['repo'], task_id)):
+        prior = json.loads(row['matrix'])
+        local_candidates.append({'task': row['task'], 'queue': row['queue'],
+            **{key: prior.get(key) for key in ('feature_key', 'name', 'user_scenario', 'gap', 'category')}})
     gate = engine.judge(task_id, 'research-review', {
         'gate': 'Is this valuable, non-duplicate, grounded in actual implementation and project scope? '
-                'Check policy evidence, feature absence claims, cost and acceptance rationale. '
+                'Check policy evidence, feature absence claims, concrete demand, bounded scope, reproduction '
+                'feasibility, validation cost, architecture fit, freshness, and acceptance rationale. '
+                'Maintenance response or external contributor acceptance must be supported by actual '
+                'supplied observations; missing evidence remains unknown and cannot be invented. '
                 'Reject unsupported factual claims, unsourced peer comparisons or any exploitable security disclosure. '
                 'Explicitly scoped static evidence and open design choices deferred to maintainers are acceptable for a '
                 'discussion proposal; do not demand completed implementation/tests or maintainer approval at this research gate. '
                 'Do not approve claims of exactly-once replay or restored external state from transcript-only snapshots. Automated low-risk handling '
                 'requires affirmative upstream policy evidence; otherwise require maintainer discussion. '
                 'When existing_issue is supplied, the controller will reuse that discussion and wait for maintainer '
-                'direction; it will NOT open a new issue. Do not reject that planned reuse as duplicate publication.',
-        'opportunity': answer, 'context': packet, 'existing_issue': candidate.get('existing_issue')})
+                'direction; it will NOT open a new issue. Do not reject that planned reuse as duplicate publication. '
+                'Compare supplied local_candidates by user need and implementation scope, not title alone. '
+                'If one already covers the same work, reject and return local_duplicate_task naming that supplied task. '
+                'Never infer semantic equivalence from keywords alone.',
+        'opportunity': answer, 'context': packet, 'existing_issue': candidate.get('existing_issue'),
+        'local_candidates': local_candidates})
+    if gate.get('local_duplicate_task'):
+        duplicate_id = gate['local_duplicate_task']
+        if gate['approved'] or duplicate_id not in {item['task'] for item in local_candidates}:
+            raise ValueError('Local semantic duplicate must be a reviewed supplied task with a rejection')
+        data['local_duplicate'] = {'task': duplicate_id, 'reason': gate['reason'], 'at': now()}
+        data['reason'] = 'Existing local research covers this scope: ' + duplicate_id
+        engine.move(task_id, data, 'SKIPPED')
+        save(engine.packet_dir(task_id) / 'local-duplicate-review.json', {'candidates': local_candidates, 'review': gate})
+        return result
     if not gate['approved']:
         if not data.get('research_revision_attempted'):
             data['research_revision_attempted'] = True

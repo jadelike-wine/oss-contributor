@@ -16,7 +16,7 @@ import sys
 import tempfile
 import time
 from urllib.parse import unquote, urlsplit
-from repository_policy import contributing_guide, inspect_repository, project_items, ready_issue
+from repository_policy import contributing_guide, inspect_repository, project_items, ready_issue, contribution_constraints, issue_policy_reason
 from ci_status import observe_ci
 from telemetry import BudgetExhausted, migrate, observed, timed_command
 
@@ -28,6 +28,37 @@ ROOT = Path(__file__).resolve().parent
 
 class ContributionPaused(RuntimeError):
     """A policy hold, not a failed research attempt."""
+
+
+def enforce_external_write_policy(args):
+    from telemetry import ACTIVE
+    current = ACTIVE.get()
+    if current and getattr(current.p, 'allow_external_writes', False) is True:
+        return
+    tool = Path(args[0]).stem.lower()
+    if tool == 'git' and 'push' in args[1:]:
+        raise ContributionPaused('External writes disabled: git push')
+    if tool == 'gh':
+        read = (len(args) > 2 and (args[1], args[2]) in {
+            ('issue', 'list'), ('issue', 'view'), ('pr', 'list'), ('pr', 'view'), ('pr', 'checks'),
+            ('run', 'view'), ('run', 'list'), ('repo', 'view'), ('auth', 'status'), ('search', 'issues'), ('search', 'prs')})
+        if len(args) > 1 and args[1] == 'api':
+            methods = [args[i + 1].upper() for i, x in enumerate(args[:-1]) if x in ('-X', '--method')]
+            methods += [x.split('=', 1)[1].upper() for x in args if x.startswith('--method=')]
+            methods += [x[2:].upper() for x in args if x.startswith('-X') and x != '-X']
+            method = methods[0] if len(methods) == 1 else 'AMBIGUOUS' if methods else None
+            read = method in ('GET', 'HEAD') or (method is None and not any(x in args for x in ('-f', '-F', '--field', '--raw-field', '--input')))
+            if any(x.startswith(('--input=', '--field=', '--raw-field=')) for x in args) and method is None:
+                read = False
+            if any(x.startswith(('-f', '-F')) and len(x) > 2 for x in args) and method is None:
+                read = False
+            if 'graphql' in args:
+                queries = [x.partition('=')[2] for x in args if x.startswith('query=')]
+                read = (not any(x == '--input' or x.startswith('--input=') for x in args) and len(queries) == 1 and
+                        queries[0].lstrip().startswith(('query', '{')) and
+                        not re.search(r'\bmutation\b', queries[0], re.I))
+        if not read:
+            raise ContributionPaused('External writes disabled: GitHub mutation')
 
 def now():
     return dt.datetime.now(dt.timezone.utc).isoformat()
@@ -59,15 +90,12 @@ def save(path, value):
 
 @timed_command
 def execute(args, cwd=None, timeout=180, env=None, started=None, output_prefix=None):
+    enforce_external_write_policy(args)
     env = dict(os.environ if env is None else env)
     entries = {'npm': 'npm/bin/npm-cli.js', 'pnpm': 'pnpm/bin/pnpm.cjs', 'corepack': 'corepack/dist/corepack.js'}
     if os.name == 'nt' and args[0] in entries:
-        launcher = shutil.which(args[0])
-        node = shutil.which('node')
-        script = Path(launcher).parent / 'node_modules' / entries[args[0]] if launcher else None
-        if not node or not script or not script.is_file():
-            raise ValueError('Missing Node entry point for ' + args[0])
-        args = [node, str(script), *args[1:]]
+        from delivery import node_command
+        args = [*node_command(args[0]), *args[1:]]
     local_bin = ROOT / 'state/tooling/node_modules/bun/bin'
     if (local_bin / ('bun.exe' if os.name == 'nt' else 'bun')).is_file():
         env['PATH'] = str(local_bin) + os.pathsep + env.get('PATH', '')
@@ -190,8 +218,9 @@ def rank(issue):
     return score, hold
 
 class Pipeline:
-    def __init__(self, root=ROOT):
+    def __init__(self, root=ROOT, *, allow_external_writes=False):
         self.root = Path(root)
+        self.allow_external_writes = allow_external_writes
         self.config = json.loads((self.root / "config.json").read_text(encoding="utf-8"))
         self._repository_status = None
         self._repository_evidence = {}
@@ -214,9 +243,16 @@ class Pipeline:
             self.db.execute('ALTER TABLE locks ADD COLUMN child_pid INTEGER')
             self.db.commit()
         migrate(self.db)
+        from scheduling import migrate as migrate_scheduling
+        migrate_scheduling(self.db)
+        self.db.commit()
+
+    def require_external_write(self):
+        if self.allow_external_writes is not True:
+            raise ContributionPaused('External publication is disabled; patch and evidence remain local')
 
     @observed('health')
-    def refresh_repository_status(self):
+    def refresh_repository_status(self, force=False):
         """Check once per process; keep pauses separate from historical task stages."""
         options = self.config.get('repository_checks', {})
         path = self.root / 'state/repositories.json'
@@ -230,6 +266,19 @@ class Pipeline:
         self._repository_evidence = {}
         retired = options.get('retired', {})
         for repo in dict.fromkeys([*self.config['repositories'], *retired]):
+            cached_status = previous.get(repo, {})
+            age = float('inf')
+            try:
+                age = (dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(cached_status['checked_at'])).total_seconds()
+            except (KeyError, ValueError, TypeError):
+                pass
+            snapshot = self.root / 'runs/snapshots' / repo.replace('/', '--')
+            cached_rules = snapshot / 'CONTRIBUTING.md'
+            if (not force and cached_status.get('active') and 0 <= age < options.get('cache_seconds', 0)
+                    and cached_rules.exists()):
+                statuses[repo] = dict(cached_status)
+                self._repository_evidence[repo] = ({}, cached_rules.read_text(encoding='utf-8'))
+                continue
             status = {'active': False, 'contribute': False, 'checked_at': now()}
             try:
                 repo_name(repo)
@@ -262,6 +311,7 @@ class Pipeline:
             except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired, KeyError, TypeError) as error:
                 status.update(active=False, contribute=False, reason=f'Health/policy check failed ({type(error).__name__}): {error}')
             statuses[repo] = status
+            save(path, {'checked_at': now(), 'repositories': {**previous, **statuses}})
             mode = 'ACTIVE' if status['contribute'] else 'CONTRIBUTION_PAUSED' if status['active'] else 'PAUSED'
             message = f"repository {repo}: {mode}" + (': ' + status['reason'] if status.get('reason') else '')
             print(message, file=sys.stderr)
@@ -286,13 +336,25 @@ class Pipeline:
         if task['repo'] not in research_pool(self):
             raise ContributionPaused('Contribution paused: repository is outside the verified read-only research pool')
 
-    def require_contribution(self, task, publishing=False):
+    def require_contribution(self, task, publishing=False, refresh=False):
         repo = task['repo']
         reason = None
+        if publishing or refresh:
+            # Cached scans never authorize a public write. Refresh the target's rules.
+            meta, _, rules, _, reason = inspect_repository(repo,
+                self.config.get('repository_checks', {}).get('max_inactive_days', 180), gh, command)
+            self._repository_evidence[repo] = (meta, rules)
+            if reason:
+                raise ContributionPaused(reason)
         if repo not in self.effective_repositories(contribution=True):
             reason = (self._repository_status or {}).get(repo, {}).get('reason') or 'Repository is outside the effective contribution allowlist'
         else:
-            policy = self.config.get('repository_checks', {}).get('policies', {}).get(repo, {})
+            configured = self.config.get('repository_checks', {}).get('policies', {}).get(repo, {})
+            rules = self._repository_evidence.get(repo, ({}, ''))[1]
+            policy = contribution_constraints(rules, configured)
+            if policy.get('required_issue_labels'):
+                issue = gh('api', f"repos/{repo}/issues/{task['number']}") if task['number'] else None
+                reason = issue_policy_reason(issue, policy)
             if policy.get('manual_issue_submission') and not task['number']:
                 reason = 'Upstream requires the contributor to submit an issue personally; automatic issue publication is disabled'
             elif publishing and policy.get('human_pr_review_required'):
@@ -311,10 +373,10 @@ class Pipeline:
                 self.event(task['id'], 'Contribution paused: ' + reason)
             raise ContributionPaused('Contribution paused: ' + reason)
 
-    def fair_candidates(self, rows):
+    def fair_candidates(self, rows, repositories=None, cursor_name='research'):
         """Round-robin eligible repositories, retaining the supplied order within each."""
-        repos = self.effective_repositories(contribution=True)
-        cursor = self.db.execute("SELECT last_repo FROM scheduler WHERE name='research'").fetchone()
+        repos = list(repositories) if repositories is not None else self.effective_repositories(contribution=True)
+        cursor = self.db.execute('SELECT last_repo FROM scheduler WHERE name=?', (cursor_name,)).fetchone()
         if cursor and cursor['last_repo'] in repos:
             start = repos.index(cursor['last_repo']) + 1
             repos = repos[start:] + repos[:start]
@@ -335,6 +397,11 @@ class Pipeline:
             self.db.execute("INSERT INTO scheduler VALUES ('research',?) ON CONFLICT(name) "
                             'DO UPDATE SET last_repo=excluded.last_repo', (repo,))
 
+    def delivery_turn(self, repo):
+        with self.db:
+            self.db.execute("INSERT INTO scheduler VALUES ('delivery',?) ON CONFLICT(name) "
+                            'DO UPDATE SET last_repo=excluded.last_repo', (repo,))
+
     def track_process(self, lock, pid):
         with self.db:
             self.db.execute('UPDATE locks SET child_pid=? WHERE name=?', (pid, lock))
@@ -344,12 +411,17 @@ class Pipeline:
             if not process_running(row['pid']) and not process_running(row['child_pid']):
                 with self.db:
                     self.db.execute('DELETE FROM locks WHERE name=? AND pid=?', (row['name'], row['pid']))
+        from telemetry import recover_interrupted
+        recover_interrupted(self.db, process_running)
 
     @contextlib.contextmanager
     def lock(self, name):
         try:
             with self.db:
-                self.db.execute("INSERT INTO locks(name,pid,started) VALUES (?,?,?)", (name, os.getpid(), now()))
+                inserted = self.db.execute("INSERT INTO locks(name,pid,started) SELECT ?,?,? WHERE NOT EXISTS "
+                    "(SELECT 1 FROM locks WHERE name='maintenance' OR ?='maintenance')", (name, os.getpid(), now(), name))
+                if not inserted.rowcount:
+                    raise RuntimeError('Maintenance lock conflicts with active work; retry after it stops')
         except sqlite3.IntegrityError:
             raise RuntimeError(f"Lock {name} exists. Inspect status; only unlock after its process stops.")
         try:
@@ -377,7 +449,7 @@ class Pipeline:
         return repos
 
     @observed('scan')
-    def scan(self):
+    def scan(self, max_repositories=None):
         changed = 0
         with self.lock("scan"):
             repos = self.scan_repositories()
@@ -385,11 +457,39 @@ class Pipeline:
             summary = {'started': now(), 'scope': scope, 'planned_repositories': len(repos), 'completed': False,
                        'repositories': [{'repo': repo, 'status': 'not_scanned'} for repo in repos]}
             summary_path = self.root / 'runs/scan-summary.json'
+            from scheduling import reusable_scan_record, scan_key
+            try:
+                previous = json.loads(summary_path.read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                previous = {}
+            ttl = self.config.get('scanning', {}).get('cache_seconds', 0)
+            cursor = self.db.execute("SELECT last_repo FROM scheduler WHERE name='scan'").fetchone()
+            if cursor and cursor['last_repo'] in repos:
+                start = repos.index(cursor['last_repo']) + 1
+                summary['repositories'] = summary['repositories'][start:] + summary['repositories'][:start]
+            failed = {record.get('repo') for record in previous.get('repositories', []) if record.get('status') == 'unknown'}
+            summary['repositories'].sort(key=lambda record: record['repo'] not in failed)
+            requested = 0
+            # Preserve every valid checkpoint before the first write, including on interruption.
+            for record in summary['repositories']:
+                cached = reusable_scan_record(previous, record['repo'], now(), ttl, self.config['scan_limit'])
+                if cached:
+                    record.update(cached)
             save(summary_path, summary)
             print(f'scan scope: {scope} ({len(repos)} repositories)', file=sys.stderr)
             try:
                 for record in summary['repositories']:
                     repo = record['repo']
+                    if record['status'] == 'cached':
+                        continue
+                    cached = reusable_scan_record(previous, repo, now(), ttl, self.config['scan_limit'])
+                    if cached:
+                        record.update(cached)
+                        save(summary_path, summary)
+                        continue
+                    if max_repositories is not None and requested >= max_repositories:
+                        continue
+                    requested += 1
                     try:
                         # One transaction per repository: malformed responses must not leave partial updates.
                         with self.db:
@@ -401,6 +501,7 @@ class Pipeline:
                         record.update(status='unknown', error=f'{type(error).__name__}: {error}')
                         message = f"scan {repo}: FAILED ({type(error).__name__}): {error}"
                     else:
+                        record.update(observed_at=now(), scan_key=scan_key(repo, self.config['scan_limit']))
                         if result is None:
                             record.update(status='skipped', reason='archived')
                             message = f"scan {repo}: SKIPPED (archived)"
@@ -416,13 +517,16 @@ class Pipeline:
                             changed += count
                             message = f"scan {repo}: {'OK' if issues else 'EMPTY'} ({issues} open issues, {prs} open PRs, {count} new/updated)"
                     self.event('scan:' + repo, message)
+                    with self.db:
+                        self.db.execute("INSERT INTO scheduler VALUES ('scan',?) ON CONFLICT(name) DO UPDATE SET last_repo=excluded.last_repo", (repo,))
                     save(summary_path, summary)
                     print(message, file=sys.stderr)
-                summary['completed'] = True
+                summary['completed'] = all(r['status'] not in ('not_scanned', 'unknown') for r in summary['repositories'])
                 self.report()
             finally:
                 summary['ended'] = now()
                 summary['totals'] = {'scanned_repositories': sum(r['status'] == 'scanned' for r in summary['repositories']),
+                                     'cached_repositories': sum(r['status'] == 'cached' for r in summary['repositories']),
                                      **{field: sum(r.get(field, 0) for r in summary['repositories']) for field in ('issues', 'prs', 'changed')}}
                 save(summary_path, summary)
         return changed
@@ -430,7 +534,7 @@ class Pipeline:
     def scan_repository(self, repo):
         repo_name(repo)
         cached = self._repository_evidence.get(repo)
-        meta = cached[0] if cached else gh("api", f"repos/{repo}")
+        meta = cached[0] if cached and type(cached[0].get('archived')) is bool else gh("api", f"repos/{repo}")
         if not isinstance(meta, dict) or type(meta.get('archived')) is not bool:
             raise ValueError('Invalid repository metadata')
         if meta["archived"]:
@@ -469,9 +573,10 @@ class Pipeline:
         changed = 0
         for issue in issues:
             task_id = repo.replace("/", "--") + "--" + str(issue["number"])
-            existing = self.db.execute('SELECT id FROM tasks WHERE repo=? AND number=? LIMIT 1', (repo, issue['number'])).fetchone()
+            from scheduling import find_issue_task
+            existing = find_issue_task(self.db, repo, issue['number'], {repo: meta.get('full_name', repo)})
             if existing:
-                task_id = existing['id']
+                task_id = existing
             score, holds = rank(issue)
             related = [p for p in prs if
                        any(x["number"] == issue["number"] for x in p.get("closingIssuesReferences", [])) or
@@ -514,7 +619,11 @@ class Pipeline:
         return self._register_hunt(repo, focus)
 
     def _register_hunt(self, repo, focus):
-        key = repo.replace("/", "--") + "--hunt-" + hashlib.sha256(focus.encode()).hexdigest()[:12]
+        from scheduling import existing_hunt, stable_focus
+        existing = existing_hunt(self.db, repo, focus)
+        if existing:
+            return existing
+        key = repo.replace("/", "--") + "--hunt-" + hashlib.sha256(stable_focus(focus).encode()).hexdigest()[:12]
         with self.db:
             self.db.execute('''INSERT OR IGNORE INTO tasks(id,repo,source,title,score,state,holds,payload,updated)
                              VALUES (?,?,?,?,?,?,?,?,?)''',
@@ -743,14 +852,8 @@ class Pipeline:
             return str(folder / ("repair.md" if mode == "repair" else "analysis.md"))
 
     def fingerprint(self, work):
-        digest = hashlib.sha256()
-        digest.update(command(["git", "rev-parse", "HEAD"], cwd=work).encode())
-        digest.update(command(["git", "diff", "HEAD", "--binary"], cwd=work).encode())
-        files = command(["git", "ls-files", "--others", "--exclude-standard", "-z"], cwd=work).split("\0")
-        for name in sorted(filter(None, files)):
-            digest.update(name.encode())
-            digest.update((Path(work) / name).read_bytes())
-        return digest.hexdigest()
+        from delivery import content_fingerprint
+        return content_fingerprint(work, command)
 
     def test_env(self):
         env = os.environ.copy()
@@ -904,6 +1007,8 @@ class Pipeline:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--allow-external-writes', action='store_true',
+                        help='Enable remote writes only when this session explicitly authorizes publication')
     sub = parser.add_subparsers(dest="action", required=True)
     sub.add_parser("scan")
     sub.add_parser("status")
@@ -957,7 +1062,7 @@ def main():
                     result = [dict(r) for r in db.execute('SELECT feature_id,task,repo,category,queue,priority,updated_at FROM research_candidates ORDER BY priority DESC,updated_at DESC')]
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
-    pipeline = Pipeline()
+    pipeline = Pipeline(allow_external_writes=args.allow_external_writes)
     from telemetry import run
     if args.action in ('status', 'unlock', 'clean-workspaces') or (args.action == 'auto' and args.dry_run):
         return dispatch(pipeline, args)
@@ -984,10 +1089,14 @@ def dispatch(pipeline, args):
             engine.run()
     elif args.action == "tick":
         pipeline.recover_locks()
+        if pipeline.config.get('automation', {}).get('enabled'):
+            from autonomous import Autonomous
+            Autonomous(pipeline).run()
         changed, updates = 0, []
         for operation in ('scan', 'followup'):
             try:
-                result = getattr(pipeline, operation)()
+                result = (pipeline.scan(max_repositories=pipeline.config.get('scanning', {}).get('repositories_per_tick'))
+                          if operation == 'scan' else pipeline.followup())
                 if operation == 'scan':
                     changed = result
                 else:
@@ -1001,10 +1110,7 @@ def dispatch(pipeline, args):
             print(f"PR update: {pr['state']} {pr['url']} {pr['title']}")
         if changed:
             print(f"New/updated issues: {changed}; report: {pipeline.root / 'runs/queue.md'}")
-        if pipeline.config.get('automation', {}).get('enabled'):
-            from autonomous import Autonomous
-            Autonomous(pipeline).run()
-        elif args.analyze:
+        if not pipeline.config.get('automation', {}).get('enabled') and args.analyze:
             # Failed tasks are deliberately not automatically retried.
             rows = pipeline.db.execute("SELECT id,repo FROM tasks WHERE state='DISCOVERED' AND holds='[]' ORDER BY score DESC,id").fetchall()
             for row in pipeline.fair_candidates(rows)[:pipeline.config['max_analysis_per_tick']]:

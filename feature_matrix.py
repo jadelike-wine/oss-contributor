@@ -15,6 +15,37 @@ STATUSES = ('implemented', 'partial', 'not_found', 'unknown')
 QUEUES = ('READY_TO_IMPLEMENT', 'NEEDS_MAINTAINER_CONFIRMATION', 'RESEARCH_ONLY', 'PAUSED_POLICY')
 
 
+def evidence_catalog(packet):
+    """Controller-owned short references bound to pinned source and exact content."""
+    catalog = {}
+    for source in [packet.get('target', {}), *packet.get('peers', [])]:
+        if not source.get('repo') or not source.get('sha'):
+            continue
+        for path, text in source.get('files', {}).items():
+            content_sha = hashlib.sha256(text.encode()).hexdigest()
+            identity = json.dumps([source['repo'], source['sha'], path, content_sha], separators=(',', ':'))
+            key = 'E' + hashlib.sha256(identity.encode()).hexdigest()[:16]
+            record = {'repo': source['repo'], 'sha': source['sha'], 'path': path, 'content_sha256': content_sha}
+            if key in catalog and catalog[key] != record:
+                raise ValueError('Evidence reference collision')
+            catalog[key] = record
+    return catalog
+
+
+def resolve_evidence(item, catalog):
+    """Expand a source reference, preserving exact-quote validation by the caller."""
+    if not isinstance(item, dict) or 'evidence_id' not in item:
+        return item
+    identifier = item['evidence_id']
+    if not isinstance(identifier, str) or identifier not in catalog:
+        raise ValueError('Unknown or stale controller evidence reference')
+    saved = catalog[identifier]
+    for field in ('repo', 'path', 'sha'):
+        if field in item and item[field] != saved[field]:
+            raise ValueError('Conflicting controller evidence reference: ' + field)
+    return {**item, **{field: saved[field] for field in ('repo', 'path', 'sha')}}
+
+
 def file_type(path):
     name = path.lower()
     if PurePosixPath(name).suffix in ('.md', '.rst', '.txt', '.mdx'):
@@ -75,6 +106,7 @@ def build(answer, task, packet):
         if not sha and not source.get('error'):
             raise ValueError('Successful snapshot requires a fixed SHA')
     sources = {s['repo']: s for s in supplied}
+    catalog = evidence_catalog(packet)
     # Older prose prompts did not specify nesting; accept their top-level map
     # without weakening any evidence checks. Ambiguous conflicting maps fail closed.
     statuses = raw.get('feature_status', answer.get('feature_status'))
@@ -88,7 +120,10 @@ def build(answer, task, packet):
         if not isinstance(status, dict) or status.get('status') not in STATUSES or not isinstance(status.get('reason'), str) or not status['reason'].strip():
             raise ValueError('Invalid feature status/reason')
         claims = status.get('evidence', [])
-        if not isinstance(claims, list) or len(claims) > 8 or any(not isinstance(e, dict) or e.get('repo') != repo for e in claims):
+        if not isinstance(claims, list) or len(claims) > 8:
+            raise ValueError('Target and peer evidence cannot be mixed')
+        claims = [resolve_evidence(item, catalog) for item in claims]
+        if any(not isinstance(e, dict) or e.get('repo') != repo for e in claims):
             raise ValueError('Target and peer evidence cannot be mixed')
         checked = [evidence(e, sources, identifier) for e in claims]
         scope = status.get('checked_paths', [])
@@ -137,11 +172,11 @@ def route(answer, matrix, *, reviewed=False, duplicate_clear=False, maintainer=F
         if len(peers) < 3 or target not in ('not_found', 'partial') or not any(p['status'] == 'implemented' for p in peers):
             return 'RESEARCH_ONLY', 0, 'insufficient_gap_or_peer_evidence'
     # Model value prose is retained for review; model numerical scores never determine admission.
-    priority = (100 if answer['category'] == 'feature' else 40) + (10 if answer['risk'] == 'low' else 0)
+    priority = 60 + (10 if answer['risk'] == 'low' else 0)
     discussion = (answer['category'] == 'feature' or answer['risk'] != 'low'
                   or allowed.get('maintainer_required') or not allowed.get('automated_pr'))
     if discussion and not maintainer:
-        return 'NEEDS_MAINTAINER_CONFIRMATION', priority, 'design_direction_requires_maintainer'
+        return 'NEEDS_MAINTAINER_CONFIRMATION', priority - 40, 'design_direction_requires_maintainer'
     if answer['risk'] == 'high':
         return 'PAUSED_POLICY', 0, 'high_risk_requires_human_patch_review'
     return 'READY_TO_IMPLEMENT', priority, 'evidence_policy_review_and_duplicate_gates_passed'
@@ -177,7 +212,8 @@ feature_name (string), category (string, one of %s), user_scenario (string), gap
 migration_analysis (string, reusable design AND architectural incompatibilities; do not copy code blindly),
 affected_files (relative paths array of strings), implementation_plan (steps array of strings), validation_plan (commands and acceptance array of strings), risks (nonempty STRING, not an array).
 Inside feature_matrix, the REQUIRED feature_status object maps EVERY target/peer repo to {status: implemented|partial|not_found|unknown, reason,
-missing (required for partial), checked_paths: [actually supplied paths], evidence: [{repo,path,quote}]}.
+missing (required for partial), checked_paths: [actually supplied paths], evidence: [{evidence_id,quote}]}.
+Prefer controller evidence_sources IDs over repeating repo/path/SHA. Legacy {repo,path,quote} remains valid.
 implemented/partial require exact code/test quotes. not_found means only in checked_paths, never whole-project absence.
 Failed/incomplete inspections are unknown. Tests are static evidence, NOT execution results.
 Nesting example: {"feature_matrix":{"feature_key":"resume-session", ...,"feature_status":{"owner/target":{...},"owner/peer":{...}}}}.

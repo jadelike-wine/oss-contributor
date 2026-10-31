@@ -10,7 +10,9 @@ import datetime as dt
 
 from contribute import ContributionPaused, command, execute, gh, now, opencode_executable, save
 from ci_status import observe_ci
-from telemetry import ACTIVE, BudgetExhausted, observed, model_call, stage, record_usage
+from telemetry import ACTIVE, BudgetExhausted, DeliveryBudgetExhausted, observed, model_call, stage, record_usage
+from repository_policy import human_maintainer_comments, approval_receipt, has_scope_approval
+from scheduling import RunTaskBudget, task_lane, priority_key
 
 
 def json_answer(text):
@@ -78,8 +80,11 @@ def runtime_tools():
                             'corepack': 'corepack/dist/corepack.js'}.items():
             executable = result.get(name)
             if executable:
-                script = Path(executable).parent / 'node_modules' / entry
-                result[name] = [result['node'], str(script)] if script.is_file() else None
+                from delivery import node_command
+                try:
+                    result[name] = node_command(name, shutil.which)
+                except ValueError:
+                    result[name] = None
         for name, executable in list(result.items()):
             if isinstance(executable, str) and Path(executable).suffix.lower() in ('.cmd', '.bat', '.ps1'):
                 result[name] = None
@@ -102,7 +107,13 @@ class Autonomous:
 
     def load(self, task_id):
         row = self.db.execute('SELECT data FROM automation WHERE task=?', (task_id,)).fetchone()
-        return json.loads(row['data']) if row else {'stage': 'PLAN', 'attempts': {}}
+        data = json.loads(row['data']) if row else {'stage': 'PLAN', 'attempts': {}}
+        # Historical booleans remain in the source snapshot, but cannot authorize work.
+        if data.get('maintainer_approved') and not has_scope_approval(data):
+            data['legacy_maintainer_approved'] = True
+            data['maintainer_approved'] = False
+            data.pop('maintainer_digest', None)
+        return data
 
     def store(self, task_id, data, state=None):
         with self.db:
@@ -115,7 +126,7 @@ class Autonomous:
         if stage == 'WAITING_MAINTAINER' and not data.get('waiting_since'):
             data['waiting_since'] = now()
         self.store(task_id, data, stage)
-        if data.get('research') and data.get('maintainer_approved'):
+        if data.get('research') and has_scope_approval(data):
             from feature_matrix import persist
             rows = self.db.execute('SELECT matrix FROM research_candidates WHERE task=?', (task_id,)).fetchall()
             for row in rows:
@@ -331,11 +342,10 @@ class Autonomous:
                   'or missing maintainer-approved behavior, not missing dependencies. For an approved feature, test the agreed '
                   'acceptance criteria within the research scope. If no defensible contribution exists or policy disallows it, decision=skip. If maintainer approval '
                   'is required but absent, decision=wait; cite the rule and do not edit files. '
-                  'For a numbered issue, default to decision=ready: a reproducible bug is an invitation to fix it, and '
-                  'waiting for explicit approval loses the race to someone else. decision=wait only when implementation '
-                  'direction is genuinely blocked — prior revert history on this exact fix, incompatible maintainer comments, '
-                  'competing approaches the maintainers have not chosen between, or an explicit request for discussion first. '
-                  '"No maintainer has replied yet" is not a blocker by itself. '
+                  'For a numbered bug, ready requires clear user impact, bounded scope, independent reproduction, feasible '
+                  'project checks, no competing implementation, and compliant contribution rules. Explicit repository '
+                  'requirements override generic labels. Labels and elapsed waiting never prove maintainer approval. '
+                  'Use wait for required direction or unresolved policy, and skip when value or verification is inadequate. '
                   'Return JSON {"decision":"ready|skip|wait","reason":"...","title":"bug title",'
                   '"issue_body":"English issue body, say tests are pending; do not invent results",'
                   '"pr_title":"fix(scope): ...","pr_body":"English proposed PR explanation",'
@@ -529,7 +539,10 @@ class Autonomous:
     @observed('issue_publication', task=True)
     def publish_issue(self, task_id, data):
         task = self.p.task(task_id)
-        self.p.require_contribution(task)
+        from delivery import reconcile_pending, reconciliation_due
+        if data.get('issue_create_pending') and not reconciliation_due(data, 'issue'):
+            raise ContributionPaused('Issue publication reconciliation is cooling down or requires manual verification')
+        self.p.require_contribution(task, refresh=True)
         if data.get('research', {}).get('queue') in ('RESEARCH_ONLY', 'PAUSED_POLICY') and data['research'].get('feature_id'):
             raise ContributionPaused('Research queue does not authorize public contribution')
         if data.get('research'):
@@ -539,6 +552,11 @@ class Autonomous:
         login = gh('api', 'user')['login']
         items = self.flat(f"repos/{task['repo']}/issues?creator={login}&state=all&per_page=100")
         matches = [x for x in items if not x.get('pull_request') and self.marker(task_id) in (x.get('body') or '')]
+        if data.get('issue_create_pending'):
+            data['issue_reconciliation'] = reconcile_pending(data, matches, 'issue')
+            self.store(task_id, data)
+            if data['issue_reconciliation']['state'] != 'recovered':
+                raise ContributionPaused(data['issue_reconciliation']['reason'])
         if matches:
             issue = matches[0]
         else:
@@ -549,6 +567,7 @@ class Autonomous:
             body = self.issue_body(task_id, data)
             file = self.packet_dir(task_id) / 'issue-body.md'
             file.write_text(public_text(body), encoding='utf-8')
+            self.p.require_external_write()
             data['issue_create_pending'] = True
             self.store(task_id, data)
             url = command(['gh', 'issue', 'create', '-R', task['repo'], '--title', data['plan']['title'], '--body-file', str(file)]).strip()
@@ -597,7 +616,13 @@ class Autonomous:
         if not issue or issue['state'] != 'open':
             self.move(task_id, data, 'CLOSED')
             return False
-        comments = [x for x in issue['comments_data'] if x.get('author_association') in ('OWNER', 'MEMBER', 'COLLABORATOR')]
+        from repository_policy import contribution_constraints, issue_policy_reason
+        policy = contribution_constraints(self.p._repository_evidence.get(task['repo'], ({}, ''))[1],
+            self.p.config.get('repository_checks', {}).get('policies', {}).get(task['repo'], {}))
+        reason = issue_policy_reason(issue, policy)
+        if reason:
+            raise ContributionPaused(reason)
+        comments = human_maintainer_comments(issue['comments_data'])
         digest = hashlib.sha256(json.dumps(comments, sort_keys=True).encode()).hexdigest()
         if comments and digest != data.get('maintainer_digest'):
             verdict = self.judge(task_id, 'maintainer-decision', {'gate': 'Do these actual maintainer comments explicitly approve proceeding with this exact proposed scope? Approval of a different fix on the same issue, mere acknowledgement, a bot response or discussion is not approval.', 'issue': issue['title'], 'comments': comments, 'proposal': data.get('research', {}).get('opportunity')})
@@ -605,34 +630,12 @@ class Autonomous:
             self.store(task_id, data)
             if verdict['approved']:
                 data['maintainer_approved'] = True
+                data['maintainer_approval'] = approval_receipt(comments, verdict, now())
                 if data.pop('proposal_only', False):
                     data.pop('plan', None)  # A proposal is not an executable regression recipe.
                 self.move(task_id, data, 'REPAIR' if data.get('plan') else 'PLAN')
                 return True
-        # Fast-path: for a numbered bug issue, proceed without explicit
-        # maintainer approval when upstream already signals acceptance
-        # (labels like accepted/help-wanted/good-first-issue/triaged/bug) or
-        # when the maintainer has simply not replied within the configured
-        # window — losing the race to an already-accepted bug is worse than a
-        # PR the maintainer might have redirected.
-        if task['number'] and not data.get('proposal_only'):
-            labels = {l['name'].lower() for l in (issue.get('labels') or [])}
-            welcome = labels & {'accepted', 'help wanted', 'good first issue', 'triaged', 'bug'}
-            days = self.options.get('wait_maintainer_days', 7)
-            import datetime as _dt
-            waiting_since = data.get('waiting_since')
-            if waiting_since:
-                waited = (_dt.datetime.now(_dt.timezone.utc) - _dt.datetime.fromisoformat(waiting_since)).days
-            else:
-                waited = 0
-                data['waiting_since'] = now()
-                self.store(task_id, data)
-            if welcome or waited >= days:
-                reason = ('labels: ' + ','.join(sorted(welcome))) if welcome else (f'no maintainer reply in {waited}d >= {days}d')
-                self.p.event(task_id, 'Fast-path: proceeding without approval (' + reason + ')')
-                data['maintainer_approved'] = True
-                self.move(task_id, data, 'REPAIR' if data.get('plan') else 'PLAN')
-                return True
+        # Labels and elapsed time are triage evidence, never scope approval.
         return False
 
     @observed('implementation', task=True)
@@ -685,6 +688,11 @@ class Autonomous:
         if not verdict['approved']:
             data['feedback'] = verdict
             raise RuntimeError('Patch review rejected: ' + verdict['reason'])
+        if data.get('approved_fingerprint') != evidence['fingerprint']:
+            old = {key: data.pop(key) for key in ('expected_tree', 'publish_commit', 'push_intent', 'push_verified') if key in data}
+            if old:
+                data.setdefault('publication_history', []).append({'at': now(), 'previous': old,
+                    'fingerprint': data.get('approved_fingerprint')})
         data['approved_fingerprint'] = evidence['fingerprint']
         self.move(task_id, data, 'PUBLISH')
 
@@ -725,6 +733,9 @@ class Autonomous:
     @observed('pr_publication', task=True)
     def publish_pr(self, task_id, data):
         task = self.p.task(task_id)
+        from delivery import reconcile_pending, reconciliation_due
+        if data.get('pr_create_pending') and not reconciliation_due(data, 'pr'):
+            raise ContributionPaused('PR publication reconciliation is cooling down or requires manual verification')
         self.p.require_contribution(task, publishing=True)
         if data.get('research'):
             from research import needs_discussion
@@ -737,10 +748,17 @@ class Autonomous:
         evidence = json.loads((folder / 'verification.json').read_text(encoding='utf-8'))
         if evidence.get('passed') is not True or data.get('approved_fingerprint') != evidence.get('fingerprint'):
             raise RuntimeError('Publish requires verified and independently approved evidence')
-        clean = not command(['git', 'status', '--porcelain'], cwd=work).strip()
-        adopted_commit = bool(data.get('expected_tree') and clean and command(['git', 'rev-parse', 'HEAD^{tree}'], cwd=work).strip() == data['expected_tree'])
-        if not adopted_commit and self.p.fingerprint(work) != data['approved_fingerprint']:
+        if evidence.get('base_sha') != task['base_sha']:
+            raise ContributionPaused('Verification baseline differs from the task baseline; revalidate')
+        try:
+            age = (dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(evidence['at'])).total_seconds()
+        except (KeyError, ValueError, TypeError):
+            raise ContributionPaused('Verification timestamp is missing or invalid; revalidate before publication')
+        if not 0 <= age <= self.options.get('verification_max_age_seconds', 86400):
+            raise ContributionPaused('Verification has expired; repeat baseline, patch checks and review')
+        if self.p.fingerprint(work) != data['approved_fingerprint']:
             raise RuntimeError('Patch changed after approval')
+        command(['git', 'merge-base', '--is-ancestor', task['base_sha'], 'HEAD'], cwd=work)
         issue = self.live_issue(task)
         if not issue or issue['state'] != 'open':
             self.move(task_id, data, 'CLOSED')
@@ -750,6 +768,11 @@ class Autonomous:
         data['branch'] = branch
         self.store(task_id, data)
         prs = self.flat(f"repos/{task['repo']}/pulls?head={login}:{branch}&state=all&per_page=100")
+        if data.get('pr_create_pending'):
+            data['pr_reconciliation'] = reconcile_pending(data, prs, 'pr')
+            self.store(task_id, data)
+            if data['pr_reconciliation']['state'] != 'recovered':
+                raise ContributionPaused(data['pr_reconciliation']['reason'])
         if prs and prs[0]['state'] == 'closed':
             self.move(task_id, data, 'MERGED' if prs[0].get('merged_at') else 'CLOSED')
             return
@@ -757,11 +780,17 @@ class Autonomous:
             return
         if not prs and not data.get('pr_number') and not self.duplicates(task_id, data, 'pr'):
             return
+        if not self.p.allow_external_writes:
+            body = data['plan']['pr_body'] + f"\n\nRelated issue: #{task['number']}\n\n" + self.marker(task_id)
+            (folder / 'pr-body.md').write_text(self.pr_body(task_id, data, body), encoding='utf-8')
+            data['publication_hold'] = 'external_writes_disabled'
+            self.store(task_id, data)
+            self.p.require_external_write()
         command(['gh', 'repo', 'fork', task['repo'], '--clone=false'])
         fork = gh('api', f"repos/{login}/{task['repo'].split('/')[1]}")
         if (fork.get('parent') or {}).get('full_name', '').lower() != task['repo'].lower():
             raise RuntimeError('Fork parent does not match upstream')
-        if not adopted_commit:
+        if command(['git', 'status', '--porcelain'], cwd=work).strip():
             files = changed_files(work)
             if not files:
                 raise RuntimeError('No patch to publish')
@@ -772,12 +801,15 @@ class Autonomous:
                 if path.is_file() and re.search(rb'gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{16,}|-----BEGIN .*PRIVATE KEY-----', path.read_bytes()):
                     raise RuntimeError('Credential-like content in patch')
             command(['git', 'checkout', '-B', branch], cwd=work)
-            command(['git', 'add', '--all'], cwd=work)
-            data['expected_tree'] = command(['git', 'write-tree'], cwd=work).strip()
-            self.store(task_id, data)
-            command(['git', 'commit', '-m', data['plan']['pr_title']], cwd=work)
-        data['publish_commit'] = command(['git', 'rev-parse', 'HEAD'], cwd=work).strip()
-        self.store(task_id, data)
+        from delivery import ensure_commit, ensure_push, windows_hook_environment
+        hook_env = windows_hook_environment(self.p.root / 'state/tooling/git-hooks') if os.name == 'nt' else None
+        def git_command(argv, **kwargs):
+            private_env = kwargs.pop('env', None) or {}
+            env = {**os.environ, **(hook_env or {}), **private_env}
+            if hook_env:
+                env['PATH'] = hook_env['PATH']
+            return command(argv, **kwargs, env=env)
+        ensure_commit(work, data, data['plan']['pr_title'], git_command, lambda saved: self.store(task_id, saved))
         push_env = None
         receipt = folder / 'remote-verification.json'
         if receipt.exists():
@@ -786,7 +818,8 @@ class Autonomous:
             # The exact patch already passed the upstream check on Linux. Do not
             # rerun that same check in a Windows hook with unsupported symlinks.
             push_env = {**os.environ, 'HUSKY': '0'}
-        command(['git', 'push', fork['clone_url'], f'HEAD:refs/heads/{branch}'], cwd=work, timeout=self.p.config.get('timeouts', {}).get('git_seconds', 600), env=push_env)
+        ensure_push(work, fork['clone_url'], branch, data, command, lambda saved: self.store(task_id, saved),
+                    timeout=self.p.config.get('timeouts', {}).get('git_seconds', 600), env=push_env or hook_env)
         if prs:
             pr = prs[0]
             current = gh('pr', 'view', str(pr['number']), '-R', task['repo'], '--json', 'body')['body']
@@ -851,6 +884,7 @@ class Autonomous:
             body = self.pr_body(task_id, data, pr.get('body', ''), packet)
             file = self.packet_dir(task_id) / 'pr-body.md'
             file.write_text(body, encoding='utf-8')
+            self.p.require_external_write()
             command(['gh', 'pr', 'edit', str(n), '-R', task['repo'], '--body-file', str(file)])
             data['plan']['pr_body'] = body
         data['feedback_digest'] = digest
@@ -865,6 +899,12 @@ class Autonomous:
     @observed('task', task=True)
     def advance(self, task_id):
         data = self.load(task_id)
+        from scheduling import reconcile_issue_duplicates
+        reconcile_issue_duplicates(self.db)
+        alias = self.db.execute('SELECT canonical_task FROM task_aliases WHERE task=?', (task_id,)).fetchone()
+        if alias and not data.get('pr_number'):
+            self.p.event(task_id, 'Duplicate identity; continue canonical task ' + alias['canonical_task'])
+            return data['stage']
         methods = {'PLAN': self.plan, 'REPRODUCE': self.reproduce, 'ISSUE': self.publish_issue,
                    'WAITING_MAINTAINER': self.wait_maintainer, 'REPAIR': self.repair, 'PATCH_READY': self.verify,
                    'AUTO_REVIEW': self.review, 'PUBLISH': self.publish_pr, 'PR_OPEN': self.feedback}
@@ -872,8 +912,19 @@ class Autonomous:
             stage = data['stage']
             if stage not in methods:
                 break
+            from failures import retry_ready, record_failure
+            if not retry_ready(data, stage):
+                break
+            channel = 'hermes' if stage == 'AUTO_REVIEW' else 'opencode' if stage in ('PLAN', 'REPAIR', 'PR_OPEN') else None
+            if ACTIVE.get() and channel and ACTIVE.get().channel_failures.get(channel, 0) >= 2:
+                self.p.event(task_id, 'Service circuit open for this run: ' + channel)
+                break
             try:
                 self.p.require_contribution(self.p.task(task_id), publishing=stage == 'PUBLISH')
+                if data.get('research') and stage in ('REPRODUCE', 'REPAIR', 'PATCH_READY', 'AUTO_REVIEW', 'PUBLISH'):
+                    from research import needs_discussion
+                    if needs_discussion(data['research']['opportunity']) and not has_scope_approval(data):
+                        raise ContributionPaused('Required feature direction has no verified human scope approval')
                 candidate = self.db.execute('SELECT queue,matrix FROM research_candidates WHERE task=?', (task_id,)).fetchone()
                 if candidate and not json.loads(candidate['matrix']).get('legacy'):
                     resuming_research = stage == 'PLAN' and not data.get('research', {}).get('approved')
@@ -889,14 +940,14 @@ class Autonomous:
                 break  # Policy pauses do not consume retries or overwrite the saved stage.
             try:
                 current = ACTIVE.get()
-                if current and (stage in ('REPAIR', 'REPRODUCE', 'PATCH_READY', 'AUTO_REVIEW') or
-                                stage == 'PLAN' and (self.p.task(task_id)['number'] or
-                                data.get('research', {}).get('queue') == 'READY_TO_IMPLEMENT')):
-                    if current.implementation_tasks and task_id not in current.implementation_tasks:
-                        current.reason = 'implementation_task_limit'
+                if current:
+                    lane = task_lane(self.p.task(task_id), data, candidate['queue'] if candidate else None)
+                    if not current.task_budget.admit(task_id, lane):
+                        current.reason = lane + '_task_limit'
                         current.checkpoint()
                         break
-                    current.implementation_tasks.add(task_id)
+                    if lane == 'implementation':
+                        current.implementation_tasks.add(task_id)
                 methods[stage](task_id, data)
             except BudgetExhausted as error:
                 data['stop_reason'] = str(error)
@@ -914,6 +965,10 @@ class Autonomous:
                     break
                 if ACTIVE.get():
                     ACTIVE.get().count('retries')
+                if record_failure(data, stage, error, self.options):
+                    self.store(task_id, data)
+                    self.p.event(task_id, data['failure_category'] + ': ' + str(error))
+                    break
                 count = data['attempts'].get(stage, 0) + 1
                 data['attempts'][stage] = count
                 data['last_error'] = str(error)
@@ -922,6 +977,7 @@ class Autonomous:
                 self.p.event(task_id, str(error))
                 break  # Retry on next tick, not a tight loop.
             data['attempts'].pop(stage, None)
+            data.get('infrastructure_failures', {}).pop(stage, None)
             data.pop('last_error', None)
             self.store(task_id, data)
             if data['stage'] == stage or data['stage'] in ('PR_OPEN', 'WAITING_MAINTAINER', 'SKIPPED', 'CLOSED', 'MERGED'):
@@ -934,9 +990,38 @@ class Autonomous:
         if self.options.get('enabled') is not True:
             raise RuntimeError('Autonomous mode is disabled in config.json')
         self.p.recover_locks()
-        if self.db.execute("SELECT 1 FROM locks WHERE name IN ('worker','prepare','autonomous')").fetchone():
+        if self.db.execute("SELECT 1 FROM locks WHERE name IN ('worker','prepare','autonomous','maintenance')").fetchone():
             return
         with self.p.lock('autonomous'):
+            from scheduling import reconcile_issue_duplicates
+            reconcile_issue_duplicates(self.db)
+            # Existing external work gets attention before starting new contributions.
+            rows = self.candidates()
+            budget = ACTIVE.get().task_budget if ACTIVE.get() else RunTaskBudget(self.p.config)
+            self._task_budget = budget
+            if ACTIVE.get():
+                ACTIVE.get().reserve_research = bool(self.p.config.get('research', {}).get('batch_on_auto', False))
+            for row in rows:
+                task = self.p.task(row['id'])
+                data = self.load(row['id'])
+                if (self.p.config.get('research', {}).get('batch_on_auto', False) and task['source'] == 'hunt'
+                        and not data.get('research', {}).get('approved')):
+                    continue
+                candidate = self.db.execute('SELECT queue FROM research_candidates WHERE task=?', (row['id'],)).fetchone()
+                lane = task_lane(task, data, candidate['queue'] if candidate else None)
+                from failures import retry_ready
+                if not retry_ready(data, data['stage']) or not budget.admit(row['id'], lane):
+                    continue
+                if lane != 'maintenance':
+                    (self.p.research_turn if lane == 'research' else self.p.delivery_turn)(task['repo'])
+                try:
+                    if ACTIVE.get():
+                        ACTIVE.get().remaining()
+                    self.advance(row['id'])
+                except DeliveryBudgetExhausted:
+                    break
+            if ACTIVE.get():
+                ACTIVE.get().reserve_research = False
             if self.options.get('weekly_hunts'):
                 week = dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).strftime('%G-W%V')
                 for repo in self.p.effective_repositories(contribution=True):
@@ -948,34 +1033,6 @@ class Autonomous:
                     self.p.hunt(repo, 'Prioritize valuable features across multiple harnesses using official code, tests, designs and user feedback. Research features first, then performance, security, UX and reliability; verify implementation, project scope and duplicates. Research batch ' + week)
             if self.p.config.get('research', {}).get('batch_on_auto', False):
                 self.research_batch(locked=True)
-            # Existing external work gets attention before starting new contributions.
-            rows = self.candidates()
-            used = 0
-            for row in rows:
-                task = self.p.task(row['id'])
-                if task['repo'] not in self.p.effective_repositories(contribution=True):
-                    continue
-                data = self.load(row['id'])
-                if (self.p.config.get('research', {}).get('batch_on_auto', False) and task['source'] == 'hunt'
-                        and not data.get('research', {}).get('approved')):
-                    continue  # The bounded batch owns read-only research; PLAN must not start a fourth candidate.
-                waiting = data['stage'] in ('WAITING_MAINTAINER', 'PR_OPEN', 'ISSUE', 'PUBLISH')
-                if not waiting and used >= self.options.get('max_tasks_per_tick', 1):
-                    continue
-                if not waiting:
-                    self.p.research_turn(task['repo'])
-                if ACTIVE.get():
-                    ACTIVE.get().remaining()
-                result = self.advance(row['id'])
-                # A failed attempt that leaves the task at the same stage
-                # should not starve the rest of the candidate queue.
-                if not waiting:
-                    after = self.load(row['id'])
-                    used += result != data['stage'] or not after['attempts'].get(data['stage'])
-                elif result not in ('WAITING_MAINTAINER', 'PR_OPEN', 'ISSUE', 'PUBLISH'):
-                    used += 1
-                if result != task['state']:
-                    print(f"{row['id']}: {result}")
 
     @observed('research_batch')
     def research_batch(self, locked=False):
@@ -991,15 +1048,25 @@ class Autonomous:
         completed = []
         from repository_catalog import research_pool
         pool = research_pool(self.p)
-        ordered = self.p.fair_candidates(rows)
+        ordered = self.p.fair_candidates(rows, repositories=pool)
         included = {r['id'] for r in ordered}
         ordered += [r for r in rows if r['id'] not in included and r['repo'] in pool]
         for row in ordered:
             data = self.load(row['id'])
+            from failures import retry_ready, record_failure
+            channel = self.p.config.get('research', {}).get('model_channel', 'opencode')
+            if ACTIVE.get() and ACTIVE.get().channel_failures.get(channel, 0) >= 2:
+                break
             if (data['stage'] != 'PLAN' or data.get('research', {}).get('approved') or
-                    data['attempts'].get('RESEARCH', 0) >= self.options.get('max_stage_attempts', 3)):
+                    data['attempts'].get('RESEARCH', 0) >= self.options.get('max_stage_attempts', 3) or
+                    not retry_ready(data, 'RESEARCH')):
                 continue
             if len(completed) >= count:
+                break
+            budget = ACTIVE.get().task_budget if ACTIVE.get() else getattr(self, '_task_budget', None)
+            if budget:
+                budget.limits['research'] = count
+            if budget and not budget.admit(row['id'], 'research'):
                 break
             self.p.research_turn(row['repo'])
             try:
@@ -1009,7 +1076,8 @@ class Autonomous:
             except ContributionPaused:
                 continue
             except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as error:
-                data['attempts']['RESEARCH'] = data['attempts'].get('RESEARCH', 0) + 1
+                if not record_failure(data, 'RESEARCH', error, self.options):
+                    data['attempts']['RESEARCH'] = data['attempts'].get('RESEARCH', 0) + 1
                 data['stop_reason'] = type(error).__name__
                 data['research_error'] = str(error)
                 self.store(row['id'], data)
@@ -1033,13 +1101,13 @@ class Autonomous:
         policies = self.p.config.get('repository_checks', {}).get('policies', {})
         rows = [row for row in rows if row['repo'] in repos and
                 (row['number'] or not policies.get(row['repo'], {}).get('manual_issue_submission'))]
-        waiting, confirmed, research = [], [], []
+        aliases = {r['task'] for r in self.db.execute('SELECT task FROM task_aliases')}
+        rows = [r for r in rows if r['id'] not in aliases or self.load(r['id']).get('pr_number')]
+        groups = {}
         for row in rows:
+            task = self.p.task(row['id'])
             data = self.load(row['id'])
-            if data['stage'] in ('WAITING_MAINTAINER', 'PR_OPEN', 'ISSUE', 'PUBLISH'):
-                waiting.append(row)
-            elif indexed.get(row['id'], {}).get('queue') == 'NEEDS_MAINTAINER_CONFIRMATION':
-                confirmed.append(row)  # Approved proposals ready to discuss; do not starve behind new research.
-            else:
-                research.append(row)
-        return waiting + confirmed + self.p.fair_candidates(research)
+            priority = priority_key(task, data, indexed.get(row['id'], {}).get('queue'))
+            groups.setdefault(priority, []).append(row)
+        return [row for priority in sorted(groups) for row in self.p.fair_candidates(groups[priority],
+                cursor_name='research' if priority == 7 else 'delivery')]

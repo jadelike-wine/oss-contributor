@@ -42,6 +42,14 @@ class PipelineTests(unittest.TestCase):
                 raise RuntimeError("boom")
         self.assertEqual(0, self.p.db.execute("SELECT count(*) FROM locks").fetchone()[0])
 
+    def test_maintenance_and_workers_cannot_overlap(self):
+        for first, second in [('worker', 'maintenance'), ('maintenance', 'prepare'), ('maintenance', 'scan')]:
+            with self.p.lock(first):
+                with self.assertRaisesRegex(RuntimeError, 'Maintenance lock'):
+                    with self.p.lock(second):
+                        self.fail('Conflicting operation entered its critical section')
+            self.assertEqual(0, self.p.db.execute('SELECT count(*) FROM locks').fetchone()[0])
+
     def test_human_and_security_tasks_held(self):
         _, holds = rank({"title": "bug", "labels": [{"name": "status/ready-for-human"}, {"name": "category/security"}], "assignees": [{"login": "someone"}]})
         self.assertEqual(3, len(holds))

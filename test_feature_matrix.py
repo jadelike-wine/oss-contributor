@@ -228,7 +228,9 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual(route(bug, None, reviewed=True, duplicate_clear=True)[0], 'READY_TO_IMPLEMENT')
         feature = {**bug, 'category': 'feature'}
         self.assertEqual(route(feature, None)[1], 0)
-        self.assertGreater(route(feature, None, reviewed=True, duplicate_clear=True)[1], route(bug, None, reviewed=True, duplicate_clear=True)[1])
+        self.assertLess(route(feature, None, reviewed=True, duplicate_clear=True)[1], route(bug, None, reviewed=True, duplicate_clear=True)[1])
+        self.assertEqual(route(feature, None, reviewed=True, duplicate_clear=True, maintainer=True)[1],
+                         route(bug, None, reviewed=True, duplicate_clear=True)[1])
 
     def test_collect_limits_peers_and_recovers_completed_snapshots(self):
         task = self.p.task(self.key)

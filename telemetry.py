@@ -9,6 +9,7 @@ import datetime as dt
 import functools
 import json
 import math
+import os
 import sqlite3
 import subprocess
 import time
@@ -19,6 +20,10 @@ ACTIVE = contextvars.ContextVar('oss_run', default=None)
 
 class BudgetExhausted(RuntimeError):
     pass
+
+
+class DeliveryBudgetExhausted(BudgetExhausted):
+    """Yield the remaining reserved budget to research, without raising total caps."""
 
 
 def utc():
@@ -48,7 +53,40 @@ def migrate(db):
       repo TEXT NOT NULL, number INTEGER NOT NULL, head_sha TEXT, state TEXT NOT NULL,
       ci_state TEXT NOT NULL, maintainer_response INTEGER NOT NULL, observed_at TEXT NOT NULL,
       PRIMARY KEY(repo,number));
+    CREATE TABLE IF NOT EXISTS pr_acceptance_observations (
+      repo TEXT NOT NULL, number INTEGER NOT NULL, head_sha TEXT,
+      review_decision TEXT, human_approval INTEGER NOT NULL,
+      merged_at TEXT, state TEXT NOT NULL, observed_at TEXT NOT NULL,
+      PRIMARY KEY(repo,number));
     ''')
+    if 'owner_pid' not in {r[1] for r in db.execute('PRAGMA table_info(runs)')}:
+        db.execute('ALTER TABLE runs ADD COLUMN owner_pid INTEGER')
+        db.commit()
+
+
+def recover_interrupted(db, process_running, *, legacy_processes_checked=False):
+    """Only close dead owned runs; legacy rows require an explicit process audit."""
+    locks = db.execute('SELECT * FROM locks').fetchall()
+    if any(process_running(r['pid']) or process_running(r['child_pid']) for r in locks):
+        return []
+    recovered = []
+    for row in db.execute('SELECT * FROM runs WHERE ended IS NULL').fetchall():
+        pid = row['owner_pid']
+        if (pid and process_running(pid)) or (not pid and not legacy_processes_checked):
+            continue
+        recovered_at = utc()
+        checkpoint = (dt.datetime.fromisoformat(row['started']) + dt.timedelta(seconds=max(0, row['elapsed'] or 0))).isoformat()
+        reason = ('owner_process_stopped; resume_from_saved_task_stage; end_and_elapsed_are_last_checkpoint; '
+                  'actual_stop_unknown; recovered_at=' + recovered_at)
+        with db:
+            db.execute("UPDATE runs SET ended=?,outcome='interrupted',stop_reason=? WHERE run_id=? AND ended IS NULL",
+                       (checkpoint, reason, row['run_id']))
+            db.execute("UPDATE stages SET ended=CASE WHEN started>? THEN started ELSE ? END,outcome='interrupted',reason=? WHERE run_id=? AND ended IS NULL",
+                       (checkpoint, checkpoint, reason, row['run_id']))
+            db.execute("UPDATE model_calls SET ended=CASE WHEN started>? THEN started ELSE ? END,outcome='interrupted' WHERE run_id=? AND ended IS NULL",
+                       (checkpoint, checkpoint, row['run_id']))
+        recovered.append(row['run_id'])
+    return recovered
 
 
 class Run:
@@ -63,13 +101,17 @@ class Run:
         self.reason = None
         self.outcome = 'success'
         self.implementation_tasks = set()
+        from scheduling import RunTaskBudget
+        self.task_budget = RunTaskBudget(pipeline.config)
+        self.channel_failures = {}
+        self.reserve_research = False
         self.call_id = None
         self.task = None
         self.task_elapsed = {}
         self.task_active_since = self.start
         with self.db:
-            self.db.execute('INSERT INTO runs(run_id,entry,started,outcome) VALUES (?,?,?,?)',
-                            (self.id, entry, self.started, 'running'))
+            self.db.execute('INSERT INTO runs(run_id,entry,started,outcome,owner_pid) VALUES (?,?,?,?,?)',
+                            (self.id, entry, self.started, 'running', os.getpid()))
 
     def count(self, key, amount=1):
         self.counters[key] = self.counters.get(key, 0) + amount
@@ -87,6 +129,10 @@ class Run:
 
     def remaining(self):
         current = time.monotonic()
+        if self.reserve_research:
+            reserve = self.p.config.get('research', {}).get('reserve_seconds', 600)
+            if current - self.start >= max(0, self.options.get('run_seconds', 5400) - reserve):
+                raise DeliveryBudgetExhausted('delivery_time_share_exhausted')
         limits = [self.start + self.options.get('run_seconds', 5400) - current]
         limits += [deadline - current for deadline in self.deadlines]
         if self.task:
@@ -110,6 +156,11 @@ class Run:
 
     def reserve_call(self, task, purpose, model, channel):
         self.remaining()
+        if self.reserve_research:
+            used = self.db.execute('SELECT count(*) FROM model_calls WHERE run_id=?', (self.id,)).fetchone()[0]
+            reserve = self.p.config.get('research', {}).get('reserve_model_calls', 2)
+            if used >= max(0, self.options.get('run_model_calls', 16) - reserve):
+                raise DeliveryBudgetExhausted('delivery_model_share_exhausted')
         checks = [('run_model_calls', 16, 'run_id=?', (self.id,)),
                   ('task_model_calls', 40, 'task=?', (task,)),
                   ('daily_model_calls', None, 'started>=?', (self.started[:10],))]
@@ -164,7 +215,10 @@ def classify(error):
         return 'timeout'
     if type(error).__name__ == 'ContributionPaused':
         return 'paused_policy'
-    return 'interrupted' if isinstance(error, (KeyboardInterrupt, SystemExit)) else 'failed'
+    if isinstance(error, (KeyboardInterrupt, SystemExit)):
+        return 'interrupted'
+    from failures import category
+    return category(error)
 
 
 @contextlib.contextmanager
@@ -231,6 +285,8 @@ def model_call(channel, review=None):
                     return function(self, task_id, purpose, *args, **kwargs)
                 except BaseException as error:
                     outcome = classify(error)
+                    if outcome in ('network', 'rate_limit', 'certificate', 'service_unavailable', 'timeout'):
+                        current.channel_failures[channel] = current.channel_failures.get(channel, 0) + 1
                     raise
                 finally:
                     with self.db:
@@ -333,8 +389,14 @@ def metrics(path, limit=10):
 
 def observe_pr(db, repo, pr):
     comments = sum((pr.get(k, []) for k in ('comments', 'inline_comments', 'reviews')), [])
-    response = any(c.get('author_association') in ('OWNER', 'MEMBER', 'COLLABORATOR')
-                   and (c.get('user') or {}).get('type') != 'Bot' for c in comments)
+    from repository_policy import human_maintainer_comments
+    response = bool(human_maintainer_comments(comments))
+    approvals = [c for c in comments if c.get('state') == 'APPROVED'
+                 and c.get('author_association') in ('OWNER', 'MEMBER', 'COLLABORATOR')
+                 and (c.get('user') or {}).get('type') == 'User'
+                 and (c.get('user') or {}).get('login')
+                 and not c['user']['login'].lower().endswith('[bot]')
+                 and c.get('commit_id') and c['commit_id'] == pr.get('headRefOid')]
     with db:
         db.execute('INSERT INTO pr_observations VALUES (?,?,?,?,?,?,?) ON CONFLICT(repo,number) DO UPDATE SET '
                    'head_sha=excluded.head_sha,state=excluded.state,ci_state=excluded.ci_state,'
@@ -342,6 +404,11 @@ def observe_pr(db, repo, pr):
                    'observed_at=excluded.observed_at',
                    (repo, pr['number'], pr.get('headRefOid'), pr['state'],
                     pr.get('ci', {}).get('state', 'unknown'), int(response), utc()))
+        db.execute('INSERT INTO pr_acceptance_observations VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(repo,number) DO UPDATE SET '
+                   'head_sha=excluded.head_sha,review_decision=excluded.review_decision,human_approval=excluded.human_approval,'
+                   'merged_at=excluded.merged_at,state=excluded.state,observed_at=excluded.observed_at',
+                   (repo, pr['number'], pr.get('headRefOid'), pr.get('reviewDecision'), int(bool(approvals)),
+                    pr.get('mergedAt'), pr['state'], utc()))
 
 
 def quality_metrics(db, tables):
@@ -370,7 +437,7 @@ def quality_metrics(db, tables):
                                     "AND task IN (SELECT task FROM stages WHERE name='pr_publication')").fetchone()[0]
                          if 'automation' in tables else 0)
         result[label] = ratio(completed, attempted, 'distinct tasks with observed stage attempts; not upstream acceptance')
-    published, merged, observed_passed, responses, pending = 0, 0, 0, 0, 0
+    published, merged, observed_passed, responses, pending, approved = 0, 0, 0, 0, 0, 0
     if 'automation' in tables:
         contributions = db.execute("SELECT tasks.repo,tasks.state,json_extract(automation.data,'$.pr_number') number "
                                    "FROM tasks JOIN automation ON task=tasks.id WHERE json_extract(automation.data,'$.pr_number') IS NOT NULL").fetchall()
@@ -381,8 +448,12 @@ def quality_metrics(db, tables):
             merged += state == 'MERGED'
             observed_passed += bool(observation and observation['ci_state'] == 'observed_checks_passed')
             responses += bool(observation and observation['maintainer_response'])
+            if 'pr_acceptance_observations' in tables:
+                acceptance = db.execute('SELECT human_approval,head_sha FROM pr_acceptance_observations WHERE repo=? AND number=?', (repo, number)).fetchone()
+                approved += bool(acceptance and acceptance['human_approval'] and observation and acceptance['head_sha'] == observation['head_sha'])
             pending += state not in ('MERGED', 'CLOSED')
     result.update(submitted_unique_prs=published, merged_prs=merged, pending_observation_prs=pending,
+                  human_review_approved_current_head=ratio(approved, published, 'submitted PRs; exact current head human maintainer review, not merge'),
                   ci_observed_passed=ratio(observed_passed, published, 'submitted PRs; unobserved is not passed; branch protection not inferred'),
                   maintainer_response=ratio(responses, published, 'submitted PRs with verified maintainer association; not approval'),
                   merge_rate=ratio(merged, published, 'submitted PRs; open PRs remain pending'))

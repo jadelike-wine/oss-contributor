@@ -19,7 +19,11 @@ class AutonomousTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         (self.root / 'config.json').write_text(json.dumps({'repositories': ['owner/repo'], 'timeout_seconds': 30,
             'automation': {'enabled': True, 'max_tasks_per_tick': 1, 'max_stage_attempts': 3}}), encoding='utf-8')
-        self.p = Pipeline(self.root)
+        # Publication adapters below target only a temporary bare Git remote and fake GitHub.
+        self.p = Pipeline(self.root, allow_external_writes=True)
+        inspect = patch('contribute.inspect_repository', return_value=({}, '', 'Small bug fixes welcome.', None, None))
+        inspect.start()
+        self.addCleanup(inspect.stop)
         self.engine = Autonomous(self.p)
         self.work = self.root / 'workspaces/fixture'
         self.work.mkdir(parents=True)
@@ -198,7 +202,7 @@ class AutonomousTests(unittest.TestCase):
             self.assertEqual('WAITING_MAINTAINER', self.engine.advance(self.key))
             self.assertEqual([], self.purposes)
             self.assertEqual('WAITING_MAINTAINER', self.engine.advance(self.key))
-            self.comments = [{'author_association': 'MEMBER', 'body': 'Confirmed, please send a fix.'}]
+            self.comments = [{'id': 1, 'user': {'login': 'maintainer', 'type': 'User'}, 'author_association': 'MEMBER', 'body': 'Confirmed, please send a fix.'}]
             self.assertEqual('PR_OPEN', self.engine.advance(self.key))
         self.assertEqual(1, len(self.created_issues))
         self.assertEqual(1, len(self.created_prs))
@@ -220,7 +224,7 @@ class AutonomousTests(unittest.TestCase):
         self.assertEqual([], self.created_prs)
 
     def test_retry_budget_ends_without_human_gate(self):
-        with patch.object(self.engine, 'plan', side_effect=RuntimeError('provider unavailable')):
+        with patch.object(self.engine, 'plan', side_effect=RuntimeError('invalid patch assertion')):
             self.assertEqual('PLAN', self.engine.advance(self.key))
             self.assertEqual('PLAN', self.engine.advance(self.key))
             self.assertEqual('FAILED', self.engine.advance(self.key))

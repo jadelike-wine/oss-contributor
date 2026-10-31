@@ -110,6 +110,7 @@ class RepositoryPolicyTests(unittest.TestCase):
         self.p.db.close()
         self.p = Pipeline(self.root)
         with self.network(broken):
+            self.p.refresh_repository_status(force=True)
             self.assertEqual(self.p.effective_repositories(), REPOSITORIES[1:])
         status = json.loads((self.root / 'state/repositories.json').read_text())['repositories'][REPOSITORIES[0]]
         self.assertIn('rate limit', status['reason'])

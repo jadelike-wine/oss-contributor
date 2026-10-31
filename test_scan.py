@@ -52,6 +52,8 @@ class ScanTests(unittest.TestCase):
         return copy.deepcopy(self.issues[repo] if args[0] == 'issue' else self.prs[repo])
 
     def scan(self, gh=None, command=None):
+        # These tests exercise forced full refreshes. Cache/resume has dedicated tests.
+        self.p.config['scanning'] = {'cache_seconds': 0}
         self.log = io.StringIO()
         with patch('contribute.gh', side_effect=gh or self.fake_gh), \
                 patch('contribute.command', side_effect=command) as cmd, redirect_stderr(self.log):
@@ -117,18 +119,22 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(summary['scope'], 'verified_catalog')
         self.assertEqual(summary['planned_repositories'], len(repos))
         self.assertTrue(summary['completed'])
-        self.assertEqual(summary['totals'], {'scanned_repositories': len(repos), 'issues': len(repos), 'prs': 0, 'changed': len(repos)})
+        self.assertEqual(summary['totals'], {'scanned_repositories': len(repos), 'cached_repositories': 0, 'issues': len(repos), 'prs': 0, 'changed': len(repos)})
         self.assertTrue(all(r['status'] == 'scanned' for r in summary['repositories']))
         self.assertEqual(self.p.config['repositories'], REPOSITORIES)
         with self.assertRaises(ContributionPaused):
             self.p.require_contribution(self.p.task('catalog--project-0--12'))
 
-    def test_tick_uses_the_same_full_catalog_scan(self):
+    def test_tick_advances_existing_work_then_scans_bounded_full_catalog_scope(self):
         repos = self.catalog()
         with patch('contribute.gh', side_effect=self.fake_gh), patch('contribute.command', return_value='Rules'), \
-                patch.object(self.p, 'followup', return_value=[]), patch('autonomous.Autonomous.run') as auto:
+                patch.object(self.p, 'followup', return_value=[]), patch('autonomous.Autonomous.run', side_effect=lambda: self.assertFalse(self.visited)) as auto:
             dispatch(self.p, Namespace(action='tick', analyze=False))
-        self.assertEqual(self.visited, repos)
+        limit = self.p.config['scanning']['repositories_per_tick']
+        self.assertEqual(self.visited, repos[:limit])
+        summary = json.loads((self.root / 'runs/scan-summary.json').read_text(encoding='utf-8'))
+        self.assertEqual(summary['planned_repositories'], len(repos))
+        self.assertEqual(sum(r['status'] == 'not_scanned' for r in summary['repositories']), len(repos) - limit)
         auto.assert_called_once()
 
     def test_scan_cli_does_not_require_contribution_board_permissions(self):

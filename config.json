@@ -113,8 +113,15 @@
         "manual_issue_submission": true,
         "human_pr_review_required": true,
         "evidence": "https://github.com/aaif-goose/goose/blob/main/CONTRIBUTING.md"
+      },
+      "agno-agi/agno": {
+        "required_issue_labels": [
+          "ready"
+        ],
+        "evidence": "https://github.com/agno-agi/agno/blob/main/CONTRIBUTING.md"
       }
-    }
+    },
+    "cache_seconds": 21600
   },
   "model": "tokenking/devin/swe-2",
   "timeout_seconds": 1500,
@@ -125,7 +132,11 @@
     "enabled": true,
     "max_tasks_per_tick": 6,
     "max_stage_attempts": 3,
-    "weekly_hunts": true
+    "weekly_hunts": true,
+    "implementation_tasks_per_tick": 6,
+    "maintenance_tasks_per_tick": 6,
+    "max_infrastructure_attempts": 3,
+    "infrastructure_cooldown_seconds": 300
   },
   "review_model": "tokenking/devin/swe-2",
   "repository_catalog": "repository-catalog.json",
@@ -158,5 +169,9 @@
     "daily_seconds": 21600,
     "run_cost_usd": null,
     "daily_cost_usd": null
+  },
+  "scanning": {
+    "cache_seconds": 21600,
+    "repositories_per_tick": 12
   }
 }

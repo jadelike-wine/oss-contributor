@@ -72,6 +72,26 @@ class ResearchTests(unittest.TestCase):
         self.assertTrue(result['approved'])
         self.assertIn(self.base, result['opportunity']['evidence'][0]['url'])
 
+    def test_semantic_local_duplicate_is_reviewed_and_history_is_retained(self):
+        packet = self.packet()
+        prior = self.p.hunt('owner/repo', 'Historical value contract research')
+        with self.p.db:
+            self.p.db.execute('INSERT INTO research_candidates VALUES (?,?,?,?,?,?,?,?,?)',
+                ('prior-feature', prior, 'owner/repo', 'bug', 'READY_TO_IMPLEMENT', 70,
+                 json.dumps({'name': 'Default value contract', 'gap': 'VALUE must be 2', 'legacy': True}), 'before', 'before'))
+        def judge(key, purpose, context):
+            if purpose == 'research-review':
+                self.assertEqual(prior, context['local_candidates'][0]['task'])
+                return {'approved': False, 'reason': 'Same user contract and implementation scope', 'local_duplicate_task': prior}
+            return {'approved': True, 'reason': 'No competing upstream implementation'}
+        with self.research_mocks(opportunity(), packet), patch.object(self.engine, 'judge', side_effect=judge):
+            self.engine.research(self.key, self.engine.load(self.key))
+        data = self.engine.load(self.key)
+        self.assertEqual('SKIPPED', data['stage'])
+        self.assertEqual(prior, data['local_duplicate']['task'])
+        self.assertEqual(2, self.p.db.execute('SELECT count(*) FROM tasks').fetchone()[0])
+        self.assertEqual([], self.created_issues)
+
     def test_medium_risk_bug_runs_full_pipeline_without_waiting(self):
         packet = self.packet()
         answer = opportunity()
@@ -98,7 +118,8 @@ class ResearchTests(unittest.TestCase):
             self.engine = Autonomous(self.p)
             data = self.engine.load(self.key)
             self.assertTrue(data['proposal_only'])
-            self.comments = [{'author_association': 'MEMBER', 'body': 'Please implement.'}]
+            self.comments = [{'id': 101, 'user': {'type': 'User', 'login': 'maintainer'},
+                              'author_association': 'MEMBER', 'body': 'Please implement.'}]
         with self.mocks():
             self.assertEqual('PR_OPEN', self.engine.advance(self.key))
         self.assertEqual(1, len(self.created_issues))
@@ -228,7 +249,7 @@ class ResearchTests(unittest.TestCase):
         import shutil
         import subprocess
         import sys
-        for name in ('contribute.py', 'autonomous.py', 'repository_policy.py', 'ci_status.py', 'telemetry.py'):
+        for name in ('contribute.py', 'autonomous.py', 'repository_policy.py', 'scheduling.py', 'delivery.py', 'failures.py', 'ci_status.py', 'telemetry.py'):
             shutil.copyfile(__import__('pathlib').Path(__file__).parent / name, self.root / name)
         script = ("import runpy,sys; sys.argv=['contribute.py','status']; "
                   "runpy.run_path('contribute.py', run_name='__main__'); import autonomous; "
@@ -252,7 +273,8 @@ class ResearchTests(unittest.TestCase):
         answer['policy']['automated_pr'] = False
         with self.research_mocks(answer, packet):
             self.assertEqual('WAITING_MAINTAINER', self.engine.advance(self.key))
-            self.comments = [{'author_association': 'MEMBER', 'body': 'Please implement.'}]
+            self.comments = [{'id': 102, 'user': {'type': 'User', 'login': 'maintainer'},
+                              'author_association': 'MEMBER', 'body': 'Please implement.'}]
             self.assertEqual('PLAN', self.engine.advance(self.key))
             self.assertFalse((self.work / 'test_value.py').exists())
             self.assertEqual({}, self.engine.load(self.key)['attempts'])

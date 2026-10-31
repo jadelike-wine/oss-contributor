@@ -40,7 +40,8 @@ class CrossHarnessFlowTests(unittest.TestCase):
             self.assertEqual(self.engine.advance(self.key), 'WAITING_MAINTAINER')
             self.assertFalse((self.work / 'test_value.py').exists())
             self.assertEqual(self.p.db.execute('SELECT queue FROM research_candidates').fetchone()[0], 'NEEDS_MAINTAINER_CONFIRMATION')
-            self.comments = [{'author_association': 'MEMBER', 'body': 'Please implement.'}]
+            self.comments = [{'id': 103, 'user': {'type': 'User', 'login': 'maintainer'},
+                              'author_association': 'MEMBER', 'body': 'Please implement.'}]
             self.assertEqual(self.engine.advance(self.key), 'PR_OPEN')
         self.assertEqual(len(self.created_prs), 1)
         self.assertEqual(self.p.db.execute('SELECT queue FROM research_candidates').fetchone()[0], 'READY_TO_IMPLEMENT')
@@ -144,10 +145,12 @@ class CrossHarnessFlowTests(unittest.TestCase):
         self.assertEqual(usage['output_tokens'], 5)
         self.assertIsNone(usage['actual_cost_usd'])
 
-    def test_two_existing_repairs_in_one_run_only_implement_one_task(self):
+    def test_existing_repairs_obey_configured_implementation_task_limit(self):
+        self.p.config['automation']['max_tasks_per_tick'] = 2
         first = self.key
         second = self.p.hunt('owner/repo', 'second repair')
-        for key in (first, second):
+        third = self.p.hunt('owner/repo', 'third repair')
+        for key in (first, second, third):
             self.engine.store(key, {'stage': 'REPAIR', 'attempts': {}, 'plan': self.plan})
         repaired = []
         def repair(key, data):
@@ -156,8 +159,9 @@ class CrossHarnessFlowTests(unittest.TestCase):
         with run(self.p, 'auto'), patch.object(self.engine, 'repair', side_effect=repair):
             self.engine.advance(first)
             self.engine.advance(second)
-        self.assertEqual(repaired, [first])
-        self.assertEqual(self.engine.load(second)['stage'], 'REPAIR')
+            self.engine.advance(third)
+        self.assertEqual(repaired, [first, second])
+        self.assertEqual(self.engine.load(third)['stage'], 'REPAIR')
 
 
 del Fixture, ResearchFixture

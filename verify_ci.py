@@ -20,6 +20,7 @@ def refresh(pipeline, task_id, receipt_file):
     except ValueError:
         if not receipt.get('auto_refresh'):
             raise
+    pipeline.require_external_write()
     task = pipeline.task(task_id)
     if (task['repo'] != 'anomalyco/opencode' or receipt['workflow_path'] != '.github/workflows/verify-opencode.yml'
             or receipt['manifest_path'] != 'ci/patches/opencode-55694.json'):

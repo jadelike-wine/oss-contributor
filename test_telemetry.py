@@ -112,7 +112,7 @@ class TelemetryTests(unittest.TestCase):
 
     def test_exceptions_pauses_and_command_failures_have_distinct_outcomes(self):
         from contribute import ContributionPaused
-        for error, outcome in [(ValueError('secret must not be logged'), 'failed'),
+        for error, outcome in [(ValueError('secret must not be logged'), 'patch_error'),
                                (ContributionPaused('policy'), 'paused_policy'),
                                (subprocess.TimeoutExpired('hidden argv', 1), 'timeout')]:
             with self.assertRaises(type(error)):

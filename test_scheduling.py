@@ -113,7 +113,9 @@ class RepositorySchedulingTests(unittest.TestCase):
         data = self.engine.load(self.ids[2])
         data['pr_number'] = 123
         self.engine.move(self.ids[2], data, 'REPAIR')
-        self.assertEqual(self.dispatch(6), self.repos * 2)
+        seen = self.dispatch(6)
+        self.assertEqual(seen[::2], [self.repos[2]] * 6)
+        self.assertEqual(seen[1::2], self.repos[:2] * 3)
 
     def test_configuration_reordering_resumes_after_repository_name(self):
         self.dispatch(1)

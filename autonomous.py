@@ -76,11 +76,10 @@ def runtime_tools():
     if local_bun.is_file():
         result['bun'] = str(local_bun)
     if os.name == 'nt':
-        for name, entry in {'npm': 'npm/bin/npm-cli.js', 'pnpm': 'pnpm/bin/pnpm.cjs',
-                            'corepack': 'corepack/dist/corepack.js'}.items():
+        from delivery import node_command
+        for name in ('npm', 'pnpm', 'corepack'):
             executable = result.get(name)
             if executable:
-                from delivery import node_command
                 try:
                     result[name] = node_command(name, shutil.which)
                 except ValueError:
@@ -750,7 +749,7 @@ class Autonomous:
         folder = self.packet_dir(task_id)
         evidence = json.loads((folder / 'verification.json').read_text(encoding='utf-8'))
         if evidence.get('passed') is not True or data.get('approved_fingerprint') != evidence.get('fingerprint'):
-            raise RuntimeError('Publish requires verified and independently approved evidence')
+            raise RuntimeError('Publish requires verified and reviewed evidence')
         if evidence.get('base_sha') != task['base_sha']:
             raise ContributionPaused('Verification baseline differs from the task baseline; revalidate')
         try:

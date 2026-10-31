@@ -5,13 +5,22 @@ import re
 import subprocess
 
 TRANSIENT = {'network', 'rate_limit', 'certificate', 'service_unavailable', 'model_format', 'timeout'}
+MODEL_FORMAT = ('invalid reviewer verdict', 'model must return', 'invalid model', 'ambiguous model response',
+                'missing executable verification spec', 'missing spec field', 'recipe fields must',
+                'empty test recipe', 'commands must be nonempty argv arrays', 'invalid planning decision',
+                'invalid feedback decision', 'invalid research decision', 'research needs a reason',
+                'invalid opportunity category/risk', 'missing opportunity field', 'one or two specific duplicate queries',
+                'explicit upstream policy assessment required', 'version 2 research requires feature_matrix',
+                'stable kebab-case feature_key required', 'unknown feature taxonomy category',
+                'missing matrix field', 'missing bounded matrix plan', 'conflicting feature_status maps',
+                'invalid feature status/reason')
 
 
 def category(error):
     text = str(error).lower()
     if type(error).__name__ == 'ContributionPaused':
         return 'policy'
-    if isinstance(error, json.JSONDecodeError) or any(x in text for x in ('invalid reviewer verdict', 'model must return', 'invalid model', 'ambiguous model response')):
+    if isinstance(error, json.JSONDecodeError) or any(x in text for x in MODEL_FORMAT):
         return 'model_format'
     if any(x in text for x in ('certificate', 'ssl_cert', 'unable to get local issuer', 'tls handshake')):
         return 'certificate'

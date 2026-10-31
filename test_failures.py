@@ -28,6 +28,16 @@ class FailureTests(unittest.TestCase):
     def test_patch_failure_still_uses_quality_path(self):
         self.assertFalse(record_failure({}, 'PATCH_READY', RuntimeError('assertion failed'), {}))
 
+    def test_structural_model_output_does_not_consume_candidate_quality_attempts(self):
+        from autonomous import validate_spec
+        data = {'attempts': {'PLAN': 1}}
+        with self.assertRaises(ValueError) as caught:
+            validate_spec({'setup': []})
+        self.assertTrue(record_failure(data, 'PLAN', caught.exception, {}))
+        self.assertEqual('model_format', data['failure_category'])
+        self.assertEqual({'PLAN': 1}, data['attempts'])
+        self.assertEqual('model_format', category(ValueError('Missing opportunity field: users')))
+
 
 if __name__ == '__main__':
     unittest.main()

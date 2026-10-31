@@ -12,6 +12,17 @@ import subprocess
 import tempfile
 
 
+def isolated_worktree_args(destination, revision):
+    """Create only new worktrees with LF defaults; repository attributes win.
+
+Per-command settings do not alter shared/global configuration or rewrite any
+existing workspace. This keeps host autocrlf settings from manufacturing test
+failures in upstream LF inputs such as shebangs and Markdown fixtures.
+"""
+    return ['git', '-c', 'core.autocrlf=false', '-c', 'core.eol=lf',
+            'worktree', 'add', '--detach', str(destination), revision]
+
+
 def content_tree(work, command):
     """Return the tree Git would commit, without touching the real index.
 

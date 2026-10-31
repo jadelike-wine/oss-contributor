@@ -589,7 +589,7 @@ class Autonomous:
         if data.get('proposal_only'):
             research = data.get('research', {})
             if research.get('approved') is not True or research.get('fingerprint') != self.p.fingerprint(task['workspace']):
-                raise RuntimeError('Proposal requires unchanged independently approved research')
+                raise RuntimeError('Proposal requires unchanged reviewed research')
             opportunity = research['opportunity']
             if not opportunity['policy']['automated_issue'] or opportunity['category'] == 'security':
                 raise ContributionPaused('Public proposal is disallowed by policy/security gate')

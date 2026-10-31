@@ -667,7 +667,8 @@ class Pipeline:
                 if actual != sha or command(['git', 'status', '--porcelain'], cwd=work).strip():
                     raise RuntimeError('Interrupted workspace differs from current upstream; automatic overwrite refused')
             else:
-                command(["git", "worktree", "add", "--detach", str(work), sha], cwd=base, timeout=self.config.get('timeouts', {}).get('git_seconds', 600), started=lambda pid: self.track_process('prepare', pid))
+                from delivery import isolated_worktree_args
+                command(isolated_worktree_args(work, sha), cwd=base, timeout=self.config.get('timeouts', {}).get('git_seconds', 600), started=lambda pid: self.track_process('prepare', pid))
             with self.db:
                 self.db.execute("UPDATE tasks SET workspace=?,base_sha=? WHERE id=?", (str(work), sha, task_id))
             packet = self.root / "runs" / task_id
@@ -891,7 +892,8 @@ class Pipeline:
             attempt = folder / ("verify-" + dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f"))
             attempt.mkdir(parents=True)
             baseline = self.root / 'workspaces' / ('base-' + hashlib.sha256((task_id + attempt.name).encode()).hexdigest()[:16])
-            command(["git", "worktree", "add", "--detach", str(baseline), task["base_sha"]], cwd=work, timeout=self.config.get('timeouts', {}).get('git_seconds', 600))
+            from delivery import isolated_worktree_args
+            command(isolated_worktree_args(baseline, task['base_sha']), cwd=work, timeout=self.config.get('timeouts', {}).get('git_seconds', 600))
             results = []
             def run(argv, directory, name):
                 # Windows .cmd shims need an explicit executable; recipes should use node.exe + JS entrypoint.

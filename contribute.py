@@ -449,7 +449,7 @@ class Pipeline:
         return repos
 
     @observed('scan')
-    def scan(self, max_repositories=None):
+    def scan(self, max_repositories=None, force=False):
         changed = 0
         with self.lock("scan"):
             repos = self.scan_repositories()
@@ -462,7 +462,7 @@ class Pipeline:
                 previous = json.loads(summary_path.read_text(encoding='utf-8'))
             except (OSError, ValueError):
                 previous = {}
-            ttl = self.config.get('scanning', {}).get('cache_seconds', 0)
+            ttl = 0 if force else self.config.get('scanning', {}).get('cache_seconds', 0)
             cursor = self.db.execute("SELECT last_repo FROM scheduler WHERE name='scan'").fetchone()
             if cursor and cursor['last_repo'] in repos:
                 start = repos.index(cursor['last_repo']) + 1
@@ -470,11 +470,14 @@ class Pipeline:
             failed = {record.get('repo') for record in previous.get('repositories', []) if record.get('status') == 'unknown'}
             summary['repositories'].sort(key=lambda record: record['repo'] not in failed)
             requested = 0
+            previous_records = {record.get('repo'): record for record in previous.get('repositories', [])}
             # Preserve every valid checkpoint before the first write, including on interruption.
             for record in summary['repositories']:
                 cached = reusable_scan_record(previous, record['repo'], now(), ttl, self.config['scan_limit'])
                 if cached:
                     record.update(cached)
+                elif previous_records.get(record['repo'], {}).get('status') == 'unknown':
+                    record.update(previous_records[record['repo']])
             save(summary_path, summary)
             print(f'scan scope: {scope} ({len(repos)} repositories)', file=sys.stderr)
             try:
@@ -482,6 +485,9 @@ class Pipeline:
                     repo = record['repo']
                     if record['status'] == 'cached':
                         continue
+                    if not force and record.get('status') == 'unknown':
+                        if record.get('retry_exhausted') or record.get('retry_after', '') > now():
+                            continue
                     cached = reusable_scan_record(previous, repo, now(), ttl, self.config['scan_limit'])
                     if cached:
                         record.update(cached)
@@ -498,9 +504,15 @@ class Pipeline:
                         record.update(status='unknown', error=str(error))
                         raise
                     except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired, KeyError, TypeError) as error:
-                        record.update(status='unknown', error=f'{type(error).__name__}: {error}')
+                        from failures import category
+                        failures = record.get('failure_attempts', 0) + 1
+                        record.update(status='unknown', error=f'{type(error).__name__}: {error}', failure_category=category(error),
+                                      failure_attempts=failures, retry_exhausted=failures >= 3,
+                                      retry_after=(dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=min(300 * 2 ** min(failures - 1, 4), 3600))).isoformat())
                         message = f"scan {repo}: FAILED ({type(error).__name__}): {error}"
                     else:
+                        for key in ('error', 'failure_category', 'failure_attempts', 'retry_after', 'retry_exhausted'):
+                            record.pop(key, None)
                         record.update(observed_at=now(), scan_key=scan_key(repo, self.config['scan_limit']))
                         if result is None:
                             record.update(status='skipped', reason='archived')
@@ -1010,7 +1022,8 @@ def main():
     parser.add_argument('--allow-external-writes', action='store_true',
                         help='Enable remote writes only when this session explicitly authorizes publication')
     sub = parser.add_subparsers(dest="action", required=True)
-    sub.add_parser("scan")
+    scan_parser = sub.add_parser("scan")
+    scan_parser.add_argument('--force', action='store_true', help='Refresh cached or cooled-down reads once; preserve failure history')
     sub.add_parser("status")
     sub.add_parser("followup")
     metrics_parser = sub.add_parser("metrics", help="Read-only local runtime and outcome report")
@@ -1079,7 +1092,7 @@ def dispatch(pipeline, args):
         from autonomous import Autonomous
         print(json.dumps(Autonomous(pipeline).research_batch(), ensure_ascii=False, indent=2))
     elif args.action == "scan":
-        print(f"New/updated issues: {pipeline.scan()}")
+        print(f"New/updated issues: {pipeline.scan(force=getattr(args, 'force', False))}")
     elif args.action == "auto":
         from autonomous import Autonomous
         engine = Autonomous(pipeline)

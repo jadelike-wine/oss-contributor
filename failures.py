@@ -30,7 +30,7 @@ def category(error):
         return 'service_unavailable'
     if isinstance(error, subprocess.TimeoutExpired):
         return 'timeout'
-    if isinstance(error, (ConnectionError, TimeoutError)) or any(x in text for x in ('connection reset', 'connection refused', 'timed out', 'could not resolve', 'network is unreachable', 'network unavailable', 'http/2 stream', 'econnreset')):
+    if isinstance(error, (ConnectionError, TimeoutError)) or any(x in text for x in ('connection reset', 'connection refused', 'timed out', 'could not resolve', 'network is unreachable', 'network unavailable', 'http/2 stream', 'econnreset', ': eof', 'unexpected eof')):
         return 'network'
     if any(x in text for x in ('evidence', 'quote', 'duplicate search incomplete', 'unread path', 'insufficient')):
         return 'insufficient_evidence'

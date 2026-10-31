@@ -59,7 +59,7 @@ class ScanTests(unittest.TestCase):
                 patch('contribute.command', side_effect=command) as cmd, redirect_stderr(self.log):
             if command is None:
                 cmd.return_value = 'Rules'
-            return self.p.scan()
+            return self.p.scan(force=True)
 
     def test_legacy_config_without_catalog_keeps_allowlist_limits_scores_and_repeat_scan(self):
         self.assertEqual(self.config['repositories'], REPOSITORIES)
@@ -136,6 +136,29 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(summary['planned_repositories'], len(repos))
         self.assertEqual(sum(r['status'] == 'not_scanned' for r in summary['repositories']), len(repos) - limit)
         auto.assert_called_once()
+
+    def test_failed_scan_cools_down_without_starving_other_repositories(self):
+        repos = REPOSITORIES[:2]
+        calls = []
+        def scan_one(repo):
+            calls.append(repo)
+            if repo == repos[0]:
+                raise RuntimeError('Post "https://api.github.com/graphql": EOF')
+            return (0, 1, 0)
+        with patch.object(self.p, 'scan_repositories', return_value=repos), patch.object(self.p, 'scan_repository', side_effect=scan_one):
+            self.p.scan(max_repositories=1)
+            self.p.scan(max_repositories=1)
+            self.assertEqual(repos, calls)
+            self.p.scan(max_repositories=1, force=True)
+            self.p.scan(max_repositories=1, force=True)
+            summary = json.loads((self.root / 'runs/scan-summary.json').read_text(encoding='utf-8'))
+            failure = next(r for r in summary['repositories'] if r['repo'] == repos[0])
+            self.assertEqual('network', failure['failure_category'])
+            self.assertEqual(3, failure['failure_attempts'])
+            self.assertTrue(failure['retry_exhausted'])
+            calls.clear()
+            self.p.scan(max_repositories=1)
+            self.assertNotIn(repos[0], calls)
 
     def test_scan_cli_does_not_require_contribution_board_permissions(self):
         repos = self.catalog()

@@ -151,7 +151,7 @@ def build(answer, task, packet):
             'contribution_path': 'research_only', 'created_at': stamp, 'updated_at': stamp}
 
 
-def route(answer, matrix, *, reviewed=False, duplicate_clear=False, maintainer=False, policy=None):
+def route(answer, matrix, *, reviewed=False, duplicate_clear=False, maintainer=False, policy=None, proactive=False):
     policy = policy or {}
     if answer.get('category') == 'security' or answer.get('decision') != 'candidate':
         return 'RESEARCH_ONLY', 0, 'private_or_no_candidate'
@@ -173,7 +173,8 @@ def route(answer, matrix, *, reviewed=False, duplicate_clear=False, maintainer=F
             return 'RESEARCH_ONLY', 0, 'insufficient_gap_or_peer_evidence'
     # Model value prose is retained for review; model numerical scores never determine admission.
     priority = 60 + (10 if answer['risk'] == 'low' else 0)
-    discussion = (answer['category'] == 'feature' or answer['risk'] != 'low'
+    discussion = ((answer['category'] == 'feature' or answer['risk'] != 'low') and not proactive
+                  or answer['risk'] == 'high'
                   or allowed.get('maintainer_required') or not allowed.get('automated_pr'))
     if discussion and not maintainer:
         return 'NEEDS_MAINTAINER_CONFIRMATION', priority - 40, 'design_direction_requires_maintainer'

@@ -167,7 +167,9 @@ class RepositoryPolicyTests(unittest.TestCase):
         with self.network(), patch.object(self.p, 'hunt', side_effect=lambda repo, focus: seen.append(repo)), \
                 patch.object(engine, 'advance', return_value='PLAN'):
             engine.run()
-        self.assertEqual(seen, [repo for repo in REPOSITORIES[1:] if repo != 'aaif-goose/goose'])
+        policies = self.p.config['repository_checks']['policies']
+        self.assertEqual(seen, [repo for repo in REPOSITORIES[1:]
+                                if not policies.get(repo, {}).get('manual_issue_submission')])
 
     def test_followup_isolates_failure_and_retains_previous_observations(self):
         pr = {'number': 1, 'state': 'OPEN', 'url': 'old-pr', 'title': 'fix'}
@@ -252,6 +254,21 @@ class NoticeAndBoardTests(unittest.TestCase):
         self.assertIsNone(maintenance_notice('owner/repo', 'This project is actively maintained.'))
         self.assertTrue(maintenance_notice('continuedev/continue', '> _The `continuedev/continue` repository is no longer actively maintained._'))
         self.assertTrue(maintenance_notice('SWE-agent/SWE-agent', 'Most effort is on [mini](url),\nwhich has superseded SWE-agent.'))
+
+    def test_zenodo_release_archival_is_not_a_maintenance_notice(self):
+        citation = ('If you use GeoLibre in your work, please cite it. GeoLibre is archived on '
+                    '[Zenodo](https://zenodo.org/), which mints a DOI for every release. '
+                    'The concept DOI below always resolves to the latest version.')
+        self.assertIsNone(maintenance_notice('opengeos/GeoLibre', citation))
+        self.assertTrue(maintenance_notice('opengeos/GeoLibre',
+                                          citation + ' This project is no longer maintained.'))
+
+    def test_repository_archive_notices_remain_blocked(self):
+        for notice in ('GeoLibre is archived.', 'GeoLibre has been archived.',
+                       'GeoLibre is archived on GitHub.',
+                       'This repository is archived and read-only.'):
+            with self.subTest(notice=notice):
+                self.assertTrue(maintenance_notice('opengeos/GeoLibre', notice))
 
     def test_ready_requires_open_issue_exact_project_and_complete_memberships(self):
         url = 'https://github.com/orgs/aaif-goose/projects/1'

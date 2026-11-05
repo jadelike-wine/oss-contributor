@@ -367,6 +367,11 @@ def run(engine, task_id, data):
     p.require_research(p.task(task_id))
     p.prepare(task_id, read_only=True)
     task = p.task(task_id)
+    from contribution_strategy import local_discovery, PRIORITY_GUIDANCE
+    if local_discovery(task, data) and not data.get('contribution_origin'):
+        data['contribution_origin'] = {'kind': 'local_discovery', 'task': task_id, 'at': now()}
+        engine.store(task_id, data)
+    proactive = engine.proactive(task_id, data)
     before = p.fingerprint(task['workspace'])
     packet = collect(engine, task)
     from feature_matrix import PROMPT, build, persist
@@ -399,11 +404,17 @@ def run(engine, task_id, data):
         'external contribution acceptance when supplied; label missing observations unknown. '
         'do not invent maintainer approval. Keep test acceptance criteria in validation. Include concrete validation commands, '
         'expected result and affected files in scope. Policy evidence must quote applicable contribution rules. '
-        'Features, architecture changes, uncertain designs and non-low risks always need maintainer direction '
-        'before any implementation. Small proven bugs/tests/performance/UX can proceed only if policy permits. '
+        + ('Features and bounded fixes may proceed without discretionary maintainer encouragement when upstream '
+           'rules permit. Architecture changes, uncertain designs and high risks need direction. '
+           if proactive else 'Features, architecture changes, uncertain designs and non-low risks always need '
+           'maintainer direction before any implementation. ')
+        + 'Small proven bugs/tests/performance/UX can proceed only if policy permits. '
         'issue_body must be English, accurate about static evidence and pending tests. Be concise: '
         'one or two sentences per prose field, at most three evidence entries per group, no repeated '
         'quotations in rationale or issue_body. Do not echo source files or the input packet.\n'
+        + (PRIORITY_GUIDANCE + 'Generic advice to discuss features first is not an upstream requirement. '
+           'Set maintainer_required only for an actual applicable upstream rule, citing its evidence. '
+           if proactive else '')
         + (PROMPT if packet.get('schema_version') == 2 else '') + json.dumps(packet, ensure_ascii=False))
     if packet.get('schema_version') == 2:
         prompt += ('\nEND OF SOURCE DATA. Output schema reminder:\n' + PROMPT +
@@ -467,7 +478,7 @@ def run(engine, task_id, data):
         data['reason'] = answer['reason']
         engine.move(task_id, data, 'SKIPPED')
         return result
-    candidate = {'plan': answer}
+    candidate = {'plan': answer, 'contribution_origin': data.get('contribution_origin', {})}
     # A validated model result is checkpointed before duplicate/reviewer calls.
     data['research_pending'] = result
     engine.store(task_id, data)
@@ -497,7 +508,8 @@ def run(engine, task_id, data):
                 'direction; it will NOT open a new issue. Do not reject that planned reuse as duplicate publication. '
                 'Compare supplied local_candidates by user need and implementation scope, not title alone. '
                 'If one already covers the same work, reject and return local_duplicate_task naming that supplied task. '
-                'Never infer semantic equivalence from keywords alone.',
+                'Never infer semantic equivalence from keywords alone. '
+                + (PRIORITY_GUIDANCE if proactive else ''),
         'opportunity': answer, 'context': packet, 'existing_issue': candidate.get('existing_issue'),
         'local_candidates': local_candidates})
     if gate.get('local_duplicate_task'):
@@ -524,7 +536,8 @@ def run(engine, task_id, data):
     if matrix and candidate.get('existing_issue'):
         matrix['existing_issue'] = {k: candidate['existing_issue'][k] for k in ('number', 'url', 'title')}
     queue, duplicate = persist(engine, task, answer, matrix, reviewed=True, duplicate_clear=True,
-                               maintainer=data.get('maintainer_approved', False))
+                               maintainer=data.get('maintainer_approved', False),
+                               proactive=proactive and not candidate.get('existing_issue'))
     if duplicate or (matrix and queue == 'RESEARCH_ONLY'):
         if current:
             current.count('duplicate_candidates' if duplicate else 'insufficient_evidence')
@@ -534,6 +547,8 @@ def run(engine, task_id, data):
     result['queue'] = queue
     if candidate.get('existing_issue'):
         result['existing_issue'] = candidate['existing_issue']
+    if candidate.get('competing_prs'):
+        data['competing_prs'] = candidate['competing_prs']
     result['approved'] = True
     data.pop('research_pending', None)
     data['research'] = result
@@ -543,12 +558,9 @@ def run(engine, task_id, data):
     return result
 
 
-def needs_discussion(opportunity):
-    # Features always discuss first: unsolicited feature PRs are almost always
-    # closed. Bugs only wait for maintainer input when the work itself is
-    # high-risk or the upstream policy requires it; a medium-risk bug fix with
-    # reproduction evidence is a valid PR on its own.
-    return (opportunity['category'] == 'feature' or opportunity['risk'] == 'high'
+def needs_discussion(opportunity, *, proactive=False):
+    # Local preference can remove a generic feature wait, never an upstream rule.
+    return ((opportunity['category'] == 'feature' and not proactive) or opportunity['risk'] == 'high'
             or opportunity['policy']['maintainer_required']
             or not opportunity['policy']['automated_pr'])
 

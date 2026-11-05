@@ -126,8 +126,10 @@ def maintenance_notice(repo, text):
     plain = re.sub(r'[*`>]', '', plain)
     plain = re.sub(r'\s+', ' ', plain)
     subject = rf'(?:this (?:project|repo(?:sitory)?)|(?:the )?{re.escape(repo)}(?: repository)?|{re.escape(repo.split("/")[1])})'
+    # Archiving releases on Zenodo for citation does not retire the repository.
+    archived = r'archived(?!\s+on\s+Zenodo\b)'
     patterns = [
-        subject + r'\s+(?:is|has been)\s+(?:no longer (?:(?:actively|being) )?maintained|unmaintained|deprecated|archived|read.only|in maintenance.only mode)',
+        subject + rf'\s+(?:is|has been)\s+(?:no longer (?:(?:actively|being) )?maintained|unmaintained|deprecated|{archived}|read.only|in maintenance.only mode)',
         subject + r'\s+(?:has (?:moved|migrated)|is (?:moving|migrating))\s+to\b',
         subject + r'\s+has been superseded by\b',
         r'which has superseded\s+' + re.escape(repo.split('/')[1]) + r'\b',

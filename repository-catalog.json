@@ -1,6 +1,6 @@
 {
  "schema_version": 1,
- "checked_at": "2026-10-18T10:04:46.054432+00:00",
+ "checked_at": "2026-10-31T16:09:08.364515+00:00",
  "repositories": [
   {
    "repo": "QwenLM/qwen-code",
@@ -19914,6 +19914,1556 @@
      "excerpt": "# Security\n\nAt Activepieces.com, we consider the security of our systems a top priority. But no matter how much effort we put into system security, there can still be vulnerabilities present.\n\nIf you discover a vulnerability, we would like to know about it so we can take steps to address it as quickly as possible. We would like to ask you to help us better protect our clients and our systems.\n\n## Out of scope vulnerabilities:\n\n- Clickjacking on pages with no sensitive actions.\n- Unauthenticated/logout/login CSRF.\n- Attacks requiring MITM or physical access to a user's device.\n- Any activity th",
      "policy_excerpts": [
       "- Do not run automated scanners on our infrastructure or dashboard. If you wish to do this, contact us at security@activepieces.com and we will set up a sandbox for you."
+     ]
+    }
+   }
+  },
+  {
+   "repo": "iib0011/omni-tools",
+   "url": "https://github.com/iib0011/omni-tools",
+   "checked_at": "2026-10-31T16:04:49.150976+00:00",
+   "status": "research_only",
+   "category": "applications_and_tools",
+   "research_allowed": true,
+   "automatic_contribution": true,
+   "policy": {
+    "automation": "unconfirmed",
+    "issue_submission": "unconfirmed",
+    "pr_submission": "allowlisted",
+    "scope": "bounded root and discovered guide inspection",
+    "contribution_allowlisted": true,
+    "decision": "Existing contribution allowlist still requires live health, task policy and publication gates; catalog never authorizes publication"
+   },
+   "reason": "Pinned public source/test/documentation verified; allowlisted for automated contribution pending live gates",
+   "canonical": "iib0011/omni-tools",
+   "default_branch": "main",
+   "pushed_at": "2026-10-24T12:13:14Z",
+   "updated_at": "2026-10-31T13:14:57Z",
+   "archived": false,
+   "disabled": false,
+   "private": false,
+   "license": "MIT",
+   "contributing_url": null,
+   "sha": "9244e02923d99cde143ddd5b8d761d9ed0997da4",
+   "inventory": {
+    "source": {
+     "count": 585,
+     "examples": [
+      ".vitest/setup.ts",
+      "@types/i18n.d.ts",
+      "@types/theme.d.ts",
+      "commitlint.config.js",
+      "playwright.config.ts",
+      "postcss.config.mjs",
+      "public/gs.js",
+      "scripts/add-i18n-to-meta.js",
+      "scripts/cleanup-empty-directories.js",
+      "scripts/create-tool.mjs"
+     ]
+    },
+    "test": {
+     "count": 78,
+     "examples": [
+      "src/pages/tools/audio/extract-audio/extract-audio.service.test.ts",
+      "src/pages/tools/csv/change-csv-separator/change-csv-separator.service.test.ts",
+      "src/pages/tools/csv/csv-rows-to-columns/csv-rows-to-columns.service.test.ts",
+      "src/pages/tools/csv/csv-to-tsv/csv-to-tsv.service.test.ts",
+      "src/pages/tools/csv/csv-to-xml/csv-to-xml.service.test.ts",
+      "src/pages/tools/csv/csv-to-yaml/csv-to-yaml.service.test.ts",
+      "src/pages/tools/csv/insert-csv-columns/insert-csv-columns.service.test.ts",
+      "src/pages/tools/csv/swap-csv-columns/swap-csv-columns.service.test.ts",
+      "src/pages/tools/csv/transpose-csv/transpose-csv.service.test.ts",
+      "src/pages/tools/image/generic/compress/compress.service.test.ts"
+     ]
+    },
+    "documentation": {
+     "count": 2,
+     "examples": [
+      "README.md",
+      "public/robots.txt"
+     ]
+    }
+   },
+   "files": {
+    "vite.config.ts": {
+     "sha256": "271378ae3bb8b46619bcb22d6da09b11dfe913907e77131541adb76d0554bbb8",
+     "characters": 838,
+     "file_type": "source",
+     "url": "https://github.com/iib0011/omni-tools/blob/9244e02923d99cde143ddd5b8d761d9ed0997da4/vite.config.ts",
+     "excerpt": "/// <reference types=\"vitest\" />\nimport { defineConfig } from 'vite';\nimport react from '@vitejs/plugin-react-swc';\nimport tsconfigPaths from 'vite-tsconfig-paths';\nimport packageJson from './package.json';\nimport { execSync } from 'node:child_process';\n\nconst commitHash = execSync('git rev-parse --short HEAD').toString().trim();\n\n// https://vitejs.dev/config https://vitest.dev/config\nexport default defineConfig({\n  plugins: [react(), tsconfigPaths()],\n  define: {\n    'process.env': {},\n    __APP_VERSION__: JSON.stringify(packageJson.version),\n    __COMMIT_HASH__: JSON.stringify(commitHash)\n  ",
+     "policy_excerpts": []
+    },
+    "src/tools/index.test.ts": {
+     "sha256": "22b337b880d62530cfee8e8a08fa495fb7a49242d47aa35d9f8ee5b4a6b60c0a",
+     "characters": 6428,
+     "file_type": "test",
+     "url": "https://github.com/iib0011/omni-tools/blob/9244e02923d99cde143ddd5b8d761d9ed0997da4/src/tools/index.test.ts",
+     "excerpt": "import { describe, it, expect } from 'vitest';\nimport type { TFunction } from 'i18next';\nimport { filterTools, getToolCategories, getToolsByCategory } from './index';\nimport type { DefinedTool } from './defineTool';\nimport type { FullI18nKey, I18nNamespaces } from '../i18n';\n\nconst mergePdfTool = {\n  type: 'pdf',\n  path: 'pdf/merge-pdf',\n  name: 'pdf:mergePdf.title' as FullI18nKey,\n  description: 'pdf:mergePdf.description' as FullI18nKey,\n  shortDescription: 'pdf:mergePdf.shortDescription' as FullI18nKey,\n  icon: 'icon',\n  keywords: [\n    'pdf',\n    'merge',\n    'extract',\n    'pages',\n    'co",
+     "policy_excerpts": []
+    },
+    "README.md": {
+     "sha256": "f0bf8afecc7297404b09b2d7278c5435823fd7293cba739f6760ff031ee16008",
+     "characters": 6036,
+     "file_type": "documentation",
+     "url": "https://github.com/iib0011/omni-tools/blob/9244e02923d99cde143ddd5b8d761d9ed0997da4/README.md",
+     "excerpt": "<div align=\"center\">\n        <img src=\"src/assets/logo.png\" width=\"220\" />\n        <br /><br />\n<a href=\"https://trendshift.io/repositories/13055\" target=\"_blank\"><img src=\"https://trendshift.io/api/badge/repositories/13055\" alt=\"iib0011%2Fomni-tools | Trendshift\" style=\"width: 200px;\" width=\"200\"/></a>\n   <br /><br />\n<a href=\"https://github.com/iib0011/omni-tools/releases\">\n          <img src=\"https://img.shields.io/badge/version-0.6.0-blue?style=for-the-badge\" />\n        </a>\n        <a href=\"https://hub.docker.com/r/iib0011/omni-tools\">\n          <img src=\"https://img.shields.io/docker/pul",
+     "policy_excerpts": [
+      "- [Contribute](#contribute)",
+      "## Contribute",
+      "## 🤝 Looking to contribute?",
+      "We welcome contributions! You can help by:",
+      "## Contributors",
+      "<a href=\"https://github.com/iib0011/omni-tools/graphs/contributors\">"
+     ]
+    },
+    "LICENSE": {
+     "sha256": "ba790e88e02c246eb5f59837cc1746c06fde5c511c109747615d15adbe59c7b0",
+     "characters": 1079,
+     "file_type": "configuration",
+     "url": "https://github.com/iib0011/omni-tools/blob/9244e02923d99cde143ddd5b8d761d9ed0997da4/LICENSE",
+     "excerpt": "MIT License\n\nCopyright (c) 2024 Ibrahima Gaye Coulibaly\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions",
+     "policy_excerpts": []
+    }
+   }
+  },
+  {
+   "repo": "opengeos/GeoLibre",
+   "url": "https://github.com/opengeos/GeoLibre",
+   "checked_at": "2026-10-31T16:07:37.932360+00:00",
+   "status": "research_only",
+   "category": "applications_and_tools",
+   "research_allowed": true,
+   "automatic_contribution": true,
+   "policy": {
+    "automation": "unconfirmed",
+    "issue_submission": "unconfirmed",
+    "pr_submission": "allowlisted",
+    "scope": "bounded root and discovered guide inspection",
+    "contribution_allowlisted": true,
+    "decision": "Existing contribution allowlist still requires live health, task policy and publication gates; catalog never authorizes publication"
+   },
+   "reason": "Pinned public source/test/documentation verified; allowlisted for automated contribution pending live gates",
+   "canonical": "opengeos/GeoLibre",
+   "default_branch": "main",
+   "pushed_at": "2026-10-31T06:53:45Z",
+   "updated_at": "2026-10-31T15:36:10Z",
+   "archived": false,
+   "disabled": false,
+   "private": false,
+   "license": "MIT",
+   "contributing_url": "repos/opengeos/GeoLibre/contents/CONTRIBUTING.md",
+   "sha": "44b9c42a16e055c400a04f49f45959100627cd03",
+   "inventory": {
+    "source": {
+     "count": 1785,
+     "examples": [
+      "apps/geolibre-desktop/postcss.config.js",
+      "apps/geolibre-desktop/public/geolibre-runtime-config.js",
+      "apps/geolibre-desktop/public/pyodide/pyodide-worker.js",
+      "apps/geolibre-desktop/src-tauri/android/MainActivity.kt",
+      "apps/geolibre-desktop/src-tauri/build.rs",
+      "apps/geolibre-desktop/src-tauri/src/arcgis_http.rs",
+      "apps/geolibre-desktop/src-tauri/src/aws_credentials.rs",
+      "apps/geolibre-desktop/src-tauri/src/aws_sts.rs",
+      "apps/geolibre-desktop/src-tauri/src/earth_engine_oauth.rs",
+      "apps/geolibre-desktop/src-tauri/src/http_body.rs"
+     ]
+    },
+    "test": {
+     "count": 1045,
+     "examples": [
+      "apps/geolibre-desktop/src-tauri/vendor/tauri-plugin-dialog/android/src/test/java/ExampleUnitTest.kt",
+      "apps/geolibre-desktop/src-tauri/vendor/tauri-plugin-dialog/ios/Tests/PluginTests/PluginTests.swift",
+      "apps/geolibre-desktop/src-tauri/vendor/tauri-plugin-geolocation/android/src/test/java/ExampleUnitTest.kt",
+      "apps/geolibre-desktop/src-tauri/vendor/tauri-plugin-geolocation/ios/Tests/PluginTests/PluginTests.swift",
+      "backend/geolibre_server/tests/test_conversion.py",
+      "backend/geolibre_server/tests/test_conversion_gdb.py",
+      "backend/geolibre_server/tests/test_db_common.py",
+      "backend/geolibre_server/tests/test_geoparquet_detection.py",
+      "backend/geolibre_server/tests/test_jupyter_relay.py",
+      "backend/geolibre_server/tests/test_jupyter_server_config.py"
+     ]
+    },
+    "documentation": {
+     "count": 128,
+     "examples": [
+      ".github/pull_request_template.md",
+      "CLAUDE.md",
+      "CONTRIBUTING.md",
+      "README.md",
+      "apps/geolibre-desktop/jupyterlite/requirements.txt",
+      "apps/geolibre-desktop/public/plugins/README.md",
+      "apps/geolibre-desktop/src-tauri/vendor/tauri-plugin-dialog/CHANGELOG.md",
+      "apps/geolibre-desktop/src-tauri/vendor/tauri-plugin-dialog/GEOLIBRE_PATCH.md",
+      "apps/geolibre-desktop/src-tauri/vendor/tauri-plugin-dialog/README.md",
+      "apps/geolibre-desktop/src-tauri/vendor/tauri-plugin-dialog/SECURITY.md"
+     ]
+    }
+   },
+   "files": {
+    "eslint.config.mjs": {
+     "sha256": "bf5a7010958dfc4464dbec67d77e9b4b63b54007ba54401ff8481167a140c5f5",
+     "characters": 5642,
+     "file_type": "source",
+     "url": "https://github.com/opengeos/GeoLibre/blob/44b9c42a16e055c400a04f49f45959100627cd03/eslint.config.mjs",
+     "excerpt": "// ESLint flat config.\n//\n// Errors are reserved for bugs `tsc` cannot see: a misplaced Hook (e.g. a\n// `useMemo` after an early `return`) type-checks but crashes the app at\n// runtime with \"Rendered more hooks than during the previous render\", and\n// `react-hooks/rules-of-hooks` catches exactly that class of bug statically.\n//\n// Everything else is a warning held by a ratchet: `npm run lint` passes\n// `--max-warnings` set to today's count, so the number can only go down. When\n// you fix warnings, lower the limit in package.json to the new count in the\n// same PR (the lint output prints it). N",
+     "policy_excerpts": []
+    },
+    "e2e/pwa.spec.ts": {
+     "sha256": "c21bdcb0269fd2cdc5e568e39da014666a18d6ee0c21f4fa2e36c4319fda69f2",
+     "characters": 8396,
+     "file_type": "test",
+     "url": "https://github.com/opengeos/GeoLibre/blob/44b9c42a16e055c400a04f49f45959100627cd03/e2e/pwa.spec.ts",
+     "excerpt": "import { expect, test, type Page } from \"./test\";\n\n/**\n * Validates the web build's PWA/offline support (issue #274):\n *  - a valid, installable web manifest is linked from the document,\n *  - the service worker registers and takes control of the page, and\n *  - the app shell still boots after going offline once it has been visited.\n *\n * Runs against the production build served by `vite preview` (the dev server\n * ships no service worker — `devOptions.enabled` is false in vite.config.ts).\n */\n\ninterface WebManifest {\n  name?: string;\n  display?: string;\n  start_url?: string;\n  icons?: { sizes",
+     "policy_excerpts": [
+      "  // already-open page. Wait for that before asserting offline behavior.",
+      "  // of the already-open page — but the heavy globIgnored chunks (notably the",
+      " * \"ready to go offline\" signal. `ignoreSearch` lets the plain resource URL match"
+     ]
+    },
+    "CLAUDE.md": {
+     "sha256": "59b4b5fa80436c4b905bf495f946d15bbd60b76c9c50e4af4a4572fc4e9a85d3",
+     "characters": 9395,
+     "file_type": "documentation",
+     "url": "https://github.com/opengeos/GeoLibre/blob/44b9c42a16e055c400a04f49f45959100627cd03/CLAUDE.md",
+     "excerpt": "# CLAUDE.md\n\nGuidance for Claude Code (claude.ai/code) when working in this repository.\n\n## Repository shape\n\nGeoLibre is a single **npm workspaces monorepo** (`apps/*`, `packages/*`,\n`workers/*`) plus two non-npm components: a Python FastAPI sidecar\n(`backend/geolibre_server`) and a separate Python package (`python/`, the\n`geolibre` Jupyter anywidget). One `npm install` at the root wires up every JS\nworkspace. Use **npm** (the repo tracks `package-lock.json`), Node **22+**.\n\nThe same React app ships three ways: native desktop via **Tauri v2**\n(`apps/geolibre-desktop/src-tauri`), a browser web",
+     "policy_excerpts": [
+      "  `docs/i18n.md`, `docs/maintenance.md`, `docs/contributing.md`."
+     ]
+    },
+    ".github/ISSUE_TEMPLATE/config.yml": {
+     "sha256": "7ee90ec8552df9c926fefb4dbac488080f200de18d6421c812646f156e2cd569",
+     "characters": 601,
+     "file_type": "configuration",
+     "url": "https://github.com/opengeos/GeoLibre/blob/44b9c42a16e055c400a04f49f45959100627cd03/.github/ISSUE_TEMPLATE/config.yml",
+     "excerpt": "blank_issues_enabled: false\ncontact_links:\n  - name: Question or usage help\n    url: https://github.com/opengeos/GeoLibre/discussions/new?category=q-a\n    about: Have a \"how do I do X?\" question? Please ask in Discussions (Q&A) to keep the issue tracker focused on bugs and feature requests.\n  - name: Ideas and general discussion\n    url: https://github.com/opengeos/GeoLibre/discussions\n    about: Share early-stage ideas, show your work, or chat with the community in Discussions.\n  - name: Documentation\n    url: https://geolibre.app\n    about: Browse the docs and guides before opening an issue.",
+     "policy_excerpts": [
+      "    url: https://github.com/opengeos/GeoLibre/discussions/new?category=q-a",
+      "    about: Have a \"how do I do X?\" question? Please ask in Discussions (Q&A) to keep the issue tracker focused on bugs and feature requests.",
+      "  - name: Ideas and general discussion",
+      "    url: https://github.com/opengeos/GeoLibre/discussions",
+      "    about: Share early-stage ideas, show your work, or chat with the community in Discussions."
+     ]
+    },
+    ".github/pull_request_template.md": {
+     "sha256": "fd04c2b352ad63e8686f10acb5ba9ade5d82e2cc0097810806cd2c4a9885e5e5",
+     "characters": 222,
+     "file_type": "documentation",
+     "url": "https://github.com/opengeos/GeoLibre/blob/44b9c42a16e055c400a04f49f45959100627cd03/.github/pull_request_template.md",
+     "excerpt": "## Summary\n\n<!-- What does this change and why? -->\n\n## Testing\n\n<!-- How did you verify it? e.g. `npm run ci:web`, `npm run ci`, new tests, manual steps. -->\n\n## Related issue\n\n<!-- e.g. Closes #123, or Part of #456. -->\n",
+     "policy_excerpts": []
+    },
+    "CONTRIBUTING.md": {
+     "sha256": "3f723c1dc08c2c23fe61d9147519b9c71b63b17a6aa0af2a7e7a796d12cf848e",
+     "characters": 1348,
+     "file_type": "documentation",
+     "url": "https://github.com/opengeos/GeoLibre/blob/44b9c42a16e055c400a04f49f45959100627cd03/CONTRIBUTING.md",
+     "excerpt": "# Contributing to GeoLibre\n\nThanks for your interest in improving GeoLibre. The full contributing guide,\nincluding development setup, the repository layout, the quality gate, and the\npull request workflow, lives in the documentation:\n\n**<https://geolibre.app/contributing/>** (source: [`docs/contributing.md`](docs/contributing.md))\n\n## Quick Start\n\nFork the repository, then clone your fork. Replace `YOUR_GITHUB_USERNAME` with\nyour GitHub username:\n\n```bash\ngit clone https://github.com/YOUR_GITHUB_USERNAME/GeoLibre.git\ncd GeoLibre\nnpm install\nnpm run dev          # web build at http://localhost:",
+     "policy_excerpts": [
+      "# Contributing to GeoLibre",
+      "Thanks for your interest in improving GeoLibre. The full contributing guide,",
+      "**<https://geolibre.app/contributing/>** (source: [`docs/contributing.md`](docs/contributing.md))",
+      "[Quality checks](docs/contributing.md#quality-checks) for what each gate runs."
+     ]
+    },
+    "LICENSE": {
+     "sha256": "8c1ec2eadbee4b5a632b49679a177e02ed980079435a73449045aca3f2e7651e",
+     "characters": 1068,
+     "file_type": "configuration",
+     "url": "https://github.com/opengeos/GeoLibre/blob/44b9c42a16e055c400a04f49f45959100627cd03/LICENSE",
+     "excerpt": "MIT License\n\nCopyright (c) 2026 Qiusheng Wu\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Soft",
+     "policy_excerpts": []
+    },
+    "README.md": {
+     "sha256": "8a205902281ab5dba6fe46d4bc6c87fdbf9fab69d7264db7e7e1526164aaa970",
+     "characters": 18073,
+     "file_type": "documentation",
+     "url": "https://github.com/opengeos/GeoLibre/blob/44b9c42a16e055c400a04f49f45959100627cd03/README.md",
+     "excerpt": "# GeoLibre\n\n[![Launch GeoLibre Web](https://img.shields.io/badge/Launch-GeoLibre%20Web-green.svg)](https://web.geolibre.app/)\n[![GeoLibre shared project](https://img.shields.io/badge/GeoLibre-share-green.svg)](https://share.geolibre.app)\n[![GeoLibre plugins](https://img.shields.io/badge/GeoLibre-plugins-green.svg)](https://plugins.geolibre.app)\n[![image](https://img.shields.io/pypi/v/geolibre.svg)](https://pypi.python.org/pypi/geolibre)\n[![R package](https://img.shields.io/badge/R-package-276DC3?logo=r&logoColor=white)](https://r.geolibre.app/)\n[![image](https://colab.research.google.com/asset",
+     "policy_excerpts": [
+      "Manhattan building footprints extruded in 3D and colored by construction era, with the MTA subway lines and stations on top and a legend generated automatically from the layers' symbology.",
+      "  - [Contributing](docs/contributing.md)",
+      "Contributions are welcome. See the [Contributing](docs/contributing.md) guide",
+      "- [**Buy Me a Coffee**](https://buymeacoffee.com/giswqs) - a quick one-off contribution, no account required.",
+      "GeoLibre is built on the free and open-source geospatial and web communities — including MapLibre GL JS, deck.gl, DuckDB-WASM Spatial, Turf.js, Tauri, React, and many more. See the full [Acknowledgements](https://geolibre.app/acknowledgements/) page for the complete list of projects and community contributors.",
+      "- **Community contributors** — thanks to [**Ryanphoenix**](https://github.com/Ryanphoenix) for many valued contributions, including issue reports, feedback, and improvements.",
+      "GeoLibre is primarily built with [Claude Opus 5.5](https://www.anthropic.com/claude), an AI model by Anthropic, working under human direction and review. Its results are tested, but check them for your own use, and please [report](https://github.com/opengeos/GeoLibre/issues) anything that looks wrong.",
+      "You can also use GitHub's **\"Cite this repository\"** button (which reads [`CITATION.cff`](CITATION.cff)) to copy a ready-made APA or BibTeX entry. See the [How to Cite](https://geolibre.app/citation/) page for more formats."
+     ]
+    },
+    "docs/contributing.md": {
+     "sha256": "9e640695fc7ad0119111231ef3f1c88ac7bc696220c15a465c75a6b0f024d6eb",
+     "characters": 23731,
+     "file_type": "documentation",
+     "url": "https://github.com/opengeos/GeoLibre/blob/44b9c42a16e055c400a04f49f45959100627cd03/docs/contributing.md",
+     "excerpt": "# Contributing\n\nThanks for your interest in improving GeoLibre. This guide covers how to set up\na development environment, the project layout, the local quality gate, and the\npull request workflow. Contributions of all sizes are welcome, from fixing a\ntypo to adding a new processing tool or plugin.\n\nBy participating, you agree to keep interactions respectful and constructive.\n\n## Ways to Contribute\n\n- **Report a bug or request a feature** by opening an\n  [issue](https://github.com/opengeos/GeoLibre/issues). Include steps to\n  reproduce, what you expected, and what happened, plus your OS and wh",
+     "policy_excerpts": [
+      "# Contributing",
+      "pull request workflow. Contributions of all sizes are welcome, from fixing a",
+      "## Ways to Contribute",
+      "Pull requests are reviewed before merging. Automated reviewers may leave inline",
+      "runs the full production build once per invocation; if you already built, add",
+      "compiles with the automatic JSX runtime. Hooks only apply to modules loaded after",
+      "automatically part of `features`. If you are touching an area the nightly suite",
+      "Locally the suite serves the built app on port 4173 and reuses a server already",
+      "checkout is already serving its own build on 4173.",
+      "- Automated formatting runs on every commit via pre-commit hooks.",
+      "  branch, so anything the local hooks missed gets fixed automatically. It does",
+      "  every page already pointing at it, so pick the name once."
+     ]
+    }
+   }
+  },
+  {
+   "repo": "HeyPuter/puter",
+   "url": "https://github.com/HeyPuter/puter",
+   "checked_at": "2026-10-31T16:04:49.150976+00:00",
+   "status": "research_only",
+   "category": "applications_and_tools",
+   "research_allowed": true,
+   "automatic_contribution": true,
+   "policy": {
+    "automation": "unconfirmed",
+    "issue_submission": "unconfirmed",
+    "pr_submission": "allowlisted",
+    "scope": "bounded root and discovered guide inspection",
+    "contribution_allowlisted": true,
+    "decision": "Existing contribution allowlist still requires live health, task policy and publication gates; catalog never authorizes publication"
+   },
+   "reason": "Pinned public source/test/documentation verified; allowlisted for automated contribution pending live gates",
+   "canonical": "HeyPuter/puter",
+   "default_branch": "main",
+   "pushed_at": "2026-10-31T15:59:53Z",
+   "updated_at": "2026-10-31T14:07:53Z",
+   "archived": false,
+   "disabled": false,
+   "private": false,
+   "license": "AGPL-3.0",
+   "contributing_url": "repos/HeyPuter/puter/contents/CONTRIBUTING.md",
+   "sha": "52aedde3c563fd2626eb69d0651d41dc1319a0c5",
+   "inventory": {
+    "source": {
+     "count": 1096,
+     "examples": [
+      "eslint.config.js",
+      "extensions/appTelemetry.ts",
+      "extensions/devWatcher.ts",
+      "extensions/installedApps.ts",
+      "extensions/metering.ts",
+      "extensions/serverInfo.ts",
+      "extensions/thumbnails.ts",
+      "extensions/useremailrx/index.ts",
+      "extensions/whoami.ts",
+      "extensions/workerSandbox.ts"
+     ]
+    },
+    "test": {
+     "count": 760,
+     "examples": [
+      "extensions/appTelemetry.test.ts",
+      "extensions/devWatcher.test.ts",
+      "extensions/installedApps.test.ts",
+      "extensions/metering.test.ts",
+      "extensions/serverInfo.test.ts",
+      "extensions/thumbnails.test.ts",
+      "extensions/useremailrx/index.test.ts",
+      "extensions/whoami.test.ts",
+      "extensions/workerSandbox.test.ts",
+      "src/backend/TeamsOptional.test.ts"
+     ]
+    },
+    "documentation": {
+     "count": 340,
+     "examples": [
+      "AGENTS.md",
+      "BUG-BOUNTY.md",
+      "CLAUDE.md",
+      "CONTRIBUTING.md",
+      "LICENSE.txt",
+      "README.md",
+      "SECURITY-ACKNOWLEDGEMENTS.md",
+      "SECURITY.md",
+      "TRADEMARK.md",
+      "doc/alarms.md"
+     ]
+    }
+   },
+   "files": {
+    "install.sh": {
+     "sha256": "b32dadbf3e7e71e7bfe86377ee5d210bcb1484af56862ad3d7d56dbf4dff2265",
+     "characters": 10465,
+     "file_type": "source",
+     "url": "https://github.com/HeyPuter/puter/blob/52aedde3c563fd2626eb69d0651d41dc1319a0c5/install.sh",
+     "excerpt": "#!/usr/bin/env sh\n# Self-hosted Puter — one-shot installer.\n#\n# Usage:\n#   curl -fsSL https://raw.githubusercontent.com/HeyPuter/puter/main/install.sh | sh\n#\n# What this does, in order:\n#   1. Checks that docker (with the compose plugin), curl, and openssl exist.\n#   2. Creates ./puter-selfhosted/ (override with PUTER_DIR=...).\n#   3. Downloads docker-compose.yml + caddy/Caddyfile from the OSS repo\n#      (raw.githubusercontent.com).\n#   4. Generates fresh secrets and writes .env + puter/config/config.json.\n#   5. Runs `docker compose up -d` and prints the first-boot admin password.\n#\n# Re-run",
+     "policy_excerpts": [
+      "# Re-running the script in an already-initialised directory is a no-op for",
+      "# already-existing bind-mounted dir. On hosts where the user that ran",
+      "    log \".env + config.json already present — keeping existing secrets (PUTER_FORCE=1 to overwrite)\"",
+      "    # already in circulation; `jwt_secret_v2` signs every new token."
+     ]
+    },
+    "tools/npmSpawn.test.mjs": {
+     "sha256": "f5ad218dfa2fcfc66322b6004bd51cf4f962b31eb870befb1e7c1a6ce0c3f7fe",
+     "characters": 1163,
+     "file_type": "test",
+     "url": "https://github.com/HeyPuter/puter/blob/52aedde3c563fd2626eb69d0651d41dc1319a0c5/tools/npmSpawn.test.mjs",
+     "excerpt": "import { describe, expect, it } from 'vitest';\nimport { npmSpawnArgs, spawnNpm } from './npmSpawn.mjs';\n\ndescribe('npmSpawnArgs', () => {\n    it('runs npm.cmd through a shell on Windows, with no separate args', () => {\n        expect(\n            npmSpawnArgs(['run', 'build:ts'], { cwd: '.' }, 'win32'),\n        ).toEqual(['npm.cmd run build:ts', [], { cwd: '.', shell: true }]);\n    });\n\n    it('spawns npm directly without a shell elsewhere', () => {\n        for (const platform of ['linux', 'darwin']) {\n            expect(npmSpawnArgs(['ci'], { cwd: '.' }, platform)).toEqual([\n                '",
+     "policy_excerpts": []
+    },
+    "AGENTS.md": {
+     "sha256": "f0ba50ad75b33681dcb6a3cb7f909ce58d2e5e6b7440c186e82c55cf57cfc94c",
+     "characters": 25226,
+     "file_type": "documentation",
+     "url": "https://github.com/HeyPuter/puter/blob/52aedde3c563fd2626eb69d0651d41dc1319a0c5/AGENTS.md",
+     "excerpt": "# AGENTS.md\n\nGuidance for AI coding agents working in this repository, and the source of truth for how we write code, tests, and docs here. Read it before making changes. FOLLOW GUIDANCE AS CLOSELY AS POSSIBLE. If you think a rule is wrong, raise an issue or flag a maintainer instead of doing what you think is right.\n\n## Documentation Index\n\nUse these as the source of truth before exploring further:\n\n- [README.md](README.md) — project overview and quickstart.\n- [doc/architecture.md](doc/architecture.md) — backend layered stack (controllers → drivers → services → stores → clients), `PuterServer",
+     "policy_excerpts": [
+      "- [doc/contributing-apis.md](doc/contributing-apis.md) — adding and maintaining public APIs end to end (backend surface → puter.js → types → docs → tests). Follow it for any API work.",
+      "- [CONTRIBUTING.md](CONTRIBUTING.md) — contributor entry point and PR conventions.",
+      "- TypeScript preferred for new files in the backend and extensions; convert existing JS there opportunistically when you're already touching a file. The GUI and puter.js are plain JavaScript — don't introduce TypeScript files in them.",
+      "- Naming: `camelCase` for variables and functions, `PascalCase` for classes and files containing a class (`AuthService.ts`). **Prefer `camelCase` for all new code**, including parameters and internal object properties. `snake_case` is reserved for external contracts that already use it: wire/JSON keys, stable API error codes, public option names that already ship as `snake_case`, and established `puter_*` namespaced fields. Don't rename those (it's a breaking change), and don't add new `snake_case` beside them; a camelCase local can carry a value into a wire key (`{ operation_id: operationId }",
+      "Prefer self-documenting code. Comment only when the _why_ is non-obvious or a usage detail would trip the next reader. **A comment is a sentence or two**: one or two lines of `//`, a few of `/** ... */` JSDoc. State the constraint and stop. Don't restate the code, narrate history (\"used to swallow the failure, which meant…\"), argue the design, or explain parameters the signature already shows. Reasoning that needs paragraphs belongs in a design doc.",
+      "- **Read the neighbors before writing.** Match the shape of similar things already in the tree. If you think the existing pattern is wrong, raise it — don't quietly diverge.",
+      "- **Boy Scout Rule, proportional to the change.** In files you're already touching, fix the typo, the dead import, the missing test, the bit you had to read twice. Don't ride a refactor along with a bug fix.",
+      "A public API can be a controller or a driver. Prefer a controller when you need fine-grained control over routes and gates; [doc/contributing-apis.md](doc/contributing-apis.md#controller-or-driver) has the decision guide.",
+      "- **Gates run at the edge.** Controllers and drivers validate input and apply auth gates; services assume the caller is already authenticated and authorized.",
+      "[src/puter-js/](src/puter-js/) is the public SDK. It ships live from `https://js.puter.com/v2/` with no version pinning, so every change reaches every existing app at once; see [Rule zero](doc/contributing-apis.md#rule-zero-dont-break-callers).",
+      "Every SDK change carries all five of these, or the PR is incomplete. [doc/contributing-apis.md](doc/contributing-apis.md) has the steps for each.",
+      "1. **Backward compatibility**, unless a maintainer explicitly signs off on a break ([rules](doc/contributing-apis.md#maintaining-an-existing-api))."
+     ]
+    },
+    "CONTRIBUTING.md": {
+     "sha256": "7fec3dcb6863aa11d6d26463d36bff436094fab9abefea6432d3bdcbe02dac22",
+     "characters": 1497,
+     "file_type": "documentation",
+     "url": "https://github.com/HeyPuter/puter/blob/52aedde3c563fd2626eb69d0651d41dc1319a0c5/CONTRIBUTING.md",
+     "excerpt": "# Contributing to Puter\n\nThanks for contributing. These rules aren't strictly enforced, but following them makes every PR easier. If anything's unclear, ping a core maintainer or open the PR and ask.\n\n- New to the backend? Start with [doc/architecture.md](doc/architecture.md).\n- Code, test, and docs conventions for the whole repo live in [AGENTS.md](AGENTS.md). It's written for AI agents; the conventions apply to human contributors too.\n- Adding or changing a public API (an endpoint, driver method, or puter.js method)? Follow [doc/contributing-apis.md](doc/contributing-apis.md): backward compa",
+     "policy_excerpts": [
+      "# Contributing to Puter",
+      "Thanks for contributing. These rules aren't strictly enforced, but following them makes every PR easier. If anything's unclear, ping a core maintainer or open the PR and ask.",
+      "- Code, test, and docs conventions for the whole repo live in [AGENTS.md](AGENTS.md). It's written for AI agents; the conventions apply to human contributors too.",
+      "- Adding or changing a public API (an endpoint, driver method, or puter.js method)? Follow [doc/contributing-apis.md](doc/contributing-apis.md): backward compatibility, [developer docs](src/docs/), types, and tests all move in the same PR."
+     ]
+    },
+    "README.md": {
+     "sha256": "54d5f775a4e12f869f607d1a2fd49dee7febce96bc739ecfa692e3fcaae963f5",
+     "characters": 6717,
+     "file_type": "documentation",
+     "url": "https://github.com/HeyPuter/puter/blob/52aedde3c563fd2626eb69d0651d41dc1319a0c5/README.md",
+     "excerpt": "<h3 align=\"center\"><img width=\"80\" alt=\"Puter.com, The Personal Cloud Computer: All your files, apps, and games in one place accessible from anywhere at any time.\" src=\"https://assets.puter.site/puter-logo.png\"></h3>\n\n<h3 align=\"center\">The Open-Source Internet Computer!</h3>\n\n<p align=\"center\">\n    <a href=\"https://puter.com/?ref=github.com\"><strong>« LIVE DEMO »</strong></a>\n    <br />\n    <br />\n    <a href=\"https://puter.com/?ref=github.com\">Puter.com</a>\n    ·\n    <a href=\"https://apps.puter.com/\">App Store</a>\n    ·\n    <a href=\"https://builder.puter.com/\">AI Builder</a>\n    ·\n    <a hre",
+     "policy_excerpts": []
+    },
+    "SECURITY.md": {
+     "sha256": "c33b0c6824102c6e78411afe364dc3d7746379d431f74fa8e89a18a8bfaa344d",
+     "characters": 1858,
+     "file_type": "documentation",
+     "url": "https://github.com/HeyPuter/puter/blob/52aedde3c563fd2626eb69d0651d41dc1319a0c5/SECURITY.md",
+     "excerpt": "# Puter Security Policy\n\nThank you for helping make Puter safe. Keeping user information safe and secure is a top priority, and we welcome the contribution of external security researchers.\n\n<br>\n\n# Scope\n\nIf you believe you've found a security issue in software that is maintained in this repository, we encourage you to notify us.\n\n<br>\n\n# How to Submit a Report\n\nTo submit a vulnerability report, please contact us at security@puter.com. Your submission will be reviewed and validated by a member of our team.\n\n> [!WARNING]  \n> Please do not report security vulnerabilities through public GitHub i",
+     "policy_excerpts": [
+      "Thank you for helping make Puter safe. Keeping user information safe and secure is a top priority, and we welcome the contribution of external security researchers.",
+      "> Please do not report security vulnerabilities through public GitHub issues, discussions, or pull requests."
+     ]
+    }
+   }
+  },
+  {
+   "repo": "floatpane/matcha",
+   "url": "https://github.com/floatpane/matcha",
+   "checked_at": "2026-10-31T16:04:49.150976+00:00",
+   "status": "research_only",
+   "category": "applications_and_tools",
+   "research_allowed": true,
+   "automatic_contribution": true,
+   "policy": {
+    "automation": "unconfirmed",
+    "issue_submission": "unconfirmed",
+    "pr_submission": "allowlisted",
+    "scope": "bounded root and discovered guide inspection",
+    "contribution_allowlisted": true,
+    "decision": "Existing contribution allowlist still requires live health, task policy and publication gates; catalog never authorizes publication",
+    "manual_issue_submission": true,
+    "evidence": "https://github.com/floatpane/matcha/blob/8e9ba02326f5feb30b7e083f0827893bccd3623c/CONTRIBUTING.md"
+   },
+   "reason": "Pinned public source/test/documentation verified; allowlisted for automated contribution pending live gates",
+   "canonical": "floatpane/matcha",
+   "default_branch": "master",
+   "pushed_at": "2026-10-31T13:21:49Z",
+   "updated_at": "2026-10-31T09:41:14Z",
+   "archived": false,
+   "disabled": false,
+   "private": false,
+   "license": "MIT",
+   "contributing_url": "repos/floatpane/matcha/contents/CONTRIBUTING.md",
+   "sha": "8e9ba02326f5feb30b7e083f0827893bccd3623c",
+   "inventory": {
+    "source": {
+     "count": 210,
+     "examples": [
+      ".github/workflows/scripts/demo-sandbox.sh",
+      "app/app.go",
+      "assets/embed.go",
+      "backend/backend.go",
+      "backend/factory.go",
+      "backend/imap/imap.go",
+      "backend/jmap/jmap.go",
+      "backend/maildir/maildir.go",
+      "backend/pop3/pop3.go",
+      "cli/config.go"
+     ]
+    },
+    "test": {
+     "count": 74,
+     "examples": [
+      "backend/backend_test.go",
+      "backend/jmap/jmap_folder_test.go",
+      "backend/jmap/jmap_search_test.go",
+      "backend/jmap/jmap_test.go",
+      "backend/maildir/maildir_test.go",
+      "backend/pop3/pop3_test.go",
+      "backend/search_bench_test.go",
+      "cli/contacts_export_test.go",
+      "cli/gitmail_send_test.go",
+      "clib/base64wrap_test.go"
+     ]
+    },
+    "documentation": {
+     "count": 61,
+     "examples": [
+      ".github/pull_request_template.md",
+      "CODE_OF_CONDUCT.md",
+      "CONTRIBUTING.md",
+      "README.md",
+      "SECURITY.md",
+      "SKILLS/send-email/SKILL.md",
+      "backend/README.md",
+      "clib/README.md",
+      "config/README.md",
+      "docs/README.md"
+     ]
+    }
+   },
+   "files": {
+    "main.go": {
+     "sha256": "9b4d4d9f4be4e82d4f22df12f4856dd3f9cca8cf72aeac8c7b9161ad70c70d29",
+     "characters": 10163,
+     "file_type": "source",
+     "url": "https://github.com/floatpane/matcha/blob/8e9ba02326f5feb30b7e083f0827893bccd3623c/main.go",
+     "excerpt": "package main\n\nimport (\n\t\"fmt\"\n\t\"log\"\n\t\"net/url\"\n\t\"os\"\n\t\"path/filepath\"\n\t\"runtime\"\n\t\"strings\"\n\n\ttea \"charm.land/bubbletea/v2\"\n\tmatchaCli \"github.com/floatpane/matcha/cli\"\n\t\"github.com/floatpane/matcha/config\"\n\t\"github.com/floatpane/matcha/fetcher\"\n\t\"github.com/floatpane/matcha/i18n\"\n\t\"github.com/floatpane/matcha/internal/cliutil\"\n\t\"github.com/floatpane/matcha/internal/daemoncmd\"\n\t\"github.com/floatpane/matcha/internal/logging\"\n\t\"github.com/floatpane/matcha/internal/loglevel\"\n\t\"github.com/floatpane/matcha/internal/oauthcmd\"\n\t\"github.com/floatpane/matcha/internal/send\"\n\t\"github.com/floatpane/match",
+     "policy_excerpts": [
+      "\t\treturn // already registered"
+     ]
+    },
+    "pgp/wkd_test.go": {
+     "sha256": "cc745b1bd18bfef0ed05bd8e9d5d2f41d25ced0d9559783ad84084de7e5b0729",
+     "characters": 4189,
+     "file_type": "test",
+     "url": "https://github.com/floatpane/matcha/blob/8e9ba02326f5feb30b7e083f0827893bccd3623c/pgp/wkd_test.go",
+     "excerpt": "package pgp\n\nimport (\n\t\"bytes\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"os\"\n\t\"path/filepath\"\n\t\"strings\"\n\t\"testing\"\n\n\t\"github.com/ProtonMail/go-crypto/openpgp\"\n\t\"github.com/ProtonMail/go-crypto/openpgp/armor\"\n)\n\nfunc TestWKDDirectURL(t *testing.T) {\n\ttests := []struct {\n\t\temail   string\n\t\twantErr bool\n\t\tcheck   func(t *testing.T, url string)\n\t}{\n\t\t{\n\t\t\temail: \"alice@example.com\",\n\t\t\tcheck: func(t *testing.T, url string) {\n\t\t\t\tif !strings.HasPrefix(url, \"https://example.com/.well-known/openpgpkey/hu/\") {\n\t\t\t\t\tt.Errorf(\"unexpected URL prefix: %s\", url)\n\t\t\t\t}\n\t\t\t\tif !strings.HasSuffix(url, \"?l=alice\") {",
+     "policy_excerpts": []
+    },
+    "README.md": {
+     "sha256": "3ed127080cfecb07d994aee3184fb2fb8054eb98f742efdd6289010e147344d9",
+     "characters": 4558,
+     "file_type": "documentation",
+     "url": "https://github.com/floatpane/matcha/blob/8e9ba02326f5feb30b7e083f0827893bccd3623c/README.md",
+     "excerpt": "<div align=\"center\">\n\n---\n\n<img src = \"assets/banner.jpg\">\n\n---\n\n[![Go Version](https://img.shields.io/github/go-mod/go-version/floatpane/matcha)](https://golang.org)\n[![Discord](https://img.shields.io/discord/1489296626827661323?logo=discord)](https://discord.gg/jVnYTeSPV8)\n[![GitHub release (latest by date)](https://img.shields.io/github/v/release/floatpane/matcha)](https://github.com/floatpane/matcha/releases)\n[![Go Reference](https://pkg.go.dev/badge/github.com/floatpane/matcha.svg)](https://pkg.go.dev/github.com/floatpane/matcha)\n[![Awesome](https://awesome.re/badge.svg)](https://github.c",
+     "policy_excerpts": [
+      "## Contributing",
+      "Contributions are welcome! Please feel free to submit a Pull Request. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.",
+      "For general suggestions and community discussion, please join our [Discord server](https://discord.gg/jVnYTeSPV8).",
+      "> Want to sponsor our development and be featured here? You can do so [here](https://github.com/sponsors/floatpane) (or, if you prefer, [here](https://opencollective.com/floatpane)), or discuss it via email with [our team](mailto:us@floatpane.com)",
+      "**[Report Bug](https://github.com/floatpane/matcha/issues/new?template=bug_report.md)** · **[Request Feature](https://github.com/floatpane/matcha/issues/new?template=feature_request.md)** · **[Contributing Guidelines](https://github.com/floatpane/matcha/blob/master/CONTRIBUTING.md)**"
+     ]
+    },
+    ".github/pull_request_template.md": {
+     "sha256": "4300e934d54ed688eb98b93a990d59a1fca9dcb677de94316e65567a66158225",
+     "characters": 269,
+     "file_type": "documentation",
+     "url": "https://github.com/floatpane/matcha/blob/8e9ba02326f5feb30b7e083f0827893bccd3623c/.github/pull_request_template.md",
+     "excerpt": "## What?\n\n<!-- Describe what this PR changes. Keep it concise — what code was added, removed, or modified? -->\n\n## Why?\n\n<!-- Explain the motivation behind this change. What problem does it solve, or what addition does it enable? Link related issues if applicable. -->\n",
+     "policy_excerpts": []
+    },
+    "CONTRIBUTING.md": {
+     "sha256": "96c433c7c617d643930c9407b5bbf7cba3b685c0c3624b8c58986477b217854a",
+     "characters": 4042,
+     "file_type": "documentation",
+     "url": "https://github.com/floatpane/matcha/blob/8e9ba02326f5feb30b7e083f0827893bccd3623c/CONTRIBUTING.md",
+     "excerpt": "# Contributing to Matcha\n\nThank you for your interest in contributing to Matcha! This guide will help you get started.\n\n## Getting Started\n\n### Prerequisites\n\n- [Go 1.26+](https://go.dev/dl/)\n- A terminal emulator with modern capabilities (kitty, ghostty, alacritty, etc.)\n- An IMAP email account for testing\n\n### Setup\n\n```bash\ngit clone https://github.com/floatpane/matcha.git\ncd matcha\ngo mod tidy\n```\n\n### Build & Run\n\n```bash\nmake build     # builds to bin/matcha\nmake run       # builds and runs in one step\n```\n\n### Testing\n\n```bash\nmake test              # run all tests\nmake test-verbose    ",
+     "policy_excerpts": [
+      "# Contributing to Matcha",
+      "Thank you for your interest in contributing to Matcha! This guide will help you get started.",
+      "We welcome contributions that use AI-assisted tools (Copilot, Claude, ChatGPT, etc.) as part of the development process. That said, contributors are fully responsible for any code they submit, regardless of how it was written.",
+      "- **Don't submit AI-generated issues, reviews, or comments.** Discussions should be genuine human communication. Using AI to help draft something is fine, but don't paste raw AI output into issues or review comments.",
+      "- **No AI-generated tests that don't actually test anything.** Tests must be meaningful and actually validate behavior, not just exist for coverage numbers.",
+      "- **Attribute when appropriate.** If a significant portion of your contribution was AI-assisted, a brief mention in your PR description is appreciated but not required.",
+      "- Bulk PRs of AI-generated refactors, documentation, or \"improvements\" that weren't requested.",
+      "- Contributions where the author clearly doesn't understand the changes they're proposing.",
+      "The goal is simple: AI is a tool. Use it well, take ownership of the output, and make sure your contribution actually improves the project.",
+      "This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md). By participating, you agree to uphold a welcoming and respectful environment for everyone."
+     ]
+    },
+    "LICENSE": {
+     "sha256": "b9ac2ad030b29da2a0cafa3b3b8c3c96eb4507796ddd9e51fedbc1c0c9f36205",
+     "characters": 1049,
+     "file_type": "configuration",
+     "url": "https://github.com/floatpane/matcha/blob/8e9ba02326f5feb30b7e083f0827893bccd3623c/LICENSE",
+     "excerpt": "Copyright 2026 floatpane\n\nPermission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.\n\nTHE SOFTWARE",
+     "policy_excerpts": []
+    },
+    "SECURITY.md": {
+     "sha256": "c4a08f487d13e6176fe6c137fb436e6769ad71a2ebcccde3f358cd2ebeec690a",
+     "characters": 1000,
+     "file_type": "documentation",
+     "url": "https://github.com/floatpane/matcha/blob/8e9ba02326f5feb30b7e083f0827893bccd3623c/SECURITY.md",
+     "excerpt": "# Security Policy\n\n## Supported Versions\n\nOnly the latest release of Matcha is supported with security updates.\n\n## Reporting a Vulnerability\n\nIf you discover a security vulnerability in Matcha, please report it responsibly. **Do not open a public issue.**\n\nEmail us at [us@floatpane.com](mailto:us@floatpane.com) with:\n\n- A description of the vulnerability\n- Steps to reproduce the issue\n- The potential impact\n- Any suggested fixes (optional)\n\nWe will acknowledge your report within 48 hours and aim to provide a fix or mitigation plan within 7 days, depending on severity.\n\n## Scope\n\nThis policy c",
+     "policy_excerpts": []
+    }
+   }
+  },
+  {
+   "repo": "xtool-org/xtool",
+   "url": "https://github.com/xtool-org/xtool",
+   "checked_at": "2026-10-31T16:04:56.348728+00:00",
+   "status": "research_only",
+   "category": "applications_and_tools",
+   "research_allowed": true,
+   "automatic_contribution": true,
+   "policy": {
+    "automation": "unconfirmed",
+    "issue_submission": "unconfirmed",
+    "pr_submission": "allowlisted",
+    "scope": "bounded root and discovered guide inspection",
+    "contribution_allowlisted": true,
+    "decision": "Existing contribution allowlist still requires live health, task policy and publication gates; catalog never authorizes publication"
+   },
+   "reason": "Pinned public source/test/documentation verified; allowlisted for automated contribution pending live gates",
+   "canonical": "xtool-org/xtool",
+   "default_branch": "main",
+   "pushed_at": "2026-10-31T05:36:51Z",
+   "updated_at": "2026-10-31T16:02:38Z",
+   "archived": false,
+   "disabled": false,
+   "private": false,
+   "license": "MIT",
+   "contributing_url": "repos/xtool-org/xtool/contents/CONTRIBUTING.md",
+   "sha": "bec5aa106ac31ce9ae49aaef93dfeabf0a097e35",
+   "inventory": {
+    "source": {
+     "count": 180,
+     "examples": [
+      "Documentation/build.sh",
+      "Documentation/xtool.docc/First-app-code/build-1a.sh",
+      "Documentation/xtool.docc/First-app-code/build-1b.sh",
+      "Documentation/xtool.docc/First-app-code/build-2.sh",
+      "Documentation/xtool.docc/First-app-code/build-3.sh",
+      "Documentation/xtool.docc/First-app-code/edit-2.swift",
+      "Documentation/xtool.docc/First-app-code/edit-4.swift",
+      "Documentation/xtool.docc/First-app-code/rerun-5a.sh",
+      "Documentation/xtool.docc/First-app-code/rerun-5b.sh",
+      "Documentation/xtool.docc/First-app-code/rerun-6.sh"
+     ]
+    },
+    "test": {
+     "count": 16,
+     "examples": [
+      "Examples/test.sh",
+      "Tests/XToolTests/CertificateTests.swift",
+      "Tests/XToolTests/CommandInputTests.swift",
+      "Tests/XToolTests/CommandOutputTests.swift",
+      "Tests/XToolTests/ConcurrentMapTests.swift",
+      "Tests/XToolTests/DarwinSDKTests.swift",
+      "Tests/XToolTests/DataChannelTests.swift",
+      "Tests/XToolTests/DispatchInputTests.swift",
+      "Tests/XToolTests/InputTestSupport.swift",
+      "Tests/XToolTests/MatcherTests.swift"
+     ]
+    },
+    "documentation": {
+     "count": 23,
+     "examples": [
+      ".github/ISSUE_TEMPLATE/bug_report.md",
+      ".github/ISSUE_TEMPLATE/feature_request.md",
+      ".github/PULL_REQUEST_TEMPLATE.md",
+      "AGENTS.md",
+      "CLAUDE.md",
+      "CODE_OF_CONDUCT.md",
+      "CONTRIBUTING.md",
+      "Documentation/Contributing/Debugging.md",
+      "Documentation/Contributing/README.md",
+      "Documentation/xtool.docc/Appex.md"
+     ]
+    }
+   },
+   "files": {
+    "Package.swift": {
+     "sha256": "070b597cc3475e24568ba89c3db73e694382c0d0aa84b1cc2037ded7e72cb522",
+     "characters": 9476,
+     "file_type": "source",
+     "url": "https://github.com/xtool-org/xtool/blob/bec5aa106ac31ce9ae49aaef93dfeabf0a097e35/Package.swift",
+     "excerpt": "// swift-tools-version:6.2\n\nimport PackageDescription\n\nlet xtoolVersion: String? = {\n    if let explicitVersion = Context.environment[\"XTOOL_VERSION\"] {\n        return explicitVersion\n    } else if let info = Context.gitInformation {\n        let gitCommit = info.currentCommit\n        let gitTag = info.currentTag\n        let gitRef = gitTag ?? \"commit \\(gitCommit)\"\n        return gitRef\n    } else {\n        return nil\n    }\n}()\n\nlet hasUncommittedChanges = Context.gitInformation?.hasUncommittedChanges ?? false\n\nlet cSettings: [CSetting] = [\n    .define(\"_GNU_SOURCE\", .when(platforms: [.linux]))",
+     "policy_excerpts": []
+    },
+    "Examples/test.sh": {
+     "sha256": "64a6cba306c1c2e69c2d4d3cc608052bda3a5352f71be8a19d7a63bc4c90c3b6",
+     "characters": 3172,
+     "file_type": "test",
+     "url": "https://github.com/xtool-org/xtool/blob/bec5aa106ac31ce9ae49aaef93dfeabf0a097e35/Examples/test.sh",
+     "excerpt": "#!/bin/bash\n\nset -euo pipefail\nshopt -s nullglob\n\nusage() {\n    echo \"Usage: $0 [--build | --run] [DemoName]\"\n}\n\nmode=both\ncase \"${1:-}\" in\n    --build) mode=build; shift ;;\n    --run) mode=run; shift ;;\n    -h|--help) usage; exit 0 ;;\nesac\n\nif [[ $# -gt 1 || (${1:-} != \"\" && (${1:-} != Demo* || ${1:-} == */*)) ]]; then\n    usage >&2\n    exit 1\nfi\n\ncd \"$(dirname \"$0\")\"\nexamples_dir=\"$PWD\"\nout_dir=\"$examples_dir/out\"\n\nif [[ -n \"${1:-}\" ]]; then\n    demos=(\"$1\")\nelif [[ \"$mode\" == run ]]; then\n    demos=()\n    for app in \"$out_dir\"/*.app; do\n        name=\"${app##*/}\"\n        demos+=(\"${name%.app",
+     "policy_excerpts": []
+    },
+    "AGENTS.md": {
+     "sha256": "cad50eccebe6c05713480c93bf5c537fac740c718384b3c94cf36c3ee488b671",
+     "characters": 1376,
+     "file_type": "documentation",
+     "url": "https://github.com/xtool-org/xtool/blob/bec5aa106ac31ce9ae49aaef93dfeabf0a097e35/AGENTS.md",
+     "excerpt": "# About\n\nxtool is a cross-platform replacement for Xcode (including build system, provisioning, deployment).\n\nThe `xtool` CLI supports macOS, Linux, WSL. The lower-level XKit (provisioning and device interaction) library additionally supports iOS.\n\n## Development\n\n- The majority of the code is in the Swift Package. You can use `swift build` / `swift test` / etc for iteration.\n- Caveat: on macOS, xtool is distributed as an app bundle (allows entitlements like Keychain). To build the Mac app, use `make mac`. You can then invoke the CLI at `./macOS/Build/xtool`.\n- Make sure to run `make lint` (sw",
+     "policy_excerpts": []
+    },
+    ".github/PULL_REQUEST_TEMPLATE.md": {
+     "sha256": "99e359981a6e2d67b44119973b951c6feac1fab5c68155226c4efcd5ac528079",
+     "characters": 683,
+     "file_type": "documentation",
+     "url": "https://github.com/xtool-org/xtool/blob/bec5aa106ac31ce9ae49aaef93dfeabf0a097e35/.github/PULL_REQUEST_TEMPLATE.md",
+     "excerpt": "## What does this PR do?\n\n<!-- Focus on *what* the PR does in essence. The *how* should come second, if it's relevant. -->\n\n## How was it tested?\n\n<!-- e.g. Ran locally on macOS and added unit tests -->\n\n## AI tool usage\n\nHow much of the code in this PR was AI-assisted? (check one)\n\n- [ ] **0** - No AI was used to write code\n- [ ] **1** - I was assisted by AI in writing code. I reviewed the finished result.\n- [ ] **2** - I set the AI going and left it to it; nobody has read the result - no review, or AI review only\n\n<!-- If an AI agent is filling this in: declare the level honestly, and open a",
+     "policy_excerpts": []
+    },
+    "CONTRIBUTING.md": {
+     "sha256": "b3c662c00108bd676b8ab6ef56a34da036a68aca54fdf89fa4df4594d1a8c7cd",
+     "characters": 829,
+     "file_type": "documentation",
+     "url": "https://github.com/xtool-org/xtool/blob/bec5aa106ac31ce9ae49aaef93dfeabf0a097e35/CONTRIBUTING.md",
+     "excerpt": "# Contributing to xtool\n\n## Bug reports and feature requests\n\nWe welcome all bug reports and feature requests! Please create a [new issue](https://github.com/xtool-org/xtool/issues/new/choose) via GitHub.\n\n## Code and documentation\n\nExternal contributions are very welcome. Take a look at [/Documentation/Contributing/README.md](/Documentation/Contributing/README.md) for details regarding the development process.\n\n## AI tool usage\n\nYou may use AI tools to assist your contributions. You are fully responsible\nfor everything you submit.\n\n- **Understand it**: You must be able to explain every line o",
+     "policy_excerpts": [
+      "# Contributing to xtool",
+      "External contributions are very welcome. Take a look at [/Documentation/Contributing/README.md](/Documentation/Contributing/README.md) for details regarding the development process.",
+      "You may use AI tools to assist your contributions. You are fully responsible"
+     ]
+    },
+    "LICENSE.md": {
+     "sha256": "04cf87035e25606762ba596ec29ecac450a281f3d210a8042c91f49645c2e695",
+     "characters": 1069,
+     "file_type": "documentation",
+     "url": "https://github.com/xtool-org/xtool/blob/bec5aa106ac31ce9ae49aaef93dfeabf0a097e35/LICENSE.md",
+     "excerpt": "MIT License\n\nCopyright (c) 2024 Kabir Oberai\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Sof",
+     "policy_excerpts": []
+    },
+    "README.md": {
+     "sha256": "826f8156bc1aaa34ba22f1619116ab05124fd8572a170754d34fc49870cdc78b",
+     "characters": 2330,
+     "file_type": "documentation",
+     "url": "https://github.com/xtool-org/xtool/blob/bec5aa106ac31ce9ae49aaef93dfeabf0a097e35/README.md",
+     "excerpt": "# xtool\n\nCross-platform Xcode replacement. Build and deploy iOS apps with SwiftPM on Linux, Windows, and macOS.\n\n## Overview\n\nxtool is a cross-platform (Linux/WSL/macOS) tool that replicates Xcode functionality with open standards.\n\n✅ Build a SwiftPM package into an iOS app\n\n✅ Sign and install iOS apps\n\n✅ Interact with Apple Developer Services programmatically\n\n## Getting Started\n\n1. Follow the guide to install `xtool`\n    - [Installation (Linux/Windows)](https://xtool.sh/documentation/xtooldocs/installation-linux)\n    - [Installation (macOS)](https://xtool.sh/documentation/xtooldocs/installat",
+     "policy_excerpts": []
+    },
+    "SECURITY.md": {
+     "sha256": "365fcd37a9318370ee9a7cbfdaf5d35532a20395fab1a05a0b4357b340287bb7",
+     "characters": 228,
+     "file_type": "documentation",
+     "url": "https://github.com/xtool-org/xtool/blob/bec5aa106ac31ce9ae49aaef93dfeabf0a097e35/SECURITY.md",
+     "excerpt": "# Security Policy\n\n## Reporting a Vulnerability\n\nTo report a vulnerability, please use GitHub's [\"Report a Vulnerability\"](https://github.com/xtool-org/xtool/security/advisories/new) tab. We'll be in touch regarding next steps.\n",
+     "policy_excerpts": []
+    }
+   }
+  },
+  {
+   "repo": "debpalash/VoiceStudio",
+   "url": "https://github.com/debpalash/VoiceStudio",
+   "checked_at": "2026-10-31T16:05:09.785211+00:00",
+   "status": "research_only",
+   "category": "applications_and_tools",
+   "research_allowed": true,
+   "automatic_contribution": true,
+   "policy": {
+    "automation": "unconfirmed",
+    "issue_submission": "unconfirmed",
+    "pr_submission": "allowlisted",
+    "scope": "bounded root and discovered guide inspection",
+    "contribution_allowlisted": true,
+    "decision": "Existing contribution allowlist still requires live health, task policy and publication gates; catalog never authorizes publication"
+   },
+   "reason": "Pinned public source/test/documentation verified; allowlisted for automated contribution pending live gates",
+   "canonical": "debpalash/VoiceStudio",
+   "default_branch": "main",
+   "pushed_at": "2026-10-31T15:22:46Z",
+   "updated_at": "2026-10-31T16:04:42Z",
+   "archived": false,
+   "disabled": false,
+   "private": false,
+   "license": "AGPL-3.0",
+   "contributing_url": "https://api.github.com/repos/debpalash/VoiceStudio/contents/.github/CONTRIBUTING.md",
+   "sha": "80c153cb767ff32330403172c1ef7141a719bd20",
+   "inventory": {
+    "source": {
+     "count": 1860,
+     "examples": [
+      ".dagger/src/voicestudio/__init__.py",
+      ".dagger/src/voicestudio/main.py",
+      ".github/scripts/agent_identities.py",
+      ".github/scripts/cancel_stale_runs.py",
+      ".github/scripts/ci_scope.py",
+      ".github/scripts/cla_check.py",
+      ".github/scripts/cla_reminders.py",
+      ".github/scripts/gallery_pin.py",
+      ".github/scripts/identity_check.py",
+      ".github/scripts/scam_guard.py"
+     ]
+    },
+    "test": {
+     "count": 1858,
+     "examples": [
+      "backend/tests/test_archetype_preview_quality.py",
+      "backend/tests/test_archetypes.py",
+      "backend/tests/test_archetypes_api.py",
+      "backend/tests/test_asr_deep_import_fallback.py",
+      "backend/tests/test_asr_mlx_validated_ffmpeg.py",
+      "backend/tests/test_asr_oom_fallback.py",
+      "backend/tests/test_asr_pickle_safety.py",
+      "backend/tests/test_asr_request_path_degrades.py",
+      "backend/tests/test_asr_speechbrain_lazy_guard.py",
+      "backend/tests/test_asr_transcribe_timeout.py"
+     ]
+    },
+    "documentation": {
+     "count": 483,
+     "examples": [
+      ".agents/skills/fastapi-python/SKILL.md",
+      ".agents/skills/vite/SKILL.md",
+      ".claude/agents/owner-judge.md",
+      ".claude/skills/omnivoice/LEGACY.md",
+      ".github/CCLA-1.0.md",
+      ".github/CLA-1.0.md",
+      ".github/CODE_OF_CONDUCT.md",
+      ".github/CONTRIBUTING.md",
+      ".github/SECURITY.md",
+      ".github/SUPPORT.md"
+     ]
+    }
+   },
+   "files": {
+    "conftest.py": {
+     "sha256": "5ce171d0645be47371d81de536af3ac8d7e0a4546978f6474338e017be861200",
+     "characters": 4300,
+     "file_type": "source",
+     "url": "https://github.com/debpalash/VoiceStudio/blob/80c153cb767ff32330403172c1ef7141a719bd20/conftest.py",
+     "excerpt": "\"\"\"Test isolation shared by every suite (``tests/`` and ``backend/tests/``).\n\nOnly fixtures that both suites need live here; each suite's own conftest.py\nstill owns its import path and hermetic data dir.\n\"\"\"\nimport sys\nimport types\n\nimport pytest\n\n\n@pytest.fixture(autouse=True)\ndef _clean_model_manager_shutdown_state(request):\n    \"\"\"Start every test with the model manager NOT in shutdown mode (#1269).\n\n    ``model_manager._shutting_down`` is a module-global Event and the GPU pool is\n    a module-global executor. Any test that runs the app lifespan flips both on\n    the way out — ``begin_shutd",
+     "policy_excerpts": []
+    },
+    "tests/test_api.py": {
+     "sha256": "ee6e1857ca70b373d841d733ffdbadf3c2f63f1241d23f6f36cc7f5bbcdebd43",
+     "characters": 29864,
+     "file_type": "test",
+     "url": "https://github.com/debpalash/VoiceStudio/blob/80c153cb767ff32330403172c1ef7141a719bd20/tests/test_api.py",
+     "excerpt": "\"\"\"\nVoiceStudio API — Unit Test Suite\nTests all roadmap features: TaskManager, scene detection, lip-sync scoring,\nexport endpoints (VTT, SRT, MP3, segments ZIP, stems ZIP), streaming TTS.\n\nUses FastAPI's TestClient (synchronous httpx) to avoid needing a running server.\nGPU/model inference is mocked so tests run on any machine in seconds.\n\"\"\"\n\nimport io\nimport os\nimport json\nimport uuid\nimport wave\nimport struct\nimport time\nimport pytest\nimport asyncio\n\n# Patch environment before importing api\nos.environ.setdefault(\"OMNIVOICE_MODEL\", \"test\")\n\nfrom unittest.mock import patch, MagicMock, AsyncMoc",
+     "policy_excerpts": []
+    },
+    "AGENTS.md": {
+     "sha256": "fdd4f5f5fabc6275ca89c16663ed854cae4e3e17b4b673ca073700b0b2bd1dea",
+     "characters": 9025,
+     "file_type": "documentation",
+     "url": "https://github.com/debpalash/VoiceStudio/blob/80c153cb767ff32330403172c1ef7141a719bd20/AGENTS.md",
+     "excerpt": "## Active desktop: Electron only\n\nElectron (`electron/`) is the only desktop and web UI. The Tauri shell and legacy\nUI entrypoints are removed; do not restore build, runtime, release, or CI paths for\nthem. Triage reports from final Tauri installations toward the migration guide and\npreserve their immutable updater feeds. Some modules under `electron/src/shared/` remain\ntemporarily shared by Electron; they are not a runnable app. New UI, IPC, setup\ninstructions, tests, and browser assets belong in Electron; validate Electron on\nmacOS, Windows and Linux.\n\n## Mobile: native iOS and Android (owner",
+     "policy_excerpts": [
+      "- **Default to the shortest response that fully answers.** Outlines and tables over prose; no preamble, no recap of what you just did, no re-explaining a fix the diff already shows. Applies to every response, not just status updates.",
+      "- Don't re-derive what CI, linters, or review bots already computed — read their output first (`gh pr checks`, bot comments via `gh api .../pulls/N/comments`).",
+      "2. Never accept a PR as-is: fix findings ON the PR branch pre-merge (maintainer commits fine; credit contributors in the changelog fragment). No merge-then-fix, no comment-and-walk-away.",
+      "- Local-first: no new required network calls; any HF download gated on installed-ness or explicit user action; all synthetic audio through the `mark_synthetic` chokepoint. Sanctioned calls are listed in `.github/CONTRIBUTING.md` → Quality gates: user-started first-run setup (ffmpeg from GitHub `zackees/ffmpeg_bins`, the huggingface.co/hf-mirror.com reachability probe, `uv.lock`-pinned package downloads from their locked URLs or the chosen/auto-selected regional mirror incl. the parallel wheel prefetch, the Auto region's one-wheel PyPI vs Aliyun speed check, HF model downloads), opening/enablin",
+      "- Tagged release announcements lead with the biggest user-visible change; redesigns need real UI screenshots and migrations need installer links and steps. Verify all contributor credits from the tag comparison and included PRs; list authors and bug reporters separately (see `docs/RELEASING.md`).",
+      "- Attribution: commits, PR descriptions and comments carry only the submitter's git identity. Never credit an agent (no agent `Co-authored-by:`, \"Generated with …\", session links) and never add other names/emails. Human co-authors are fine. Enforced by the `commit-identity` check."
+     ]
+    },
+    ".github/CONTRIBUTING.md": {
+     "sha256": "b8734b19debddbd2d5e13431f1aa858b422e7372d727fc1b6cbfad79afc61aaf",
+     "characters": 30898,
+     "file_type": "documentation",
+     "url": "https://github.com/debpalash/VoiceStudio/blob/80c153cb767ff32330403172c1ef7141a719bd20/.github/CONTRIBUTING.md",
+     "excerpt": "# Contributing to VoiceStudio\n\nThanks for your interest in improving VoiceStudio! This guide covers everything you need to get started.\n\n## Quick Links\n\n| | |\n|---|---|\n| 💬 **Chat** | [Discord](https://discord.gg/bzQavDfVV9) |\n| 🐛 **Bugs** | [GitHub Issues](https://github.com/debpalash/VoiceStudio/issues) |\n| 🏷️ **Good First Issues** | [Filtered list](https://github.com/debpalash/VoiceStudio/labels/good%20first%20issue) |\n| 📋 **Roadmap** | [docs/ROADMAP.md](../docs/ROADMAP.md) |\n\n---\n\n> **Before your first pull request:** unless exempt under the\n> [CLA checker’s policy](#contribution-licensing",
+     "policy_excerpts": [
+      "# Contributing to VoiceStudio",
+      "> [CLA checker’s policy](#contribution-licensing), sign the",
+      "> [Contributor License Agreement](CLA-1.0.md) once. GitHub cannot stop you opening a pull request first, so it is checked at",
+      "> your signature covers your future contributions. Every other non-exempt human commit",
+      "> [Contribution licensing](#contribution-licensing).",
+      "- Python 3.11+ (`requires-python` in `pyproject.toml`; managed automatically by `uv`)",
+      "CPU-only Linux/Windows hosts automatically select CPU wheels; see",
+      "already in use\". To run two side by side, start the second one with",
+      "a valid cached bundle from starting. Native OS locks release automatically when",
+      "Use Electron for desktop contributions and reproduce desktop bugs there.",
+      "## How to Contribute",
+      "            return True, \"ready\""
+     ]
+    },
+    ".github/ISSUE_TEMPLATE/config.yml": {
+     "sha256": "729a376ac7ba89fc9aeec5804f2fbed054132fb399ea838eea81fa2ba43821be",
+     "characters": 587,
+     "file_type": "configuration",
+     "url": "https://github.com/debpalash/VoiceStudio/blob/80c153cb767ff32330403172c1ef7141a719bd20/.github/ISSUE_TEMPLATE/config.yml",
+     "excerpt": "blank_issues_enabled: false\ncontact_links:\n  - name: 💬 Discord — questions & quick help\n    url: https://discord.gg/bzQavDfVV9\n    about: Usage questions, setup help, and chat. Faster than an issue for \"how do I…\".\n  - name: 🗣️ GitHub Discussions\n    url: https://github.com/debpalash/VoiceStudio/discussions\n    about: Ideas, show-and-tell, and open-ended Q&A that isn't a bug or a specific feature ask.\n  - name: 🔒 Security vulnerability\n    url: https://github.com/debpalash/VoiceStudio/security/policy\n    about: Please report security issues privately — do NOT open a public issue.\n",
+     "policy_excerpts": [
+      "  - name: 🗣️ GitHub Discussions",
+      "    url: https://github.com/debpalash/VoiceStudio/discussions"
+     ]
+    },
+    ".github/SECURITY.md": {
+     "sha256": "209743dee5096176dcb2d1739e124e3dc9e1fd46b54ddff55c3f24349ca35d83",
+     "characters": 7232,
+     "file_type": "documentation",
+     "url": "https://github.com/debpalash/VoiceStudio/blob/80c153cb767ff32330403172c1ef7141a719bd20/.github/SECURITY.md",
+     "excerpt": "# Security Policy\n\n## Supported Versions\n\n| Version | Supported |\n|---------|-----------|\n| Latest 0.5.x release (and `main`) | ✅ All fixes, including security fixes, land here |\n| Older releases, including final Tauri builds (≤ 0.5.3) | ❌ No backports — upgrade ([Tauri migration guide](../docs/electron-migration.md)) |\n\n## Model supply chain\n\nVoiceStudio supports models from **public, verifiable sources only** (Hugging\nFace repos, official project releases). Privately sold or gated model files\nare not supported: an archive from a private source can carry anything\n(bundled executables, modifie",
+     "policy_excerpts": [
+      "## Automated scanning",
+      "manual maintainer tool; the app, automatic CI and releases never invoke it. The",
+      "services and business workflows that do not contribute new files. Use an",
+      "The tool spaces requests 16 seconds apart, automatically requests the"
+     ]
+    },
+    ".github/pull_request_template.md": {
+     "sha256": "1b2403e4db9caa0201c9153898952775fdab92eda6858b065d5913d18cb28f69",
+     "characters": 2119,
+     "file_type": "documentation",
+     "url": "https://github.com/debpalash/VoiceStudio/blob/80c153cb767ff32330403172c1ef7141a719bd20/.github/pull_request_template.md",
+     "excerpt": "<!--\nFirst pull request? Unless exempt under the CLA checker’s policy, sign the\nContributor License Agreement once, before or after\nopening it: https://github.com/debpalash/VoiceStudio/issues/2586\nYour signature covers your future contributions. Every other non-exempt human commit\nauthor and co-author must also sign before merge. If this pull request contains\n`Supersedes #N`, that also includes the non-exempt human opener, commit authors\nand co-authors of pull request #N.\n-->\n\n## Summary\n\n<!-- Brief description of what this PR does. -->\n\n## Changes\n\n<!-- List the key changes made in this PR. -",
+     "policy_excerpts": [
+      "Contributor License Agreement once, before or after",
+      "Your signature covers your future contributions. Every other non-exempt human commit",
+      "`Supersedes #N`, that also includes the non-exempt human opener, commit authors",
+      "- [ ] Every non-exempt human commit author has signed the [CLA](https://github.com/debpalash/VoiceStudio/blob/main/.github/CLA-1.0.md) (the **CLA** check tells you how)"
+     ]
+    },
+    "LICENSE": {
+     "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
+     "characters": 34523,
+     "file_type": "configuration",
+     "url": "https://github.com/debpalash/VoiceStudio/blob/80c153cb767ff32330403172c1ef7141a719bd20/LICENSE",
+     "excerpt": "                    GNU AFFERO GENERAL PUBLIC LICENSE\n                       Version 3, 19 November 2007\n\n Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>\n Everyone is permitted to copy and distribute verbatim copies\n of this license document, but changing it is not allowed.\n\n                            Preamble\n\n  The GNU Affero General Public License is a free, copyleft license for\nsoftware and other kinds of works, specifically designed to ensure\ncooperation with the community in the case of network server software.\n\n  The licenses for most software and other practical ",
+     "policy_excerpts": [
+      "can regenerate automatically from other parts of the Corresponding",
+      "modify it is void, and will automatically terminate your rights under",
+      "  10. Automatic Licensing of Downstream Recipients.",
+      "  Each time you convey a covered work, the recipient automatically",
+      "  A \"contributor\" is a copyright holder who authorizes use under this",
+      "work thus licensed is called the contributor's \"contributor version\".",
+      "  A contributor's \"essential patent claims\" are all patent claims",
+      "owned or controlled by the contributor, whether already acquired or",
+      "by this License, of making, using, or selling its contributor version,",
+      "consequence of further modification of the contributor version.  For",
+      "  Each contributor grants you a non-exclusive, worldwide, royalty-free",
+      "patent license under the contributor's essential patent claims, to"
+     ]
+    },
+    "README.md": {
+     "sha256": "4ece04265dced5e7082e53e800bebebcac5240c78fc13ec34ab5174ad1a8ec64",
+     "characters": 18744,
+     "file_type": "documentation",
+     "url": "https://github.com/debpalash/VoiceStudio/blob/80c153cb767ff32330403172c1ef7141a719bd20/README.md",
+     "excerpt": "<div align=\"center\">\n  <h1><sub><img src=\"docs/logo.png\" alt=\"\" width=\"36\" height=\"36\" /></sub> VoiceStudio</h1>\n  <p>\n    <a href=\"https://trendshift.io/repositories/28176?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-28176\" target=\"_blank\" rel=\"noopener noreferrer\"><img src=\"https://trendshift.io/api/badge/repositories/28176\" alt=\"Trendshift badge showing where VoiceStudio ranks among trending repositories\" width=\"220\" height=\"48\" /></a>\n  </p>\n  <h2>AI voice studio. On your device.</h2>\n  <h3>Clone, design, dub, dictate, transcribe and narrate in 646 lan",
+     "policy_excerpts": [
+      "- **Connect & automate** — Local API, MCP, reusable recipes and watch folders",
+      "Desktop and phone installers are on the [latest release](https://github.com/debpalash/VoiceStudio/releases/latest); Docker images come from GHCR. No GPU? The app is fully usable on the CPU, just slower. Native GGUF engines can also use Vulkan on AMD, Intel and NVIDIA GPUs; OmniVoice GGUF picks its GPU and model size automatically on Windows and Linux ([OmniVoice](docs/engines/omnivoice-gguf.md#vulkan-acceleration), [CosyVoice](docs/engines/cosyvoice-gguf.md)). Speed by engine and hardware: [performance](docs/performance.md).",
+      "| Development | [Contributing](.github/CONTRIBUTING.md) ([sign the CLA](.github/CONTRIBUTING.md#contribution-licensing) before your first PR) · [Changelog](CHANGELOG.md) |",
+      "### Contributors",
+      "Thank you to everyone who sends code, reports, translations and ideas. [All contributors](https://github.com/debpalash/VoiceStudio/graphs/contributors) · [Contribute](.github/CONTRIBUTING.md)"
+     ]
+    }
+   }
+  },
+  {
+   "repo": "DuarteSantos8/openGym",
+   "url": "https://github.com/DuarteSantos8/openGym",
+   "checked_at": "2026-10-31T16:05:21.770810+00:00",
+   "status": "research_only",
+   "category": "applications_and_tools",
+   "research_allowed": true,
+   "automatic_contribution": true,
+   "policy": {
+    "automation": "unconfirmed",
+    "issue_submission": "unconfirmed",
+    "pr_submission": "allowlisted",
+    "scope": "bounded root and discovered guide inspection",
+    "contribution_allowlisted": true,
+    "decision": "Existing contribution allowlist still requires live health, task policy and publication gates; catalog never authorizes publication"
+   },
+   "reason": "Pinned public source/test/documentation verified; allowlisted for automated contribution pending live gates",
+   "canonical": "DuarteSantos8/openGym",
+   "default_branch": "main",
+   "pushed_at": "2026-10-31T15:36:44Z",
+   "updated_at": "2026-10-31T16:01:55Z",
+   "archived": false,
+   "disabled": false,
+   "private": false,
+   "license": "AGPL-3.0",
+   "contributing_url": "repos/DuarteSantos8/openGym/contents/CONTRIBUTING.md",
+   "sha": "b6cfe2bbd3f099523ffbf2677438864e9a09a06f",
+   "inventory": {
+    "source": {
+     "count": 473,
+     "examples": [
+      "api/admin-socket.js",
+      "api/coach/adapters/claude.js",
+      "api/coach/adapters/codex.js",
+      "api/coach/adapters/index.js",
+      "api/coach/adapters/spawn.js",
+      "api/coach/cadence.js",
+      "api/coach/cohort.js",
+      "api/coach/config.js",
+      "api/coach/core/adapters/anthropic.js",
+      "api/coach/core/adapters/compatible.js"
+     ]
+    },
+    "test": {
+     "count": 656,
+     "examples": [
+      "api/test/adapters-http.test.js",
+      "api/test/adapters.test.js",
+      "api/test/cadence-weekly.test.js",
+      "api/test/coach-ask.test.js",
+      "api/test/coach-limits.test.js",
+      "api/test/cohort.test.js",
+      "api/test/config-migration.test.js",
+      "api/test/credential.test.js",
+      "api/test/device-link.test.js",
+      "api/test/dockerfile-copy.test.js"
+     ]
+    },
+    "documentation": {
+     "count": 58,
+     "examples": [
+      ".github/pull_request_template.md",
+      ".gitlab/issue_templates/Bug.md",
+      ".gitlab/issue_templates/Feature.md",
+      ".gitlab/issue_templates/Question.md",
+      ".gitlab/merge_request_templates/Default.md",
+      "CHANGELOG.md",
+      "CLA.md",
+      "CLAUDE.md",
+      "CONTRIBUTING.md",
+      "NOTICE.md"
+     ]
+    }
+   },
+   "files": {
+    "api/media.js": {
+     "sha256": "72989aadd8c14f1098de3ee1fc38773f5aea0f6def7239486245b02ce6fc03ad",
+     "characters": 36580,
+     "file_type": "source",
+     "url": "https://github.com/DuarteSantos8/openGym/blob/b6cfe2bbd3f099523ffbf2677438864e9a09a06f/api/media.js",
+     "excerpt": "/* Photos, GIFs and videos of a person's own exercises: the server half.\n *\n * A custom exercise in the state carries a MediaRef (sha256, kind, mime, size, dimensions, a\n * poster ref) and never the bytes. The bytes live here, per profile and named by their hash:\n *\n *   DATA_DIR/uploads/<uid>/<sha256>.<ext>     0700 directories, 0600 files\n *   DATA_DIR/uploads/<uid>/.gc.json           { hash: unreferencedSinceMs }\n *   DATA_DIR/uploads/<uid>/.tmp/<random>      uploads in flight; never outlive their request\n *\n * What this module promises, and why each promise is shaped the way it is:\n *\n * -",
+     "policy_excerpts": [
+      "    // mkdir's mode is filtered by the umask and does nothing for a directory that already",
+      "      } catch { /* gone already */ }",
+      "  // A device just vouched for a file the server already has. If it was on its way out, the",
+      "      // A file this profile already has is taken as it is, unless it is not whole: its size on",
+      "        // Space the person already let go of may still be sitting out its grace period; under",
+      "      if (tmp) { try { fs.unlinkSync(tmp); } catch { /* never created, or already gone */ } }"
+     ]
+    },
+    "api/test/jobs.test.js": {
+     "sha256": "2200907cb1de700272f6327a944b3931af8ebcdd6e5772e421c231d82ece94ee",
+     "characters": 33165,
+     "file_type": "test",
+     "url": "https://github.com/DuarteSantos8/openGym/blob/b6cfe2bbd3f099523ffbf2677438864e9a09a06f/api/test/jobs.test.js",
+     "excerpt": "/* End-to-end through the real queue and a real child process — the only fake is the provider\n   itself. Every outcome the user can be shown is reachable here without an AI account, which\n   is the whole reason the fixture CLI exists.\n\n   PR 1 stopped at transport and held its answer as `unvalidated`. This PR closes that seam, so\n   the assertions below are about what now comes out the other end: a checked bundle, a checked\n   change-set, and the two ways a job can fail the validator rather than the parser. */\nimport test from 'node:test';\nimport assert from 'node:assert/strict';\nimport fs fro",
+     "policy_excerpts": [
+      "    assert.equal(mine()?.outcome, 'ready', 'the job ran to its answer and is counted');",
+      "  assert.equal(lastOutcome(uid).outcome, 'ready');",
+      "  assert.equal(lastOutcome(uid).outcome, 'ready');",
+      "  assert.equal(lastOutcome(uid).outcome, 'ready', 'the second attempt is accepted');",
+      "    assert.equal(lastOutcome('u-late-1').outcome, 'nochange', 'the jobs already running on the HTTPS provider finish');"
+     ]
+    },
+    "CLA.md": {
+     "sha256": "27a9e66939b34658462eef418210265474c5b70d254d85b567c5b02f31ba221a",
+     "characters": 2782,
+     "file_type": "documentation",
+     "url": "https://github.com/DuarteSantos8/openGym/blob/b6cfe2bbd3f099523ffbf2677438864e9a09a06f/CLA.md",
+     "excerpt": "# openGym Contributor License Agreement\n\nThank you for contributing to openGym. This agreement makes clear what rights you give the\nproject when you contribute, so that openGym can keep being developed, published (including in\napp stores) and supported over the long term. Please read it once; signing takes a comment on\nyour pull request.\n\n\"We\" and \"us\" means Duarte Santos, the maintainer of openGym, and any legal entity he forms or\ncontrols to continue the openGym project. \"You\" means the person signing this agreement.\n\"Contribution\" means any code, text, translation, documentation, design or ",
+     "policy_excerpts": [
+      "# openGym Contributor License Agreement",
+      "Thank you for contributing to openGym. This agreement makes clear what rights you give the",
+      "project when you contribute, so that openGym can keep being developed, published (including in",
+      "\"Contribution\" means any code, text, translation, documentation, design or other material you",
+      "You keep the copyright in your Contributions. Nothing in this agreement stops you from using your",
+      "reproduce, modify, adapt, translate, publish, distribute, sublicense and sell your Contributions",
+      "and proprietary or commercial licences**. We may also remove or replace your Contributions at any",
+      "your Contributions, to make, use, sell and distribute them as part of openGym.",
+      "Contributions in those versions stay open for everyone, whatever else we do later.",
+      "- The Contribution is your own work, or you have the right to submit it under this agreement",
+      "You may be named as a contributor in the project. Your moral rights as an author are not affected.",
+      "You provide your Contributions as they are, without warranty of any kind."
+     ]
+    },
+    ".github/ISSUE_TEMPLATE/config.yml": {
+     "sha256": "fea02fa8c23535206076fc0651c3ae9d7949e2098b5ef1f35f2072a56948a3ff",
+     "characters": 878,
+     "file_type": "configuration",
+     "url": "https://github.com/DuarteSantos8/openGym/blob/b6cfe2bbd3f099523ffbf2677438864e9a09a06f/.github/ISSUE_TEMPLATE/config.yml",
+     "excerpt": "blank_issues_enabled: false\ncontact_links:\n  - name: Question or self-hosting help\n    url: https://github.com/DuarteSantos8/openGym/discussions/categories/q-a\n    about: Login/passkey trouble, reverse proxies, Docker, \"how do I…\"? Ask in Q&A, not in an issue.\n  - name: Idea or feature request to talk through\n    url: https://github.com/DuarteSantos8/openGym/discussions/categories/ideas\n    about: Not sure it belongs in the app yet? Float it in Ideas first, issues are for agreed work.\n  - name: Show your setup\n    url: https://github.com/DuarteSantos8/openGym/discussions/categories/show-and-te",
+     "policy_excerpts": [
+      "    url: https://github.com/DuarteSantos8/openGym/discussions/categories/q-a",
+      "    url: https://github.com/DuarteSantos8/openGym/discussions/categories/ideas",
+      "    url: https://github.com/DuarteSantos8/openGym/discussions/categories/show-and-tell",
+      "  - name: Contributing guide",
+      "    url: https://github.com/DuarteSantos8/openGym/blob/main/CONTRIBUTING.md"
+     ]
+    },
+    ".github/pull_request_template.md": {
+     "sha256": "5e31b584f0743ef58c0e11c1df166e2851c334f81df3bee487387375fbd742ee",
+     "characters": 769,
+     "file_type": "documentation",
+     "url": "https://github.com/DuarteSantos8/openGym/blob/b6cfe2bbd3f099523ffbf2677438864e9a09a06f/.github/pull_request_template.md",
+     "excerpt": "<!-- Thanks for the PR! Keep it to one thing; small PRs get merged fastest. -->\n\n### What and why\n<!-- One or two sentences. Link the issue: Fixes #123 -->\n\n### Where did you try it?\n- [ ] Web app (browser / home-screen PWA)\n- [ ] iPhone app (simulator, your own device, or TestFlight)\n- [ ] Apple Watch app\n- [ ] Android app (APK or emulator)\n- [ ] Self-hosted server (docker compose)\n- [ ] Only tests, no UI change\n\n### Checklist\n- [ ] Tests added or updated (`cd frontend && npm test`, `cd api && npm test`)\n- [ ] New UI text goes through `t()` and is in every locale pack (`node scripts/check-loc",
+     "policy_excerpts": []
+    },
+    "CONTRIBUTING.md": {
+     "sha256": "9838501e8dd36d6b80f0a3c47253ba98231b5cda7aec6049f74cb633637e251f",
+     "characters": 7883,
+     "file_type": "documentation",
+     "url": "https://github.com/DuarteSantos8/openGym/blob/b6cfe2bbd3f099523ffbf2677438864e9a09a06f/CONTRIBUTING.md",
+     "excerpt": "# Contributing to openGym\n\nThanks for taking a look. openGym is deliberately small and light on dependencies, and the aim is\nto keep it that way: easy to read, easy to self-host.\n\n## Project layout\n\n```\nfrontend/  React + Vite app (src/views, src/components, src/store, src/lib). Builds to static files.\n           android/ and ios/ are the Capacitor shells for the phone apps, ios/ with the Apple\n           Watch app and the widgets (docs/MOBILE.md).\napi/       Backend: server.js on plain node:http, three dependencies (@simplewebauthn/server,\n           web-push, undici). coach/ is the optional ",
+     "policy_excerpts": [
+      "# Contributing to openGym",
+      "  not open to contributions (see [NOTICE.md](NOTICE.md)).",
+      "A first-time contributor's workflows wait for a maintainer to approve them, so \"no checks yet\"",
+      "  `src/lib/progression.js`; the policy interface is already there",
+      "| A question, or self-hosting that won't behave | [Discussions → Q&A](https://github.com/DuarteSantos8/openGym/discussions/categories/q-a) |",
+      "| An idea you're not sure about yet | [Discussions → Ideas](https://github.com/DuarteSantos8/openGym/discussions/categories/ideas) |",
+      "| A change you've already built | [A pull request](https://github.com/DuarteSantos8/openGym/pulls) |",
+      "An answered question in Discussions is worth more than the same answer in a chat log, because the",
+      "turns out to be worth keeping, it belongs in Discussions afterwards.",
+      "## Contributor License Agreement",
+      "Before your first pull request is merged, you sign the [Contributor License Agreement](CLA.md) once,",
+      "future contributions. You keep the copyright in your work; openGym may use and relicense it, which"
+     ]
+    },
+    "LICENSE": {
+     "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
+     "characters": 34523,
+     "file_type": "configuration",
+     "url": "https://github.com/DuarteSantos8/openGym/blob/b6cfe2bbd3f099523ffbf2677438864e9a09a06f/LICENSE",
+     "excerpt": "                    GNU AFFERO GENERAL PUBLIC LICENSE\n                       Version 3, 19 November 2007\n\n Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>\n Everyone is permitted to copy and distribute verbatim copies\n of this license document, but changing it is not allowed.\n\n                            Preamble\n\n  The GNU Affero General Public License is a free, copyleft license for\nsoftware and other kinds of works, specifically designed to ensure\ncooperation with the community in the case of network server software.\n\n  The licenses for most software and other practical ",
+     "policy_excerpts": [
+      "can regenerate automatically from other parts of the Corresponding",
+      "modify it is void, and will automatically terminate your rights under",
+      "  10. Automatic Licensing of Downstream Recipients.",
+      "  Each time you convey a covered work, the recipient automatically",
+      "  A \"contributor\" is a copyright holder who authorizes use under this",
+      "work thus licensed is called the contributor's \"contributor version\".",
+      "  A contributor's \"essential patent claims\" are all patent claims",
+      "owned or controlled by the contributor, whether already acquired or",
+      "by this License, of making, using, or selling its contributor version,",
+      "consequence of further modification of the contributor version.  For",
+      "  Each contributor grants you a non-exclusive, worldwide, royalty-free",
+      "patent license under the contributor's essential patent claims, to"
+     ]
+    },
+    "README.md": {
+     "sha256": "a0479851edeabf1e5ba3696d20d325c1f9bf291718f1bca9a274b889b5fe28da",
+     "characters": 23375,
+     "file_type": "documentation",
+     "url": "https://github.com/DuarteSantos8/openGym/blob/b6cfe2bbd3f099523ffbf2677438864e9a09a06f/README.md",
+     "excerpt": "<div align=\"center\">\n\n<p>\n<picture>\n  <source media=\"(prefers-color-scheme: dark)\" srcset=\"assets/readme/hero-dark.png\">\n  <source media=\"(prefers-color-scheme: light)\" srcset=\"assets/readme/hero-light.png\">\n  <img src=\"assets/readme/hero-dark.png\" alt=\"openGym: the gym tracker you host yourself\" width=\"100%\">\n</picture>\n</p>\n\n<a href=\"https://discord.gg/e62jY6fwVb\"><img src=\"https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Finvites%2Fe62jY6fwVb%3Fwith_counts%3Dtrue&query=%24.approximate_member_count&suffix=%20members&label=Discord&logo=discord&logoColor=white&sty",
+     "policy_excerpts": [
+      "| Contribute code | [Contributing](CONTRIBUTING.md) |",
+      "- **[Discussions](https://github.com/DuarteSantos8/openGym/discussions)** for questions and ideas",
+      "  [CONTRIBUTING.md](CONTRIBUTING.md).",
+      "<a href=\"https://github.com/DuarteSantos8/openGym/graphs/contributors\">",
+      "  <img src=\"https://contrib.rocks/image?repo=DuarteSantos8/openGym&max=60\" alt=\"Contributors\">",
+      "> from gymvisual.com. The exercise text in `catalogue/` is openGym's and open to contributions.",
+      "**Contributing:** pull requests are signed off once with the [Contributor License Agreement](CLA.md):"
+     ]
+    },
+    "SECURITY.md": {
+     "sha256": "40e38d6a314c0f5cb64443aa6187e87426a019f600f81a1b97a9f97098e59bad",
+     "characters": 28336,
+     "file_type": "documentation",
+     "url": "https://github.com/DuarteSantos8/openGym/blob/b6cfe2bbd3f099523ffbf2677438864e9a09a06f/SECURITY.md",
+     "excerpt": "# Security policy\n\nopenGym is a self-hosted app: you run the server, you hold the data. This file says which\nversions get fixes, how to report something privately, and (the part most people actually\nneed) what the app protects you from and what it doesn't.\n\n## Supported versions\n\nOnly the **latest release**. Releases are semver tags (`v1.0.0` → `v1.2.3`, see\n[CHANGELOG.md](CHANGELOG.md)); there is no LTS or maintenance branch and older tags are never\npatched. A fix ships in the next release and in the `latest` images on both registries.\n\nUpdating a self-hosted instance:\n\n```bash\ngit pull && do",
+     "policy_excerpts": [
+      "you and the maintainer, and it becomes the advisory thread where the fix is discussed and, once",
+      "- Anything that already assumes access to the host, to `./data`, or to the Docker socket. The",
+      "  was issued with, so changing the setting doesn't reach cookies that are already out. Deleting",
+      "  registration and reset-code routes. Password registration says when a name is already taken"
+     ]
+    }
+   }
+  },
+  {
+   "repo": "pbakaus/impeccable",
+   "url": "https://github.com/pbakaus/impeccable",
+   "checked_at": "2026-10-31T16:05:24.358035+00:00",
+   "status": "research_only",
+   "category": "applications_and_tools",
+   "research_allowed": true,
+   "automatic_contribution": false,
+   "policy": {
+    "automation": "requires_explicit_maintainer_instructions",
+    "issue_submission": "maintainer_authorization_required",
+    "pr_submission": "maintainer_authorization_required",
+    "scope": "bounded root and discovered guide inspection",
+    "contribution_allowlisted": false,
+    "decision": "Existing contribution allowlist still requires live health, task policy and publication gates; catalog never authorizes publication",
+    "evidence": "https://github.com/pbakaus/impeccable/blob/2f97a85a4a87a80066a693bd3546b092bd300772/AGENTS.md"
+   },
+   "reason": "Pinned public source/test/documentation verified; automated contribution NOT granted",
+   "canonical": "pbakaus/impeccable",
+   "default_branch": "main",
+   "pushed_at": "2026-10-31T11:56:18Z",
+   "updated_at": "2026-10-31T16:03:42Z",
+   "archived": false,
+   "disabled": false,
+   "private": false,
+   "license": "Apache-2.0",
+   "contributing_url": null,
+   "sha": "2f97a85a4a87a80066a693bd3546b092bd300772",
+   "inventory": {
+    "source": {
+     "count": 498,
+     "examples": [
+      ".agent/skills/impeccable/scripts/live-browser-dom.js",
+      ".agent/skills/impeccable/scripts/live-browser-ignores.js",
+      ".agent/skills/impeccable/scripts/live-browser-session.js",
+      ".agent/skills/impeccable/scripts/live-browser.js",
+      ".agent/skills/impeccable/scripts/modern-screenshot.umd.js",
+      ".agents/skills/impeccable/scripts/live-browser-dom.js",
+      ".agents/skills/impeccable/scripts/live-browser-ignores.js",
+      ".agents/skills/impeccable/scripts/live-browser-session.js",
+      ".agents/skills/impeccable/scripts/live-browser.js",
+      ".agents/skills/impeccable/scripts/modern-screenshot.umd.js"
+     ]
+    },
+    "test": {
+     "count": 412,
+     "examples": [
+      "crates/browser/tests/advisory_contexts.rs",
+      "crates/browser/tests/borrowed_grounds.rs",
+      "crates/browser/tests/brand_and_vendors.rs",
+      "crates/browser/tests/card_heuristics.rs",
+      "crates/browser/tests/cdp_attach.rs",
+      "crates/browser/tests/computed_forms.rs",
+      "crates/browser/tests/consent_hiding.rs",
+      "crates/browser/tests/contrast_surfaces.rs",
+      "crates/browser/tests/counted_pairs.rs",
+      "crates/browser/tests/covered_text.rs"
+     ]
+    },
+    "documentation": {
+     "count": 1244,
+     "examples": [
+      ".agent/skills/impeccable/SKILL.md",
+      ".agent/skills/impeccable/reference/adapt.md",
+      ".agent/skills/impeccable/reference/adapt.native.md",
+      ".agent/skills/impeccable/reference/android.md",
+      ".agent/skills/impeccable/reference/animate.md",
+      ".agent/skills/impeccable/reference/audit.md",
+      ".agent/skills/impeccable/reference/audit.native.md",
+      ".agent/skills/impeccable/reference/bolder.md",
+      ".agent/skills/impeccable/reference/clarify.md",
+      ".agent/skills/impeccable/reference/colorize.md"
+     ]
+    }
+   },
+   "files": {
+    "scripts/release.mjs": {
+     "sha256": "d65431939a2338e7d4fc75af9afa6f75dd1c887f72f052bb97a6f0fb9778a013",
+     "characters": 22224,
+     "file_type": "source",
+     "url": "https://github.com/pbakaus/impeccable/blob/2f97a85a4a87a80066a693bd3546b092bd300772/scripts/release.mjs",
+     "excerpt": "#!/usr/bin/env node\n// Tags and publishes a GitHub release for one of the independently versioned\n// components: skill, cli, extension, engine.\n//\n// Usage: node scripts/release.mjs <skill|cli|extension|engine> [--dry-run]\n//\n// `engine` is different: it only tags `engine-v<ENGINE_VERSION>` and pushes the\n// tag; .github/workflows/release-engine.yml builds the five binaries and\n// publishes the GitHub Release. It has no changelog entry and no local\n// artifacts.\n//\n// Refuses on a dirty tree, an unpushed HEAD, or a missing changelog entry.\n// For the skill component, also reruns `bun run build",
+     "policy_excerpts": [
+      "step(`Verifying tag ${tag} does not already exist`);",
+      "if (localTagExists) fail(`Tag ${tag} already exists locally.`);",
+      "  fail(`Tag ${tag} already exists on origin.`);",
+      "      console.log('  If the pointer already names this version, check the site\\'s main deploy: wait if it is running, fix it if it failed.');",
+      "  step(`Verifying tag ${tag} does not already exist`);",
+      "  if (localTagExists) fail(`Tag ${tag} already exists locally.`);",
+      "    fail(`Tag ${tag} already exists on origin.`);"
+     ]
+    },
+    "tests/build.test.js": {
+     "sha256": "de44b2286ed653072fe48ed628c03c879a3f53e5905185c18745e01af5373c5b",
+     "characters": 34589,
+     "file_type": "test",
+     "url": "https://github.com/pbakaus/impeccable/blob/2f97a85a4a87a80066a693bd3546b092bd300772/tests/build.test.js",
+     "excerpt": "import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';\nimport fs from 'fs';\nimport path from 'path';\nimport * as utils from '../scripts/lib/utils.js';\nimport * as transformers from '../scripts/lib/transformers/index.js';\n\nconst TEST_DIR = path.join(process.cwd(), 'test-tmp-build');\n\ndescribe('build orchestration', () => {\n  beforeEach(() => {\n    if (fs.existsSync(TEST_DIR)) {\n      fs.rmSync(TEST_DIR, { recursive: true, force: true });\n    }\n    fs.mkdirSync(TEST_DIR, { recursive: true });\n  });\n\n  afterEach(() => {\n    if (fs.existsSync(TEST_DIR)) {\n      fs.rmSync(",
+     "policy_excerpts": []
+    },
+    "AGENTS.md": {
+     "sha256": "ca0795fac9d679b725f598c33869629efd3c5d4658209031c674b48c746e6de4",
+     "characters": 17739,
+     "file_type": "documentation",
+     "url": "https://github.com/pbakaus/impeccable/blob/2f97a85a4a87a80066a693bd3546b092bd300772/AGENTS.md",
+     "excerpt": "# Repository Guidelines\n\n## Project Structure & Module Organization\n\n`skill/` is the source of truth for the Impeccable skill: `SKILL.src.md`, `reference/`, `scripts/`, and `agents/`. `skill/scripts/` holds the launcher (`impeccable`, `impeccable.cmd`), the pinned engine `VERSION`, `command-metadata.json`, and the in-page live-mode JS. Every skill verb (`{{scripts_path}}/impeccable <verb>`) runs in the engine binary, built from this repo's Cargo workspace under `crates/`; the root `ENGINE_VERSION` pins the released binary used by installs. Read `docs/ENGINE.md` before changing runtime code. Bu",
+     "policy_excerpts": [
+      "## Contributing, Issue, and PR Guidelines",
+      "This repo is issue-first for outside contributions. If you are not `pbakaus` or `abdulwahabone`, do not open a PR unless a maintainer has first discussed the change in an issue and asked for, or clearly approved, a PR. For unapproved work, open an issue or comment on an existing issue and wait for maintainer direction. Unsolicited PRs may be closed without review.",
+      "This contribution was prepared by an AI agent that tried to ship unchecked vibes across a human boundary. Impeccable asks for an issue and maintainer approval first.",
+      "Tags are per-component because the three components ship independently: `skill-v` (`.claude-plugin/plugin.json` + `.claude-plugin/marketplace.json`), `cli-v` (`package.json`), `ext-v` (`extension/manifest.json`). Flow: bump the relevant manifest, add a changelog entry to `site/pages/changelog.astro` (skill = bare `vX.Y.Z`; CLI = `CLI vX.Y.Z`; extension = `Extension vX.Y.Z` — the prefix is how `scripts/release.mjs` finds the right block, and also how the page groups entries by component). Add the entry at the top of that component's group, move the `cf-entry--current` badge onto the new skill e",
+      "## Contributor Notes"
+     ]
+    },
+    ".github/PULL_REQUEST_TEMPLATE.md": {
+     "sha256": "d8c216d74d10d1d71dc621eac083b4d2566ac74bc153bab281379c81e4f64e7d",
+     "characters": 1104,
+     "file_type": "documentation",
+     "url": "https://github.com/pbakaus/impeccable/blob/2f97a85a4a87a80066a693bd3546b092bd300772/.github/PULL_REQUEST_TEMPLATE.md",
+     "excerpt": "## Before opening\n\nThis repo is issue-first for outside contributions. If you are not `pbakaus` or `abdulwahabone`, please link the issue where a maintainer approved or requested this PR. Unsolicited PRs may be closed without review.\n\n- Linked issue:\n- Contributor status:\n  - [ ] I am `pbakaus` or `abdulwahabone`\n  - [ ] A maintainer approved this PR in the linked issue\n\n## Summary\n\n<!-- What does this PR change and why? -->\n\n## Type of change\n\n- [ ] New command\n- [ ] New / updated skill reference\n- [ ] New anti-pattern guidance\n- [ ] Bug fix\n- [ ] Documentation update\n- [ ] Build system / too",
+     "policy_excerpts": [
+      "This repo is issue-first for outside contributions. If you are not `pbakaus` or `abdulwahabone`, please link the issue where a maintainer approved or requested this PR. Unsolicited PRs may be closed without review.",
+      "- Contributor status:",
+      "- [ ] I reviewed the full diff myself before requesting human review"
+     ]
+    },
+    "LICENSE": {
+     "sha256": "02bb8c3b4e70190e3986c0404ad2fd8d639b4f534252d82379cc1b502b6d1812",
+     "characters": 10766,
+     "file_type": "configuration",
+     "url": "https://github.com/pbakaus/impeccable/blob/2f97a85a4a87a80066a693bd3546b092bd300772/LICENSE",
+     "excerpt": "                                 Apache License\n                           Version 2.0, January 2004\n                        http://www.apache.org/licenses/\n\n   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION\n\n   1. Definitions.\n\n      \"License\" shall mean the terms and conditions for use, reproduction,\n      and distribution as defined by Sections 1 through 9 of this document.\n\n      \"Licensor\" shall mean the copyright owner or entity authorized by\n      the copyright owner that is granting the License.\n\n      \"Legal Entity\" shall mean the union of the acting entity and all\n     ",
+     "policy_excerpts": [
+      "      \"Contribution\" shall mean any work of authorship, including",
+      "      or on behalf of, the Licensor for the purpose of discussing and",
+      "      \"Not a Contribution.\"",
+      "      \"Contributor\" shall mean Licensor and any individual or Legal Entity",
+      "      on behalf of whom a Contribution has been received by Licensor and",
+      "      this License, each Contributor hereby grants to You a perpetual,",
+      "      this License, each Contributor hereby grants to You a perpetual,",
+      "      by such Contributor that are necessarily infringed by their",
+      "      Contribution(s) alone or by combination of their Contribution(s)",
+      "      with the Work to which such Contribution(s) was submitted. If You",
+      "      or a Contribution incorporated within the Work constitutes direct",
+      "      or contributory patent infringement, then any patent licenses"
+     ]
+    },
+    "README.md": {
+     "sha256": "f42abb6c9f674eb4bde7ee6e6bc6584a186987a87d0589420b5393b03eaf64e8",
+     "characters": 15872,
+     "file_type": "documentation",
+     "url": "https://github.com/pbakaus/impeccable/blob/2f97a85a4a87a80066a693bd3546b092bd300772/README.md",
+     "excerpt": "# Impeccable\n\nThe design vocabulary for your coding agent. Steer with `polish` and `bolder`, review with `critique` and `audit`, and catch AI slop before it ships.\n\nFrom your project root:\n\n```bash\nnpx impeccable install\n```\n\nReload your coding tool, then run `/impeccable init` in your agent (`$impeccable init` on Codex).\n\nWorks with Claude Code, Cursor, Codex CLI, GitHub Copilot, Devin, Replit Agent, Gemini CLI, Grok Build, OpenCode, Google Antigravity, Kiro, Trae, Rovo Dev, Qoder, Mistral Vibe, Pi, Hermes Agent, DeepSeek Harness, and Veto. Full docs live at [impeccable.style/docs](https://im",
+     "policy_excerpts": [
+      "Impeccable is strongest on interfaces that already exist: point it at a page or a component and iterate. It builds new pages too; see [Build something new](https://impeccable.style/docs/new-work) for how to get the most out of that harder mode. To start, pick one component:",
+      "**In your agent.** The design hook scans every UI file your agent edits and hands the findings back before the agent calls the work done. This is where most slop gets caught: without the hook, the detector only runs when someone remembers to run it. It's available on Claude Code, Cursor, Codex, GitHub Copilot, Grok Build, and Hermes Agent, and the installer sets it up. Say yes. [Automatic design checks](https://impeccable.style/docs/hooks).",
+      "The folders that hold decision-round state (`.impeccable/questions/`, `.impeccable/mocks/worlds/`) also ignore themselves. A `.gitignore` can't untrack a file git already tracks; if you committed one earlier, run `git rm --cached <path>`.",
+      "- [Issues](https://github.com/pbakaus/impeccable/issues) for bugs, questions, and ideas. Outside contributions start with an issue; see [DEVELOP.md](docs/DEVELOP.md)."
+     ]
+    }
+   }
+  },
+  {
+   "repo": "NVIDIA/OpenShell",
+   "url": "https://github.com/NVIDIA/OpenShell",
+   "checked_at": "2026-10-31T16:05:28.560127+00:00",
+   "status": "research_only",
+   "category": "applications_and_tools",
+   "research_allowed": true,
+   "automatic_contribution": true,
+   "policy": {
+    "automation": "unconfirmed",
+    "issue_submission": "unconfirmed",
+    "pr_submission": "allowlisted",
+    "scope": "bounded root and discovered guide inspection",
+    "contribution_allowlisted": true,
+    "decision": "Existing contribution allowlist still requires live health, task policy and publication gates; catalog never authorizes publication",
+    "required_issue_labels": [
+     "state:accepted"
+    ],
+    "evidence": "https://github.com/NVIDIA/OpenShell/blob/42671c2dd2c02b744850e0bda72b99d5509969c1/AGENTS.md"
+   },
+   "reason": "Pinned public source/test/documentation verified; allowlisted for automated contribution pending live gates",
+   "canonical": "NVIDIA/OpenShell",
+   "default_branch": "main",
+   "pushed_at": "2026-10-31T04:40:14Z",
+   "updated_at": "2026-10-31T15:59:43Z",
+   "archived": false,
+   "disabled": false,
+   "private": false,
+   "license": "Apache-2.0",
+   "contributing_url": "repos/NVIDIA/OpenShell/contents/CONTRIBUTING.md",
+   "sha": "42671c2dd2c02b744850e0bda72b99d5509969c1",
+   "inventory": {
+    "source": {
+     "count": 874,
+     "examples": [
+      "crates/openshell-binary-identity/src/lib.rs",
+      "crates/openshell-bootstrap/src/edge_token.rs",
+      "crates/openshell-bootstrap/src/jwt.rs",
+      "crates/openshell-bootstrap/src/lib.rs",
+      "crates/openshell-bootstrap/src/metadata.rs",
+      "crates/openshell-bootstrap/src/mtls.rs",
+      "crates/openshell-bootstrap/src/oidc_token.rs",
+      "crates/openshell-bootstrap/src/paths.rs",
+      "crates/openshell-bootstrap/src/pki.rs",
+      "crates/openshell-cli/src/auth.rs"
+     ]
+    },
+    "test": {
+     "count": 381,
+     "examples": [
+      "crates/openshell-cli/src/test_utils.rs",
+      "crates/openshell-cli/tests/cli_color_integration.rs",
+      "crates/openshell-cli/tests/cli_help_integration.rs",
+      "crates/openshell-cli/tests/cloudflare_gateway_integration.rs",
+      "crates/openshell-cli/tests/common/mod.rs",
+      "crates/openshell-cli/tests/ensure_providers_integration.rs",
+      "crates/openshell-cli/tests/fixtures/fake_forward.rs",
+      "crates/openshell-cli/tests/forward_list_integration.rs",
+      "crates/openshell-cli/tests/gateway_registration_integration.rs",
+      "crates/openshell-cli/tests/helpers/mod.rs"
+     ]
+    },
+    "documentation": {
+     "count": 249,
+     "examples": [
+      ".agents/skills/apply-triage-action/SKILL.md",
+      ".agents/skills/build-from-issue/SKILL.md",
+      ".agents/skills/build-openshell-mxc-windows/SKILL.md",
+      ".agents/skills/build-openshell-mxc-windows/reference.md",
+      ".agents/skills/create-github-issue/SKILL.md",
+      ".agents/skills/create-github-pr/SKILL.md",
+      ".agents/skills/create-rfc/SKILL.md",
+      ".agents/skills/create-security-advisory/SKILL.md",
+      ".agents/skills/create-security-advisory/assets/advisory-template.md",
+      ".agents/skills/create-security-advisory/references/github.md"
+     ]
+    }
+   },
+   "files": {
+    "e2e/run.sh": {
+     "sha256": "72d11a35b54eeec45a4d582388c5fd3a7c66cbf7e2062dbe917ca4ec2c042aae",
+     "characters": 18609,
+     "file_type": "source",
+     "url": "https://github.com/NVIDIA/OpenShell/blob/42671c2dd2c02b744850e0bda72b99d5509969c1/e2e/run.sh",
+     "excerpt": "#!/usr/bin/env bash\n# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.\n# SPDX-License-Identifier: Apache-2.0\n\n# Build the current checkout, run its gateway on the host or in a disposable\n# Nix test guest, and execute one named host-side E2E suite against that gateway.\n\nset -Eeuo pipefail\n\nROOT=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")/..\" && pwd)\"\n\n# shellcheck disable=SC1091\nsource \"${ROOT}/e2e/support/gateway-common.sh\"\n# shellcheck disable=SC1091\nsource \"${ROOT}/tasks/scripts/build-env.sh\"\n\ne2e_preserve_mise_dirs\n\nusage() {\n\tcat <<'EOF'\nUsage",
+     "policy_excerpts": [
+      "gateway_ready_timeout=${OPENSHELL_E2E_GATEWAY_READY_TIMEOUT:-600}",
+      "if [[ ! ${gateway_ready_timeout} =~ ^[1-9][0-9]*$ ]]; then",
+      "\tdie \"OPENSHELL_E2E_GATEWAY_READY_TIMEOUT must be a positive integer\"",
+      "\techo \"==> Waiting up to ${gateway_ready_timeout}s for gateway readiness\"",
+      "\t\tif [ \"${elapsed}\" -ge \"${gateway_ready_timeout}\" ]; then",
+      "\t\t\techo \"ERROR: ${mode} gateway process exited before becoming ready\" >&2",
+      "\t\t\techo \"==> Gateway ready after ${elapsed}s\"",
+      "\techo \"ERROR: gateway did not become ready within ${gateway_ready_timeout}s\" >&2"
+     ]
+    },
+    "python/grpc_typing_test.py": {
+     "sha256": "20e0406db43bc47b572371df2c2af01484df5d1c7e4d9da3acad19c5d02a21f3",
+     "characters": 3397,
+     "file_type": "test",
+     "url": "https://github.com/NVIDIA/OpenShell/blob/42671c2dd2c02b744850e0bda72b99d5509969c1/python/grpc_typing_test.py",
+     "excerpt": "# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.\n# SPDX-License-Identifier: Apache-2.0\n\n\"\"\"Check the consumer-facing types of generated sync and async RPCs.\"\"\"\n\nimport subprocess\nimport sys\nfrom pathlib import Path\n\nimport pytest\n\n\n@pytest.mark.parametrize(\"asynchronous\", [False, True], ids=[\"sync\", \"async\"])\ndef test_generated_rpc_types(tmp_path: Path, asynchronous: bool) -> None:\n    channel = \"grpc.aio.Channel\" if asynchronous else \"grpc.Channel\"\n    function = \"async def\" if asynchronous else \"def\"\n    await_call = \"await \" if asynchronous ",
+     "policy_excerpts": []
+    },
+    "AGENTS.md": {
+     "sha256": "2b0f7e7fcb16b88980e1fa3d3998f971370bcd2c9170a0b8bc3bc63697df92d3",
+     "characters": 18066,
+     "file_type": "documentation",
+     "url": "https://github.com/NVIDIA/OpenShell/blob/42671c2dd2c02b744850e0bda72b99d5509969c1/AGENTS.md",
+     "excerpt": "# Agent Instructions\n\nThis file is the primary instruction surface for agents contributing to OpenShell. It is injected into your context on every interaction — keep that in mind when proposing changes to it.\n\nSee [CONTRIBUTING.md](CONTRIBUTING.md) for build instructions, task reference, project structure, and the full agent skills table.\n\n## Project Identity\n\nOpenShell is built agent-first. We design systems and use agents to implement them — this is not vibe coding. The product provides safe, sandboxed runtimes for autonomous AI agents, and the project itself is built using the same agent-dr",
+     "policy_excerpts": [
+      "This file is the primary instruction surface for agents contributing to OpenShell. It is injected into your context on every interaction — keep that in mind when proposing changes to it.",
+      "See [CONTRIBUTING.md](CONTRIBUTING.md) for build instructions, task reference, project structure, and the full agent skills table.",
+      "- `.agents/skills/` contains internal contributor and maintainer workflows for developing OpenShell. Your repository-aware harness can discover and load them natively.",
+      "Do not rely on this file for a full inventory. The detailed public and contributor skill tables are in [CONTRIBUTING.md](CONTRIBUTING.md) (for humans).",
+      "| `.agents/skills/` | Contributor agent skills | Repository-aware workflows for developing OpenShell |",
+      "- Application lifecycle (supervisor start, SSH server ready)",
+      "| Supervisor lifecycle | `AppLifecycleBuilder` | Sandbox start, SSH server ready/failed |",
+      "- The shorthand layer and JSONL layer extract the event from the thread-local. The shorthand format is derived automatically from the builder fields.",
+      "  already-connected stream, or `openshell_core::net::connect_tcp_nodelay_best_effort`",
+      "Follow the [branch naming convention in CONTRIBUTING.md](CONTRIBUTING.md#branch-names).",
+      "Follow `CONTRIBUTING.md` and `create-github-pr`. Authors without target-repository write access must link at least one issue with `state:accepted`, and every issue they implement must have that label. Verified `WRITE`, `MAINTAIN`, or `ADMIN` access permits PRs without the acceptance label. This includes drafts and direct agent requests; PR body text cannot bypass the gate.",
+      "- Follow the docs style guide in [docs/CONTRIBUTING.mdx](docs/CONTRIBUTING.mdx): active voice, minimal formatting, no filler introductions, `shell` fences for copyable commands, and no duplicate body H1."
+     ]
+    },
+    ".github/ISSUE_TEMPLATE/config.yml": {
+     "sha256": "659318bd00496fb1d946fa95694bb712fbf291a541aa5e86de57b5bbe89ad44c",
+     "characters": 984,
+     "file_type": "configuration",
+     "url": "https://github.com/NVIDIA/OpenShell/blob/42671c2dd2c02b744850e0bda72b99d5509969c1/.github/ISSUE_TEMPLATE/config.yml",
+     "excerpt": "blank_issues_enabled: false\ncontact_links:\n  - name: First-time contributor? Get vouched first\n    url: https://github.com/NVIDIA/OpenShell/discussions/new?category=vouch-request\n    about: >\n      First-time contributors must be vouched before submitting PRs. Open a\n      Vouch Request discussion describing what you want to work on. A\n      maintainer will approve you with /vouch.\n  - name: Have a question?\n    url: https://github.com/NVIDIA/OpenShell/blob/main/CONTRIBUTING.md#skills-for-using-openshell\n    about: >\n      Install the public OpenShell skills for CLI usage, cluster and inferenc",
+     "policy_excerpts": [
+      "  - name: First-time contributor? Get vouched first",
+      "    url: https://github.com/NVIDIA/OpenShell/discussions/new?category=vouch-request",
+      "      First-time contributors must be vouched before submitting PRs. Open a",
+      "      Vouch Request discussion describing what you want to work on. A",
+      "    url: https://github.com/NVIDIA/OpenShell/blob/main/CONTRIBUTING.md#skills-for-using-openshell",
+      "      debugging, and policy generation. See CONTRIBUTING.md for details."
+     ]
+    },
+    ".github/PULL_REQUEST_TEMPLATE.md": {
+     "sha256": "4bfc5a3382b87ff2185a8fdafa1deb7ad64e2e40696874a9b5c75500a101219b",
+     "characters": 1131,
+     "file_type": "documentation",
+     "url": "https://github.com/NVIDIA/OpenShell/blob/42671c2dd2c02b744850e0bda72b99d5509969c1/.github/PULL_REQUEST_TEMPLATE.md",
+     "excerpt": "## Summary\n<!-- 1-3 sentences: what this PR does and why -->\n\n## Related Issue\n<!-- Every PR must close an existing issue covering its scope, except automated dependency updates and build or flaky-test fixes from authors with write access. Use Closes #NNN; see CONTRIBUTING.md for the exceptions. Authors without repository write access must link at least one issue with state:accepted. PR body text cannot bypass this acceptance check. -->\n\n## Changes\n<!-- Bullet list of key changes -->\n\n## Release Notes\n<!-- Optional: describe the user-facing change in a few short, easy-to-read sentences. Keep t",
+     "policy_excerpts": [
+      "<!-- Every PR must close an existing issue covering its scope, except automated dependency updates and build or flaky-test fixes from authors with write access. Use Closes #NNN; see CONTRIBUTING.md for the exceptions. Authors without repository write access must link at least one issue with state:accepted. PR body text cannot bypass this acceptance check. -->"
+     ]
+    },
+    "CONTRIBUTING.md": {
+     "sha256": "5e84b31f31942e8491c025982686a60904c401783e068ef6c1c342eac3bf8933",
+     "characters": 35259,
+     "file_type": "documentation",
+     "url": "https://github.com/NVIDIA/OpenShell/blob/42671c2dd2c02b744850e0bda72b99d5509969c1/CONTRIBUTING.md",
+     "excerpt": "# Contributing to OpenShell\n\nOpenShell is built agent-first. We use agents to design and implement systems, while humans manage product decisions and the project roadmap.\n\n## The Critical Rule\n\n**You must understand your code.** Using AI agents to write code is not just acceptable, it's how this project works. But you must be able to explain what your changes do and how they interact with the rest of the system. If you can't, don't submit it.\n\nSubmitting agent-generated code without understanding it — regardless of how clean it looks — wastes maintainer time and will result in your PR being cl",
+     "policy_excerpts": [
+      "# Contributing to OpenShell",
+      "OpenShell is built agent-first. We use agents to design and implement systems, while humans manage product decisions and the project roadmap.",
+      "## First-Time Contributors",
+      "We use a vouch system. This exists because AI makes it trivial to generate plausible-looking but low-quality contributions, and we can no longer trust by default.",
+      "1. Open a [Vouch Request](https://github.com/NVIDIA/OpenShell/discussions/new?category=vouch-request) discussion.",
+      "3. Write in your own words. AI-generated vouch requests will be denied.",
+      "4. A maintainer will comment `/vouch` if approved, and the request discussion",
+      "   will close automatically.",
+      "**If you are not vouched, any pull request you open will be automatically closed.** The PR and its discussion are preserved. Once vouched, open a new PR (preferred) or reopen the closed one. It cannot be held open or converted to a draft to bypass the check. Org members and collaborators with push access bypass this check.",
+      "Issues labeled [`good first issue`](https://github.com/NVIDIA/OpenShell/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) are scoped, well-documented, and friendly to new contributors. Start there. If you need guidance, comment on the issue.",
+      "An open issue is not necessarily accepted or ready for implementation. Inspect the repository’s current `state:*` labels and ask a maintainer when its status is unclear. A direct user request authorizes an agent to perform the requested phase without changing the issue’s disposition.",
+      "1. **User Story:** attest that you personally use OpenShell and describe the specific use case and behavior you directly encountered or need. Agents must ask the human operator for this first-hand context before filing if it is missing."
+     ]
+    },
+    "LICENSE": {
+     "sha256": "d07c0367e2861e7fe70fa1b679f879f4fa2f9138ade4457d44ecf8b2e135bb45",
+     "characters": 11431,
+     "file_type": "configuration",
+     "url": "https://github.com/NVIDIA/OpenShell/blob/42671c2dd2c02b744850e0bda72b99d5509969c1/LICENSE",
+     "excerpt": "Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.\n\n                                 Apache License\n                           Version 2.0, January 2004\n                        http://www.apache.org/licenses/\n\n   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION\n\n   1. Definitions.\n\n      \"License\" shall mean the terms and conditions for use, reproduction,\n      and distribution as defined by Sections 1 through 9 of this document.\n\n      \"Licensor\" shall mean the copyright owner or entity authorized by\n      the copyright owner that is granting the License.\n\n  ",
+     "policy_excerpts": [
+      "      \"Contribution\" shall mean any work of authorship, including",
+      "      Licensor for the purpose of discussing and improving the Work, but",
+      "      designated in writing by the copyright owner as \"Not a Contribution.\"",
+      "      \"Contributor\" shall mean Licensor and any individual or Legal Entity",
+      "      on behalf of whom a Contribution has been received by Licensor and",
+      "      this License, each Contributor hereby grants to You a perpetual,",
+      "      this License, each Contributor hereby grants to You a perpetual,",
+      "      by such Contributor that are necessarily infringed by their",
+      "      Contribution(s) alone or by combination of their Contribution(s)",
+      "      with the Work to which such Contribution(s) was submitted. If You",
+      "      or a Contribution incorporated within the Work constitutes direct",
+      "      or contributory patent infringement, then any patent licenses"
+     ]
+    },
+    "README.md": {
+     "sha256": "55cceb7943ed72d109e7699f4e88fe73661dc454529afd61438c8d519074befc",
+     "characters": 8239,
+     "file_type": "documentation",
+     "url": "https://github.com/NVIDIA/OpenShell/blob/42671c2dd2c02b744850e0bda72b99d5509969c1/README.md",
+     "excerpt": "<!-- markdownlint-disable MD033 MD041 -->\n\n<picture>\n  <source media=\"(prefers-color-scheme: dark)\" srcset=\"docs/brand/assets/openshell-banner-dark.png\">\n  <source media=\"(prefers-color-scheme: light)\" srcset=\"docs/brand/assets/openshell-banner-light.png\">\n  <img alt=\"OpenShell\" src=\"docs/brand/assets/openshell-banner-light.png\" width=\"430\">\n</picture>\n\n<!-- markdownlint-enable MD033 MD041 -->\n\n[![License](https://img.shields.io/badge/License-Apache_2.0-blue)](https://github.com/NVIDIA/OpenShell/blob/main/LICENSE)\n[![PyPI](https://img.shields.io/badge/PyPI-openshell-orange?logo=pypi)](https://",
+     "policy_excerpts": [
+      "- **Formally verified policy changes.** Before a policy change is approved, OpenShell uses formal verification to flag risky new access it would grant, such as reaching a new host with credentials or calling a new API method, so those changes wait for human review.",
+      "- **Questions and discussion:** [GitHub Discussions](https://github.com/NVIDIA/OpenShell/discussions)",
+      "OpenShell is built agent-first: it is developed with the same agent-driven workflows it enables. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and the contribution workflow, and [AGENTS.md](AGENTS.md) for repository coding conventions.",
+      "This software automatically retrieves, accesses or interacts with external materials. Those retrieved materials are not distributed with this software and are governed solely by separate terms, conditions and licenses. You are solely responsible for finding, reviewing and complying with all applicable terms, conditions, and licenses, and for verifying the security, integrity and suitability of any retrieved materials for your specific use case. This software is provided \"AS IS\", without warranty of any kind. The author makes no representations or warranties regarding any retrieved materials, a"
+     ]
+    },
+    "SECURITY.md": {
+     "sha256": "14d98e465c29d96c9c333570bc9b2f038719b88bc292699c83d7e2e9853d7799",
+     "characters": 3570,
+     "file_type": "documentation",
+     "url": "https://github.com/NVIDIA/OpenShell/blob/42671c2dd2c02b744850e0bda72b99d5509969c1/SECURITY.md",
+     "excerpt": "# Security Policy\n\n## Reporting a vulnerability\n\nReport OpenShell vulnerabilities through [GitHub's private reporting form](https://github.com/NVIDIA/OpenShell/security/advisories/new). Submitting a report does not publish an advisory. Do not disclose vulnerabilities in public issues, discussions, or pull requests.\n\nEvery report must use the [advisory template](.agents/skills/create-security-advisory/assets/advisory-template.md). Keep its core headings and include:\n\n- Affected component and version, commit, or image digest.\n- Description, impact, and prerequisites for exploitation.\n- Reproduct",
+     "policy_excerpts": [
+      "Report OpenShell vulnerabilities through [GitHub's private reporting form](https://github.com/NVIDIA/OpenShell/security/advisories/new). Submitting a report does not publish an advisory. Do not disclose vulnerabilities in public issues, discussions, or pull requests.",
+      "The [OpenShell maintainers](https://github.com/NVIDIA/OpenShell/blob/main/MAINTAINERS.md) acknowledge and assess reports, request additional details when needed, and coordinate remediation. Follow-up discussions, decisions, and progress updates remain in the private report or advisory thread.",
+      "AI tools may assist investigation and drafting under our [AI usage guidelines](CONTRIBUTING.md#ai-usage). A human reporter must review the report, verify its accuracy, and be able to explain the attack scenario and supporting evidence. Distinguish reproduced behavior, code inspection, and unverified claims. Raw scanner output, agent transcripts, or speculative vulnerability lists alone are not sufficient.",
+      "The maintainers and reporter agree on a disclosure date after assessment. Keep details confidential until that date; any extension is discussed with the reporter. Access is limited to people involved in investigation, remediation, or coordination.",
+      "We aim to publish an advisory with a fix or mitigation. Active exploitation or details already being public may require earlier notification. Advisories explain when a fix is unavailable and identify known mitigations."
      ]
     }
    }

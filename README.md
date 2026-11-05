@@ -134,7 +134,17 @@ README 没有提到功能不构成缺失证据；README 声称支持也不能替
 
 数值优先级只在证据与政策门槛通过后产生：可实现候选优先于待确认提案，低风险略优先，功能类别本身不再固定加分。审查要求考虑明确需求、用户价值、范围、独立复现、验证成本、架构适配、候选时效及已有维护者/外部贡献观察；缺失信息保持 unknown，不编造接受概率。原有 Issue 初筛关键词分数只是分诊线索，不能代替证据、查重和政策门禁。高价值功能研究保留在单独研究份额中。
 
-查重由控制器统一仓库限定，清除模型查询中的仓库名普通词和自带 `repo:`，避免假阴性；记录原始及实际查询。结果超过第一页时控制器自动翻页拉取（每查询最多 100 条），全部命中都经审查后才算完整搜索；超过上限或上游 `incomplete_results` 仍记为不完整，可以依据已读结果拒绝，不能据此放行。功能查重区分已有实现/竞争 PR 和开放的功能请求：前者仍拒绝，后者须经审查确认关联已读取的开放 Issue，并等待维护者方向，不重复开 Issue，也不把用户需求当作维护者批准。
+查重由控制器统一仓库限定，清除模型查询中的仓库名普通词和自带 `repo:`，避免假阴性；记录原始及实际查询。结果超过第一页时控制器自动翻页拉取（每查询最多 100 条），全部命中都经审查后才算完整搜索；超过上限或上游 `incomplete_results` 仍记为不完整，可以依据已读结果拒绝，不能据此放行。功能查重区分已有实现/竞争 PR 和开放的功能请求，已有报告优先复用，不重复开 Issue；竞争实现按下述自己的贡献规则判断，不能把用户需求当作维护者批准。
+
+### 自报与自发现问题的贡献规则
+
+当前配置启用 `contribution_strategy` 的三条规则：
+
+1. `prefer_own_pr_on_competition`：我们自己提交的 Issue，以及本地 `hunt` 独立发现并留有来源记录的问题，遇到其他人提交的同范围 PR 仍推进自己的实现和 PR。记录竞争 PR 的范围、链接与审查；不能仅因竞争、维护者尚未表态或预计不会采纳而跳过。普通扫描得到的他人问题不自动享有该例外；已有等价修复、无效问题、证据不足等仍须拒绝。
+2. `submit_issue_and_pr_together`：上述任务在上游规则允许、范围清晰、可验证时，可以同一轮先提交 Issue，再提交通过复现、补丁测试和审查的 PR，无须额外等待接纳表态。不会为了抢先省略验证，也不把本地偏好写成 `maintainer_approved`。明确要求事先批准、指定标签、人工提交/审查，以及高风险和安全披露门禁继续生效。
+3. `link_pr_in_own_issue`：自己的 PR 创建或恢复后，读取自己 Issue 的最新描述，保留原内容并追加/更新 “Our implementation” 链接区块；幂等核验，失败后在后续 PR 观察中重试。只修改当前认证账号自己提交的 Issue；复用他人的 Issue 时，保留 PR 描述里的关联，不改他人的描述。
+
+来源依据是认证账号与 Issue 作者核验，以及持久化的本地发现记录；不会据此声称已经证明全球最早发现。旧配置缺省关闭这些偏好，当前 `config.json` 已全部开启。规则配置本身不会触发远端写入；实际发布仍遵循会话授权与 `--allow-external-writes` 门禁。
 
 队列是原有状态机的附加门禁，不替代状态机。旧任务继续按 `PLAN → REPRODUCE → ISSUE/REPAIR → PATCH_READY → AUTO_REVIEW → PUBLISH → PR_OPEN` 恢复。维护者确认不能覆盖 `automated_issue=false` 或本人审查要求；`automated_pr=false` 只能阻止直接实现/发布，不阻止讨论 Issue。
 
@@ -142,11 +152,11 @@ README 没有提到功能不构成缺失证据；README 声称支持也不能替
 
 ## 仓库目录与准入
 
-最新核验结果见 [repository-catalog.json](repository-catalog.json)：保留原 52 条记录，追加本次清单中未重复的 80 个项目，共 132 条记录。用户提供的 100 个项目全部纳入目录，按前端框架、UI 基础设施、AI 应用、Agent 与工作流四类组织。核验记录带 UTC 时间、规范名称、默认分支、推送时间、归档/禁用标志、许可证、固定 SHA、文件摘要/哈希、贡献政策材料及原因。逐项结果见 [100 项仓库扩容记录](docs/catalog-expansion-2026-10-18.md)。
+最新核验结果见 [repository-catalog.json](repository-catalog.json)：2026-11-01 保留已有 132 条记录，追加 9 个应用与工具项目，共 141 条记录。此前用户提供的 100 个项目仍按前端框架、UI 基础设施、AI 应用、Agent 与工作流四类组织，历史核验见 [100 项仓库扩容记录](docs/catalog-expansion-2026-10-18.md)。核验记录带 UTC 时间、规范名称、默认分支、推送时间、归档/禁用标志、许可证、固定 SHA、文件摘要/哈希、贡献政策材料及原因；本次仅核验新增项目，旧项保留原核验时间。
 
 | 目录状态 | 数量 | 含义 |
 | --- | ---: | --- |
-| `research_only` | 94 | 已核验公开源码、测试、文档及可识别开源许可证，进入默认研究和扫描范围；其中白名单内 94 项标记 `automatic_contribution` / `pr_submission: allowlisted`，允许自动贡献（仍受实时门禁约束） |
+| `research_only` | 103 | 已核验公开源码、测试、文档及可识别开源许可证，进入默认研究和扫描范围；其中白名单内 102 项标记 `automatic_contribution` / `pr_submission: allowlisted`，允许自动贡献（仍受实时门禁约束） |
 | `active` | 0 | 目录核验不绕过运行时健康/政策门禁；白名单内项目的贡献授权记录在 `automatic_contribution` |
 | `paused` | 13 | 迁移旧地址、长期无推送、停止维护/归档、贡献限制等，逐条记录原因 |
 | `rejected` | 23 | 有界准入无法确认开源许可或源码/测试/文档覆盖，保留待审查 |
@@ -154,10 +164,14 @@ README 没有提到功能不构成缺失证据；README 声称支持也不能替
 
 GitHub 对复杂/混合许可证可能返回 `NOASSERTION`。这类仓库目前不自动准入，需另行逐目录许可证审查。临时失败只暂停，不永久退役；已退役记录刷新时不会自动恢复。OpenInterpreter 和 Instructor 的原名称保留迁移状态，官方规范名称另行核验后进入研究池。
 
-- `repositories`：贡献目标白名单，保留原 33 个目标并追加本次核验通过的项目，当前 94 个；白名单内且目录核验为 `research_only` 的仓库记录 `automatic_contribution` 与 `pr_submission: allowlisted`，允许进入自动贡献流程，但仍需当轮健康检查、每个任务的政策判断及发布门禁。
+- `repositories`：贡献目标白名单，保留已有 94 个目标，本次追加 8 个，当前 102 个；白名单内且目录核验为 `research_only` 的仓库记录 `automatic_contribution` 与 `pr_submission: allowlisted`，允许进入自动贡献流程，但仍需当轮健康检查、每个任务的政策判断及发布门禁。
 - `repository_catalog`：完整核验目录文件路径，默认 `repository-catalog.json`。
 - `peer_repositories`：可选的研究池子集，仅过滤已核验目录，不能直接授权未知仓库。
 - 目录超过 `research.catalog_max_age_days`（默认 30 天）不再作为研究准入依据，需 `catalog --verify`。
+
+本次新增 omni-tools、GeoLibre、Puter、Matcha、xtool、VoiceStudio、openGym、impeccable、NVIDIA OpenShell。九项均进入研究目录；除 impeccable 外，其余八项进入贡献白名单。impeccable 的 [上游规则](https://github.com/pbakaus/impeccable/blob/2f97a85a4a87a80066a693bd3546b092bd300772/AGENTS.md) 要求 AI 代理获得指定维护者明确指示后才可创建 Issue/PR，因此保持仅研究。Matcha 的 [贡献指南](https://github.com/floatpane/matcha/blob/8e9ba02326f5feb30b7e083f0827893bccd3623c/CONTRIBUTING.md) 禁止直接发布 AI 生成的 Issue、评论和评审，已配置人工提交 Issue。OpenShell 的 [规则](https://github.com/NVIDIA/OpenShell/blob/42671c2dd2c02b744850e0bda72b99d5509969c1/AGENTS.md) 要求外部贡献关联带 `state:accepted` 标签的 Issue，已配置标签门禁；首次贡献的人工 Vouch Request、维护者担保及其他上游要求仍须在具体任务中核验。VoiceStudio、openGym 的 CLA 要求也须由贡献者本人处理，目录准入不代表已经签署。
+
+GeoLibre README 的“archived on Zenodo”是用于引用的版本存档，不是停止维护；本次修正了该误判并通过实时准入复核。真正的仓库归档及停止维护声明继续阻止准入。
 
 `catalog --verify` 按每批最多 80 个名称顺序刷新完整目录，最多四个并行只读检查，目录扩容后也不会截断或因总数超过 80 而失败。名称按大小写不敏感去重；每个项目至多 25 次 API/内容读取，每次 30 秒。部分失败不影响其余记录，逐条原子保存，刷新保留原有额外候选和退役项。GitHub 的组织共享贡献指南仅接受官方 community profile 指向同一组织 `.github` 的路径，并额外固定其 SHA。
 

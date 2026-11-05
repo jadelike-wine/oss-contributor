@@ -50,6 +50,9 @@ OpenHands/OpenHands SWE-agent/SWE-agent aaif-goose/goose langchain-ai/langgraph 
 pydantic/pydantic-ai crewAIInc/crewAI agno-agi/agno microsoft/semantic-kernel
 modelcontextprotocol/typescript-sdk ComposioHQ/composio browser-use/browser-use
 triggerdotdev/trigger.dev inngest/inngest n8n-io/n8n activepieces/activepieces'''.split(),
+    'applications_and_tools': '''iib0011/omni-tools opengeos/GeoLibre HeyPuter/puter
+floatpane/matcha xtool-org/xtool debpalash/VoiceStudio DuarteSantos8/openGym
+pbakaus/impeccable NVIDIA/OpenShell'''.split(),
 }
 CANDIDATES = list(dict.fromkeys([*LEGACY_CANDIDATES,
                                *(repo for repos in CANDIDATE_GROUPS.values() for repo in repos)]))

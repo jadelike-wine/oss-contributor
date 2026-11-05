@@ -552,7 +552,7 @@ class Pipeline:
         if meta["archived"]:
             return None
         issues = gh("issue", "list", "-R", repo, "--state", "open", "--limit", str(self.config["scan_limit"]),
-                    "--json", "number,title,body,labels,assignees,updatedAt,url")
+                    "--json", "number,title,body,labels,assignees,updatedAt,url,author")
         prs = gh("pr", "list", "-R", repo, "--state", "open", "--limit", "200",
                  "--json", "number,title,body,url,closingIssuesReferences")
         for kind, items in (('issue', issues), ('PR', prs)):
@@ -583,6 +583,7 @@ class Pipeline:
         else:
             rules.write_text(text, encoding='utf-8')
         changed = 0
+        contribution_login = None
         for issue in issues:
             task_id = repo.replace("/", "--") + "--" + str(issue["number"])
             from scheduling import find_issue_task
@@ -594,10 +595,25 @@ class Pipeline:
                        any(x["number"] == issue["number"] for x in p.get("closingIssuesReferences", [])) or
                        re.search(r"(?<![\w/])#" + str(issue["number"]) + r"\b", p.get("body") or "") or
                        issue["url"] in (p.get("body") or "")]
-            if related:
-                holds.append("existing PR: " + ", ".join(p["url"] for p in related))
             payload = json.dumps(issue, ensure_ascii=False)
-            old = self.db.execute("SELECT payload FROM tasks WHERE id=?", (task_id,)).fetchone()
+            old = self.db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            from contribution_strategy import enabled, local_discovery
+            own = False
+            if related and enabled(self.config, 'prefer_own_pr_on_competition'):
+                saved = {}
+                if old and self.db.execute("SELECT 1 FROM sqlite_master WHERE name='automation'").fetchone():
+                    row = self.db.execute('SELECT data FROM automation WHERE task=?', (task_id,)).fetchone()
+                    saved = json.loads(row['data']) if row else {}
+                own = bool(old and local_discovery(dict(old), saved))
+                author = (issue.get('author') or {}).get('login')
+                if author and not own:
+                    if contribution_login is None:
+                        contribution_login = gh('api', 'user')['login']
+                    own = author.casefold() == contribution_login.casefold()
+                if own:
+                    holds = [reason for reason in holds if reason != 'feature needs maintainer approval']
+            if related and not own:
+                holds.append("existing PR: " + ", ".join(p["url"] for p in related))
             changed += int(old is None or old["payload"] != payload)
             initial = "HOLD" if holds else "DISCOVERED"
             self.db.execute('''INSERT INTO tasks(id,repo,number,source,title,url,score,state,holds,payload,updated)

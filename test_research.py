@@ -239,7 +239,7 @@ class ResearchTests(unittest.TestCase):
             self.engine.plan(self.key, data)
             self.assertEqual('ISSUE', data['stage'])
             (self.work / 'value.py').write_text('VALUE = 9\n', encoding='utf-8')
-            with self.assertRaisesRegex(RuntimeError, 'unchanged independently approved research'):
+            with self.assertRaisesRegex(RuntimeError, 'unchanged reviewed research'):
                 self.engine.publish_issue(self.key, data)
             with self.assertRaisesRegex(RuntimeError, 'requires maintainer approval'):
                 self.engine.publish_pr(self.key, data)
@@ -249,7 +249,7 @@ class ResearchTests(unittest.TestCase):
         import shutil
         import subprocess
         import sys
-        for name in ('contribute.py', 'autonomous.py', 'repository_policy.py', 'scheduling.py', 'delivery.py', 'failures.py', 'ci_status.py', 'telemetry.py'):
+        for name in ('contribute.py', 'autonomous.py', 'contribution_strategy.py', 'repository_policy.py', 'scheduling.py', 'delivery.py', 'failures.py', 'ci_status.py', 'telemetry.py'):
             shutil.copyfile(__import__('pathlib').Path(__file__).parent / name, self.root / name)
         script = ("import runpy,sys; sys.argv=['contribute.py','status']; "
                   "runpy.run_path('contribute.py', run_name='__main__'); import autonomous; "

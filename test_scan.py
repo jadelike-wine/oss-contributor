@@ -325,10 +325,10 @@ class ScanTests(unittest.TestCase):
         repo = REPOSITORIES[0]
         self.issues[repo].append({**self.issues[repo][0], 'number': 13, 'title': 'bad processing'})
 
-        def failing_rank(issue):
+        def failing_rank(issue, allow_features=False):
             if issue['title'] == 'bad processing':
                 raise ValueError('late invalid issue')
-            return rank(issue)
+            return rank(issue, allow_features=allow_features)
 
         with patch('contribute.rank', side_effect=failing_rank):
             self.assertEqual(self.scan(), len(REPOSITORIES) - 1)

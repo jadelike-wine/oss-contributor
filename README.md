@@ -142,6 +142,12 @@ README 没有提到功能不构成缺失证据；README 声称支持也不能替
 
 源码自发现每轮最多占用两个研究名额：从已存在且来源已核验的本地仓库选择一个源码模块和匹配测试，完整读取适用规则，固定到缓存中的 upstream SHA。注册时不 clone/fetch；真正轮到该候选才创建隔离工作区。仓库和模块游标持久保存，以源码、测试和规则内容共同标识研究范围，避免仅因日期或无关提交变化重复研究。规则、源码或测试材料不完整时保持 unknown；该通道不凭空生成跨项目功能对比，也不把“没有收集 Issue”当作查重通过。
 
+现有功能请求通过 `feature_requests` 独立入口进入同一实现流程。当前每轮最多评估 2 个新功能或待确认功能请求，占已有 8 个实现名额；已有 PR 和进行中的实现优先。识别 `feature`、`enhancement`、明确的类型标签或标题前缀，组件标签（如 `feature:st.App`）不会误当成功能请求。缺省关闭，当前配置已开启；可用 `candidates_per_tick=0` 暂停新候选。仓库和仓库内 Issue 均持久轮换，预览不消耗轮次。
+
+未分配只表示候选。开工前实时核查 Issue、完整讨论、认领信号、关联 PR 和仓库规则；每种讨论最多 300 条、关联 PR 最多 10 条，达到上限或失败保留 unknown 和部分证据。需要批准、分配或认领的项目仍须满足原规则，不代发认领、不把模型判断当维护者批准。旧的单一 feature 暂停任务可重新评估，其他暂停原因及失败、关闭历史不自动清除。明确要求本人提交 PR 的仓库不进入自动功能交付。
+
+功能计划必须列出具体的验收条件，沿用原 Issue，先证明基线缺少该行为，再实现、测试、审查。Issue 范围变化须重新规划和验证；讨论或规则变化须重新审查当前计划。实现前以及远端 fork、push 和新建 PR 前重新核验。`feature-request-context.json` 保存当前采集，`feature-request-admission.json` 保存门槛结果；eligible 只代表可继续正常流水线，不代表已认领、维护者采纳或可以跳过发布门禁。
+
 实现调用的总结只用于说明，不是发布凭据。若 OpenCode 已明确完整结束、最后文本和终止事件属于同一消息，仅总结不符合 JSON 格式，则保留原始输出和异常记录，将补丁送入正常红绿验证及审查，避免重复实现。缺失结束事件、工具调用残片、服务失败和超时仍失败；规划、查重、审查等结构化决策不适用此恢复。
 
 查重由控制器统一仓库限定，清除模型查询中的仓库名普通词和自带 `repo:`，避免假阴性；记录原始及实际查询。结果超过第一页时控制器自动翻页拉取（每查询最多 100 条），全部命中都经审查后才算完整搜索；超过上限或上游 `incomplete_results` 仍记为不完整，可以依据已读结果拒绝，不能据此放行。功能查重区分已有实现/竞争 PR 和开放的功能请求，已有报告优先复用，不重复开 Issue；竞争实现按下述自己的贡献规则判断，不能把用户需求当作维护者批准。
@@ -195,6 +201,7 @@ Goose 的指定看板 `Ready`、`manual_issue_submission`、`human_pr_review_req
 | --- | --- |
 | `automation.scheduled_external_writes` | 当前 `true`，用户已授权持续调度发布；缺省/`false` 关闭，仅由 `hermes_tick.py` 转换为全局发布参数 |
 | `automation.implementation_tasks_per_tick` | 当前 8；缺省沿用 `max_tasks_per_tick`，有界串行推进不同任务 |
+| `feature_requests.enabled` / `feature_requests.candidates_per_tick` | 缺省关闭、当前开启；每轮当前 2（范围 0–8），占用上述实现额度，0 暂停新功能候选 |
 | `automation.maintenance_tasks_per_tick` | 当前 6；独立于实现/研究额度，PR 修复进入代码阶段后还需实现名额 |
 | `automation.max_infrastructure_attempts` | 默认/当前 3；基础设施故障与质量失败分别计数 |
 | `automation.infrastructure_cooldown_seconds` | 默认/当前 300 秒，指数退避，每次最多 3,600 秒；耗尽后停止自动重试 |

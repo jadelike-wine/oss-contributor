@@ -9,7 +9,7 @@ from urllib.parse import urlsplit, quote
 def contribution_constraints(rules, configured=None):
     """Add explicit machine-checkable upstream gates; never infer permission.
 
-    This intentionally recognizes only unambiguous mandatory-label wording.
+    This recognizes unambiguous mandatory labels and autonomous-submission bans.
     All other contribution rules still require the existing policy review.
     Configured gates and live rules are combined, so configuration cannot relax
     a requirement discovered in the official guide.
@@ -32,6 +32,30 @@ def contribution_constraints(rules, configured=None):
     for pattern in patterns:
         required.update(match.strip().casefold() for match in re.findall(pattern, plain, flags=re.I))
     policy['required_issue_labels'] = sorted(required)
+    # AI-assisted development can be welcome while agent-authored publication is
+    # forbidden. Keep this separate from repository health/research admission.
+    plain = re.sub(r'[*`>]', '', plain)
+    evidence = []
+    for match in re.finditer(r'\bdo not submit\s+([^.!?]{1,100}?)\s+from\s+fully autonomous\s+(?:ai\s+)?agents?\b',
+                             plain, flags=re.I):
+        kinds = match.group(1)
+        found = False
+        for pattern, field in ((r'\bissues?\b', 'manual_issue_submission'),
+                               (r'\b(?:prs?|pull requests?)\b', 'manual_pr_submission'),
+                               (r'\breviews?\b', 'manual_review_submission')):
+            if re.search(pattern, kinds, flags=re.I):
+                policy[field] = True
+                found = True
+        if found:
+            evidence.append(match.group(0))
+    direct = re.search(r'\bif you are an? ai agent\b[^.!?]{0,100}\b(?:do not|must not)\s+'
+                       r'(?:open|submit|create)\s+(?:prs?|pull requests?)\b', plain, flags=re.I)
+    if direct:
+        policy['manual_pr_submission'] = True
+        evidence.append(direct.group(0))
+    if evidence:
+        policy['automatic_submission_reason'] = 'Upstream prohibits autonomous AI submission; human submission required'
+        policy['automatic_submission_evidence'] = list(dict.fromkeys(evidence))
     return policy
 
 

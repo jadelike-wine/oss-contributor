@@ -14,6 +14,7 @@ from telemetry import ACTIVE, BudgetExhausted, DeliveryBudgetExhausted, TaskBudg
 from repository_policy import human_maintainer_comments, approval_receipt, has_scope_approval
 from scheduling import RunTaskBudget, task_lane, priority_key
 from contribution_strategy import enabled, local_discovery, PRIORITY_GUIDANCE
+import feature_request_flow as features
 
 
 class ModelOutputFormatError(ValueError):
@@ -379,6 +380,11 @@ class Autonomous:
     @observed('planning', task=True)
     def plan(self, task_id, data):
         task = self.p.task(task_id)
+        latest_issue = None
+        if task['source'] == 'issue' and task['number'] and not features.feature_task(self.p.config, task, data):
+            latest_issue = self.live_issue(task)
+            features.observe(self, task, data, latest_issue)
+        feature_issue = features.check(self, task_id, data)
         if local_discovery(task, data) and not data.get('contribution_origin'):
             data['contribution_origin'] = {'kind': 'local_discovery', 'task': task_id, 'at': now()}
             self.store(task_id, data)
@@ -412,7 +418,7 @@ class Autonomous:
                 data['proposal_only'] = True
                 self.move(task_id, data, 'ISSUE')
                 return
-        issue = self.live_issue(task)
+        issue = feature_issue or latest_issue or self.live_issue(task)
         if issue and issue['state'] != 'open' and not self.proactive(task_id, data, issue):
             self.move(task_id, data, 'SKIPPED')
             return
@@ -422,15 +428,18 @@ class Autonomous:
                   'all applicable AGENTS.md and package scripts. Inspect existing issue discussion. Change ONLY regression test files, '
                   'never production code. No shell access; the controller runs commands. Tests must fail on the actual baseline defect '
                   'or missing behavior within the reviewed contribution scope, not missing dependencies. For a feature, test the reviewed '
-                  'acceptance criteria within the research scope. If no defensible contribution exists or policy disallows it, decision=skip. If maintainer approval '
+                  'acceptance criteria within the reviewed existing request or research scope. For an existing feature issue, reuse it; '
+                  'do not invent another issue or expand the request. Include a short acceptance_criteria array defining the exact '
+                  'observable behavior and its boundaries. If no defensible contribution exists or policy disallows it, decision=skip. If maintainer approval '
                   'is required but absent, decision=wait; cite the rule and do not edit files. '
                   'For a numbered bug, ready requires clear user impact, bounded scope, independent reproduction, feasible '
                   'project checks, and compliant contribution rules. Explicit repository '
                   'requirements override generic labels. Labels and elapsed waiting never prove maintainer approval. '
                   'Use wait for required direction or unresolved policy, and skip when value or verification is inadequate. '
-                  'Return JSON {"decision":"ready|skip|wait","reason":"...","title":"bug title",'
+                  'Return JSON {"decision":"ready|skip|wait","reason":"...","title":"contribution title",'
                   '"issue_body":"English issue body, say tests are pending; do not invent results",'
-                  '"pr_title":"fix(scope): ...","pr_body":"English proposed PR explanation",'
+                  '"pr_title":"fix(scope): ... or feat(scope): ...","pr_body":"English proposed PR explanation",'
+                  '"acceptance_criteria":["specific observable behavior for a feature"],'
                   '"duplicate_queries":["specific search keywords"],'
                   '"spec":{"setup":[["executable","arg"]],"regression":["executable","arg"],'
                   '"checks":[["executable","arg"]],"test_files":["relative/test/path"],'
@@ -449,6 +458,7 @@ class Autonomous:
                   'Existing competing implementations normally disqualify a contribution. ')
                   + 'Do not publish or delegate.\n' + json.dumps({'task': task, 'issue': issue, 'platform': os.name,
                   'last_error': data.get('last_error'), 'research': data.get('research'),
+                  'feature_request': data.get('feature_request'),
                   'planning_baseline': self.planning_baseline(task),
                   'maintainer_approved': data.get('maintainer_approved', False),
                   'contributing_guide': self.p.contributing_path(task['repo']),
@@ -465,6 +475,12 @@ class Autonomous:
             return
         if answer.get('decision') != 'ready':
             raise ValueError('Invalid planning decision')
+        if feature_issue:
+            criteria = answer.get('acceptance_criteria')
+            if (not isinstance(criteria, list) or not 1 <= len(criteria) <= 10
+                    or any(not isinstance(item, str) or not item.strip() or len(item) > 2000 for item in criteria)):
+                raise ValueError('Feature planning requires 1..10 concrete acceptance criteria')
+            answer['category'] = 'feature'
         data.pop('upstream_direction_required', None)
         validate_spec(answer.get('spec'))
         for key in ('title', 'issue_body', 'pr_title', 'pr_body'):
@@ -475,11 +491,14 @@ class Autonomous:
             raise ValueError('Reproduction planning changed non-test files or produced no test')
         data['plan'] = answer
         save(self.packet_dir(task_id) / 'auto-spec.json', answer['spec'])
-        gate = self.judge(task_id, 'recipe-review', {'gate': 'Is this a meaningful executable regression recipe for the reported bug? Setup must not publish, access credentials or modify production code.',
+        gate = self.judge(task_id, 'recipe-review', {'gate': 'Is this a meaningful executable regression or acceptance recipe for the reported bug or exact feature scope? For features, do the tests cover the stated acceptance criteria without expanding scope? Setup must not publish, access credentials or modify production code.',
                           'plan': answer, 'research': data.get('research'), 'maintainer_approved': data.get('maintainer_approved'),
+                          'feature_request': data.get('feature_request'), 'issue': issue,
                           'test_code': self.test_code(task, answer['spec'])})
         if not gate['approved']:
             raise RuntimeError('Recipe review rejected: ' + gate['reason'])
+        if feature_issue:
+            data['feature_plan_scope_digest'] = data['feature_request']['scope_digest']
         self.move(task_id, data, 'REPRODUCE')
 
     def test_code(self, task, spec):
@@ -736,6 +755,15 @@ class Autonomous:
     @observed('maintainer_observation', task=True)
     def wait_maintainer(self, task_id, data):
         task = self.p.task(task_id)
+        if features.feature_task(self.p.config, task, data) and not data.get('pr_number'):
+            try:
+                features.check(self, task_id, data)
+            except ContributionPaused:
+                return False
+            # A previous wait is not a verified acceptance-test plan.
+            data.pop('upstream_direction_required', None)
+            self.move(task_id, data, 'PLAN')
+            return True
         issue = self.live_issue(task)
         proactive = issue is not None and self.proactive(task_id, data, issue)
         if not issue or issue['state'] != 'open' and not proactive:
@@ -772,6 +800,10 @@ class Autonomous:
     @observed('implementation', task=True)
     def repair(self, task_id, data):
         task = self.p.task(task_id)
+        if (task['source'] == 'issue' and task['number'] and not data.get('pr_number')
+                and not features.feature_task(self.p.config, task, data)):
+            features.observe(self, task, data, self.live_issue(task))
+        features.check(self, task_id, data, 'repair')
         failure_logs = {}
         verification = self.packet_dir(task_id) / 'verification.json'
         if verification.exists():
@@ -904,6 +936,7 @@ class Autonomous:
         if not issue or issue['state'] != 'open' and not self.proactive(task_id, data, issue):
             self.move(task_id, data, 'CLOSED')
             return
+        features.observe(self, task, data, issue)
         login = gh('api', 'user')['login']
         branch = data.get('branch') or ('auto/' if data.get('pr_create_pending') or data.get('publish_commit') or data.get('pr_number') else 'auto-') + hashlib.sha256(task_id.encode()).hexdigest()[:24]
         data['branch'] = branch
@@ -914,11 +947,18 @@ class Autonomous:
             self.store(task_id, data)
             if data['pr_reconciliation']['state'] != 'recovered':
                 raise ContributionPaused(data['pr_reconciliation']['reason'])
+        if len(prs) > 1:
+            raise ContributionPaused('Multiple PRs match this saved head; verify publication identity before continuing')
         if prs and prs[0]['state'] == 'closed':
             self.move(task_id, data, 'MERGED' if prs[0].get('merged_at') else 'CLOSED')
             return
         if not prs and data.get('pr_create_pending'):
             return
+        if prs and not data.get('pr_number'):
+            # Restore the unique saved head before new-feature admission can
+            # mistake our recovered publication for another contributor's PR.
+            data.update(pr_number=prs[0]['number'], pr_url=prs[0]['html_url'], pr_create_pending=False)
+            self.store(task_id, data)
         if not prs and not data.get('pr_number') and not self.duplicates(task_id, data, 'pr'):
             return
         if not self.p.allow_external_writes:
@@ -927,6 +967,7 @@ class Autonomous:
             data['publication_hold'] = 'external_writes_disabled'
             self.store(task_id, data)
             self.p.require_external_write()
+        features.check(self, task_id, data, 'publish')
         command(['gh', 'repo', 'fork', task['repo'], '--clone=false'])
         fork = gh('api', f"repos/{login}/{task['repo'].split('/')[1]}")
         if (fork.get('parent') or {}).get('full_name', '').lower() != task['repo'].lower():
@@ -959,6 +1000,7 @@ class Autonomous:
             # The exact patch already passed the upstream check on Linux. Do not
             # rerun that same check in a Windows hook with unsupported symlinks.
             push_env = {**os.environ, 'HUSKY': '0'}
+        features.check(self, task_id, data, 'publish')
         ensure_push(work, fork['clone_url'], branch, data, command, lambda saved: self.store(task_id, saved),
                     timeout=self.p.config.get('timeouts', {}).get('git_seconds', 600), env=push_env or hook_env)
         if prs:
@@ -974,6 +1016,7 @@ class Autonomous:
             upstream = gh('api', f"repos/{task['repo']}")
             body = data['plan']['pr_body'] + f"\n\nRelated issue: #{task['number']}\n\n## Validation\n\n" + '\n'.join('- `' + json.dumps(r['argv']) + '` → exit ' + str(r['exit_code']) for r in evidence['results']) + '\n\nAI-assisted implementation; regression verification and separate-channel automated review completed. See review identity for model independence.\n\n' + self.marker(task_id)
             (folder / 'pr-body.md').write_text(self.pr_body(task_id, data, body), encoding='utf-8')
+            features.check(self, task_id, data, 'publish')
             data['pr_create_pending'] = True
             self.store(task_id, data)
             url = command(['gh', 'pr', 'create', '-R', task['repo'], '--base', upstream['default_branch'], '--head', login + ':' + branch, '--title', data['plan']['pr_title'], '--body-file', str(folder / 'pr-body.md')], cwd=work).strip()
@@ -1229,8 +1272,20 @@ class Autonomous:
                        'opencode' if data['stage'] in ('PLAN', 'REPAIR', 'PR_OPEN') else None)
             if ACTIVE.get() and channel and ACTIVE.get().channel_failures.get(channel, 0) >= 2:
                 continue
+            feature_start = (features.feature_task(self.p.config, task, data) and not data.get('pr_number')
+                             and data['stage'] in ('PLAN', 'WAITING_MAINTAINER'))
+            feature_attempts = getattr(budget, 'feature_requests', set())
+            if feature_start and (not features.options(self.p.config)[0]
+                                  or len(feature_attempts) >= features.options(self.p.config)[1]):
+                continue
             attempted.add(task_id)
             try:
+                if feature_start:
+                    if not budget.admit(task_id, 'implementation'):
+                        continue
+                    feature_attempts.add(task_id)
+                    budget.feature_requests = feature_attempts
+                    features.turn(self, task)
                 # Reject a known policy hold before it occupies an implementation
                 # slot. Publication still performs its fresh checks in advance().
                 self.p.require_contribution(task)
@@ -1388,10 +1443,11 @@ class Autonomous:
 
     def candidates(self):
         rows = self.db.execute("""SELECT tasks.id,tasks.state,tasks.repo,tasks.number FROM tasks LEFT JOIN automation ON automation.task=tasks.id
-            WHERE tasks.state NOT IN ('HOLD','SKIPPED','CLOSED','MERGED','FAILED')
+            WHERE tasks.state NOT IN ('SKIPPED','CLOSED','MERGED','FAILED')
             ORDER BY CASE WHEN json_extract(automation.data,'$.pr_number') IS NOT NULL OR state='PR_OPEN' THEN 0
                           WHEN state='WAITING_MAINTAINER' THEN 1 WHEN state='DISCOVERED' THEN 3 ELSE 2 END,
                      score DESC,id""").fetchall()
+        rows = [r for r in rows if r['state'] != 'HOLD' or features.legacy_candidate(self.p.config, self.p.task(r['id']))]
         indexed = {r['task']: dict(r) for r in self.db.execute('SELECT task,queue,priority FROM research_candidates')}
         rows = [r for r in rows if indexed.get(r['id'], {}).get('queue') not in ('RESEARCH_ONLY', 'PAUSED_POLICY') or
                 self.load(r['id'])['stage'] == 'PLAN' and not self.load(r['id']).get('research', {}).get('approved')]
@@ -1409,6 +1465,12 @@ class Autonomous:
             task = self.p.task(row['id'])
             data = self.load(row['id'])
             priority = priority_key(task, data, indexed.get(row['id'], {}).get('queue'))
+            if data['stage'] == 'PLAN' and not data.get('pr_number') and features.feature_task(self.p.config, task, data):
+                if not features.options(self.p.config)[0] or features.options(self.p.config)[1] == 0:
+                    continue
+                priority = 4.5  # After approved/active work, before new generic issues.
             groups.setdefault(priority, []).append(row)
+        if 4.5 in groups:
+            groups[4.5] = features.rotate(self, groups[4.5])
         return [row for priority in sorted(groups) for row in self.p.fair_candidates(groups[priority],
-                cursor_name='research' if priority == 7 else 'delivery')]
+                cursor_name='research' if priority == 7 else 'feature-requests' if priority == 4.5 else 'delivery')]

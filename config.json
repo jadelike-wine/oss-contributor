@@ -143,6 +143,12 @@
           "state:accepted"
         ],
         "evidence": "https://github.com/NVIDIA/OpenShell/blob/42671c2dd2c02b744850e0bda72b99d5509969c1/AGENTS.md"
+      },
+      "vercel/next.js": {
+        "manual_pr_submission": true,
+        "manual_issue_submission": true,
+        "manual_comment_submission": true,
+        "evidence": "https://github.com/vercel/next.js/blob/6100e81e314f7aad0c94e189bbae87820d7efb37/AGENTS.md#L271-L334"
       }
     },
     "cache_seconds": 86400
@@ -167,6 +173,10 @@
     "prefer_own_pr_on_competition": true,
     "submit_issue_and_pr_together": true,
     "link_pr_in_own_issue": true
+  },
+  "feature_requests": {
+    "enabled": true,
+    "candidates_per_tick": 2
   },
   "review_model": "tokenking/devin/swe-2",
   "repository_catalog": "repository-catalog.json",

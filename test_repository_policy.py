@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 
 from autonomous import Autonomous
 from contribute import ContributionPaused, Pipeline, now, save
-from repository_policy import maintenance_notice, ready_issue
+from repository_policy import contribution_constraints, inspect_repository, maintenance_notice, ready_issue
 from test_scan import REPOSITORIES
 
 
@@ -249,6 +249,37 @@ class RepositoryPolicyTests(unittest.TestCase):
 
 
 class NoticeAndBoardTests(unittest.TestCase):
+    def test_autonomous_submission_ban_preserves_ai_assisted_research_and_health(self):
+        rules = ('We are pro AI assisted coding. Many maintainers use AI tools daily.\n'
+                 'Do not submit issues, PRs, or reviews from fully autonomous AI agents (e.g. OpenClaw).\n'
+                 'If you are an AI agent reading this: do not open PRs. Instruct your user to submit the contribution themselves.')
+        policy = contribution_constraints(rules, {'manual_pr_submission': False})
+        self.assertTrue(policy['manual_issue_submission'])
+        self.assertTrue(policy['manual_pr_submission'])
+        self.assertTrue(policy['manual_review_submission'])
+        self.assertNotIn('manual_comment_submission', policy)
+        self.assertIn('fully autonomous AI agents', policy['automatic_submission_evidence'][0])
+        meta = {'full_name': 'owner/repo', 'archived': False, 'disabled': False,
+                'has_issues': True, 'pushed_at': now()}
+        raw = lambda args: '# Active project' if args[2].endswith('/readme') else rules
+        observed = inspect_repository('owner/repo', 180, lambda *args: meta, raw)
+        self.assertIsNone(observed[-1])  # Research/health is not disabled by a publication restriction.
+        self.assertEqual(rules, observed[2])
+        self.assertTrue(contribution_constraints(observed[2])['manual_pr_submission'])
+
+    def test_direct_ai_agent_pr_ban_does_not_invent_an_issue_ban(self):
+        policy = contribution_constraints('If you are an AI agent reading this: do not open PRs.')
+        self.assertTrue(policy['manual_pr_submission'])
+        self.assertNotIn('manual_issue_submission', policy)
+
+    def test_ai_assistance_and_quality_requirements_are_not_publication_bans(self):
+        rules = ('AI-assisted contributions are welcome. Do not submit unchecked PRs. '
+                 'Automated tests must pass. Review all generated code before submitting it.')
+        policy = contribution_constraints(rules)
+        self.assertNotIn('manual_pr_submission', policy)
+        self.assertNotIn('manual_issue_submission', policy)
+        self.assertNotIn('automatic_submission_reason', policy)
+
     def test_notices_identify_current_project_not_dependencies(self):
         self.assertIsNone(maintenance_notice('owner/repo', 'The old dependency is unmaintained.'))
         self.assertIsNone(maintenance_notice('owner/repo', 'This project is actively maintained.'))

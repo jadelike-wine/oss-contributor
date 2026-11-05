@@ -17,6 +17,7 @@ import tempfile
 import time
 from urllib.parse import unquote, urlsplit
 from repository_policy import contributing_guide, inspect_repository, project_items, ready_issue, contribution_constraints, issue_policy_reason
+from feature_requests import is_feature_request
 from ci_status import observe_ci
 from telemetry import BudgetExhausted, migrate, observed, timed_command
 
@@ -199,7 +200,7 @@ def process_running(pid):
     except PermissionError:
         return True
 
-def rank(issue):
+def rank(issue, allow_features=False):
     labels = {x["name"].lower() for x in issue.get("labels", [])}
     text = (issue["title"] + " " + (issue.get("body") or "")).lower()
     hold = []
@@ -208,7 +209,7 @@ def rank(issue):
     for label in sorted(labels):
         if any(x in label for x in ("need-discussion", "need-information", "ready-for-human", "security", "vulnerability")):
             hold.append(label)
-    if any("feature" in x for x in labels):
+    if allow_features is not True and is_feature_request(issue):
         hold.append("feature needs maintainer approval")
     score = 20
     score += 20 if any("bug" in x for x in labels) else 0
@@ -357,6 +358,8 @@ class Pipeline:
                 reason = issue_policy_reason(issue, policy)
             if policy.get('manual_issue_submission') and not task['number']:
                 reason = 'Upstream requires the contributor to submit an issue personally; automatic issue publication is disabled'
+            elif publishing and policy.get('manual_pr_submission'):
+                reason = 'Upstream requires personal PR submission; automatic PR publication is disabled'
             elif publishing and policy.get('human_pr_review_required'):
                 reason = 'Upstream requires personal code review before PR submission; this pipeline has no recorded human review'
             elif policy.get('ready_project'):
@@ -590,7 +593,7 @@ class Pipeline:
             existing = find_issue_task(self.db, repo, issue['number'], {repo: meta.get('full_name', repo)})
             if existing:
                 task_id = existing
-            score, holds = rank(issue)
+            score, holds = rank(issue, allow_features=self.config.get('feature_requests', {}).get('enabled') is True)
             related = [p for p in prs if
                        any(x["number"] == issue["number"] for x in p.get("closingIssuesReferences", [])) or
                        re.search(r"(?<![\w/])#" + str(issue["number"]) + r"\b", p.get("body") or "") or

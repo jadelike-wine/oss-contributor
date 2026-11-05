@@ -105,6 +105,14 @@ class AdmissionTests(unittest.TestCase):
         saved['comments'].append(comment(3, 'other', "I'm no longer working on this."))
         self.assertEqual('eligible', self.assess(saved)['status'])
 
+    def test_explicit_inability_releases_only_that_authors_claim(self):
+        saved = snapshot()
+        saved['comments'] = [comment(1, 'other', 'I am working on this.'),
+                             comment(2, 'outsider', 'I can no longer work on this.')]
+        self.assertEqual('blocked', self.assess(saved)['status'])
+        saved['comments'].append(comment(3, 'other', 'I can no longer work on this.'))
+        self.assertEqual('eligible', self.assess(saved)['status'])
+
     def test_interest_blocks_but_quotes_and_bots_do_not_claim(self):
         saved = snapshot()
         saved['comments'] = [comment(1, 'other', 'Could I work on this?')]
@@ -125,12 +133,16 @@ class AdmissionTests(unittest.TestCase):
 
     def test_open_and_merged_prs_require_review_closed_unmerged_does_not_reserve(self):
         saved = snapshot()
+        identity = {'number': 23, 'html_url': 'https://github.com/org/project/pull/23',
+                    'base': {'repo': {'full_name': 'org/project'}}, 'head': {'sha': 'a' * 40},
+                    'title': 'Export', 'body': 'Export a document.'}
         for state in ('open', 'OPEN', 'merged'):
-            saved['linked_prs'] = [{'number': 23, 'state': state}]
-            self.assertEqual('blocked', self.assess(saved)['status'])
-        saved['linked_prs'] = [{'number': 23, 'state': 'closed', 'merged_at': NOW}]
-        self.assertEqual('blocked', self.assess(saved)['status'])
-        saved['linked_prs'] = [{'number': 23, 'state': 'closed', 'merged': False}]
+            saved['linked_prs'] = [{**identity, 'state': state}]
+            self.assertEqual('unknown', self.assess(saved)['status'])
+            self.assertTrue(self.assess(saved)['linked_pr_review_pending'])
+        saved['linked_prs'] = [{**identity, 'state': 'closed', 'merged_at': NOW}]
+        self.assertEqual('unknown', self.assess(saved)['status'])
+        saved['linked_prs'] = [{**identity, 'state': 'closed', 'merged': False}]
         self.assertEqual('eligible', self.assess(saved)['status'])
         saved['linked_prs'] = [{'number': 23}]
         self.assertEqual('unknown', self.assess(saved)['status'])
@@ -193,6 +205,15 @@ class AdmissionTests(unittest.TestCase):
 
 
 class RuleTests(unittest.TestCase):
+    def test_test_acceptance_requirements_are_not_maintainer_scope_approval(self):
+        for rules in ('For new features, you should include tests before your pull request can be accepted.',
+                      'Feature requests should include acceptance tests.',
+                      'For features, write acceptance tests before implementation.',
+                      'For features, tests must pass before a pull request is accepted.'):
+            with self.subTest(rules=rules):
+                self.assertNotIn('feature_approval_required', constraints(rules))
+        self.assertTrue(constraints('Features require maintainer approval before coding.')['feature_approval_required'])
+
     def test_verified_qwen_and_next_feature_requirements(self):
         qwen = 'For features: The PR should be linked to the feature request or proposal issue that has been approved by a maintainer.'
         nextjs = 'You do not need permission to work on an issue. For new features, open a discussion and get the proposal accepted first.'

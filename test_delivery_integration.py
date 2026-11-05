@@ -125,8 +125,9 @@ class DeliveryIntegrationTests(unittest.TestCase):
                 self.engine.publish_pr(self.key, data)
         (self.work / 'value.py').write_text('VALUE = 999\n', encoding='utf-8')
         with self.mocks():
-            with self.assertRaisesRegex(RuntimeError, 'changed after approval'):
-                self.engine.publish_pr(self.key, self.engine.load(self.key))
+            self.engine.publish_pr(self.key, self.engine.load(self.key))
+        self.assertEqual('PATCH_READY', self.engine.load(self.key)['stage'])
+        self.assertNotIn('approved_fingerprint', self.engine.load(self.key))
         self.assertEqual([], self.created_prs)
         self.assertEqual(self.base, self.git('rev-parse', 'HEAD'))
 
@@ -176,7 +177,7 @@ class DeliveryIntegrationTests(unittest.TestCase):
 
     def test_unresolved_pr_intent_stops_reads_after_bounded_reconciliation(self):
         data = self.prepared()
-        data.update(pr_create_pending=True, branch='saved-branch')
+        data.update(pr_create_pending=True, branch='saved-branch', publish_commit=self.git('rev-parse', 'HEAD'))
         self.engine.store(self.key, data)
         with self.mocks(), patch.object(self.engine, 'live_issue', return_value={'state': 'open', 'number': 1}), \
                 patch.object(self.engine, 'flat', return_value=[]) as lookup:
@@ -198,7 +199,7 @@ class DeliveryIntegrationTests(unittest.TestCase):
 
     def test_ambiguous_pending_pr_does_not_adopt_first_match(self):
         data = self.prepared()
-        data.update(pr_create_pending=True, branch='saved-branch')
+        data.update(pr_create_pending=True, branch='saved-branch', publish_commit=self.git('rev-parse', 'HEAD'))
         with self.mocks(), patch.object(self.engine, 'live_issue', return_value={'state': 'open', 'number': 1}), \
                 patch.object(self.engine, 'flat', return_value=[
             {'number': 3, 'state': 'closed', 'merged_at': None}, {'number': 4, 'state': 'open'}]):

@@ -266,6 +266,7 @@ class Autonomous:
                   'Return ONLY JSON {"approved":true|false,"reason":"..."}; when the gate requests an existing issue, '
                   'also include existing_issue as its integer number. When the gate requests competition classification, '
                   'include competing_prs (integer array) and competition_only (boolean). '
+                  'When the gate requests linked PR scope classification, also include the decisions array exactly as specified by that gate. '
                   'Approve only when the requested gate is actually satisfied.\n'
                   + (PRIORITY_GUIDANCE if self.own_contribution(task_id, self.load(task_id)) else '')
                   + json.dumps(packet, ensure_ascii=False, indent=2))
@@ -862,13 +863,86 @@ class Autonomous:
         if not verdict['approved']:
             data['feedback'] = verdict
             raise RuntimeError('Patch review rejected: ' + verdict['reason'])
-        if data.get('approved_fingerprint') != evidence['fingerprint']:
+        prior_approval = data.get('approved_fingerprint')
+        if prior_approval is None and data.get('publication_revalidations'):
+            prior_approval = data['publication_revalidations'][-1].get('approved_fingerprint')
+        if prior_approval != evidence['fingerprint']:
             old = {key: data.pop(key) for key in ('expected_tree', 'publish_commit', 'push_intent', 'push_verified') if key in data}
             if old:
                 data.setdefault('publication_history', []).append({'at': now(), 'previous': old,
                     'fingerprint': data.get('approved_fingerprint')})
         data['approved_fingerprint'] = evidence['fingerprint']
         self.move(task_id, data, 'PUBLISH')
+
+    def revalidate_publication(self, task_id, data, evidence, reason):
+        """Retain the patch and publication intent, rerun real red/green checks."""
+        folder = self.packet_dir(task_id)
+        receipt = {'at': now(), 'reason': reason, 'verification': evidence,
+                   'approved_fingerprint': data.pop('approved_fingerprint', None),
+                   'publication_intent': {key: data[key] for key in
+                       ('branch', 'expected_tree', 'publish_commit', 'push_intent', 'push_verified',
+                        'pr_number', 'pr_url', 'pr_create_pending', 'pr_publication_identity') if key in data}}
+        history = data.setdefault('publication_revalidations', [])
+        history.append(receipt)
+        save(folder / 'publication-revalidation' / (str(len(history)) + '.json'), receipt)
+        self.move(task_id, data, 'PATCH_READY')
+        self.p.event(task_id, 'Publication requires fresh verification and review: ' + reason)
+
+    def reconcile_pending_pr(self, task_id, data):
+        """Recover an exact published identity using reads only, then stop."""
+        from delivery import reconcile_pending, reconciliation_due
+        if not reconciliation_due(data, 'pr'):
+            raise ContributionPaused('PR publication reconciliation is cooling down or requires manual verification')
+        task = self.p.task(task_id)
+        identity = data.get('pr_publication_identity') or {}
+        branch, commit = data.get('branch'), data.get('publish_commit')
+        def manual(reason):
+            data['pr_reconciliation'] = {**data.get('pr_reconciliation', {}), 'state': 'manual_verification',
+                'checked_at': now(), 'intent_preserved': True, 'may_create': False, 'reason': reason}
+            self.store(task_id, data)
+            save(self.packet_dir(task_id) / 'pr-reconciliation.json', data['pr_reconciliation'])
+            raise ContributionPaused(reason)
+        if (not isinstance(branch, str) or not branch or not isinstance(commit, str)
+                or not re.fullmatch(r'[0-9a-f]{40,64}', commit)):
+            manual('Pending PR lacks a saved branch and exact commit; manual verification required')
+        login = identity.get('author') or gh('api', 'user')['login']
+        expected_fork = identity.get('head_repo') or f"{login}/{task['repo'].split('/')[1]}"
+        if identity and (identity.get('repo') != task['repo'] or identity.get('branch') != branch
+                         or identity.get('commit') != commit):
+            manual('Pending PR publication identity differs from saved commit or target')
+        matches = self.flat(f"repos/{task['repo']}/pulls?head={login}:{branch}&state=all&per_page=100")
+        if not isinstance(matches, list) or any(not isinstance(item, dict) for item in matches):
+            manual('Pending PR lookup is incomplete or malformed; manual verification required')
+        data['pr_reconciliation'] = reconcile_pending(data, matches, 'pr')
+        self.store(task_id, data)
+        if data['pr_reconciliation']['state'] != 'recovered':
+            raise ContributionPaused(data['pr_reconciliation']['reason'])
+        number = matches[0].get('number')
+        if type(number) is not int or number <= 0:
+            manual('Pending PR lookup returned an invalid publication number')
+        pr = gh('api', f"repos/{task['repo']}/pulls/{number}")
+        if not isinstance(pr, dict):
+            manual('Pending PR detail response is not a verified publication')
+        head, base = pr.get('head') or {}, pr.get('base') or {}
+        if (not isinstance(head, dict) or not isinstance(base, dict)
+                or not isinstance(head.get('repo'), dict) or not isinstance(base.get('repo'), dict)
+                or not isinstance(pr.get('user'), dict)):
+            manual('Pending PR target or exact head identity is unavailable; manual verification required')
+        expected_url = f"https://github.com/{task['repo']}/pull/{number}"
+        if (pr.get('number') != number or str(pr.get('html_url', '')).casefold() != expected_url.casefold()
+                or str((base.get('repo') or {}).get('full_name', '')).casefold() != task['repo'].casefold()
+                or head.get('ref') != branch or head.get('sha') != commit
+                or str((head.get('repo') or {}).get('full_name', '')).casefold() != expected_fork.casefold()
+                or str((pr.get('user') or {}).get('login', '')).casefold() != str(login).casefold()
+                or identity.get('base') and base.get('ref') != identity['base']
+                or pr.get('state') not in ('open', 'closed')):
+            manual('Pending PR does not match the saved target, author and exact head; manual verification required')
+        data.update(pr_number=number, pr_url=expected_url, pr_create_pending=False)
+        data['pr_reconciliation']['publication'] = pr
+        data['pr_reconciliation']['exact_head_verified'] = True
+        save(self.packet_dir(task_id) / 'pr-reconciliation.json', data['pr_reconciliation'])
+        self.move(task_id, data, 'PR_OPEN' if pr['state'] == 'open' else 'MERGED' if pr.get('merged_at') else 'CLOSED')
+        self.p.event(task_id, 'Recovered exact published PR by read-only observation; no push or edit performed')
 
     def pr_template(self, task):
         work = Path(task['workspace'])
@@ -907,9 +981,9 @@ class Autonomous:
     @observed('pr_publication', task=True)
     def publish_pr(self, task_id, data):
         task = self.p.task(task_id)
-        from delivery import reconcile_pending, reconciliation_due
-        if data.get('pr_create_pending') and not reconciliation_due(data, 'pr'):
-            raise ContributionPaused('PR publication reconciliation is cooling down or requires manual verification')
+        if data.get('pr_create_pending'):
+            self.reconcile_pending_pr(task_id, data)
+            return
         self.p.require_contribution(task, publishing=True)
         if data.get('research'):
             opportunity = data['research']['opportunity']
@@ -918,19 +992,31 @@ class Autonomous:
                 raise ContributionPaused('Research contribution requires maintainer approval or private disclosure')
         work = task['workspace']
         folder = self.packet_dir(task_id)
-        evidence = json.loads((folder / 'verification.json').read_text(encoding='utf-8'))
+        try:
+            evidence = json.loads((folder / 'verification.json').read_text(encoding='utf-8'))
+        except (FileNotFoundError, json.JSONDecodeError) as error:
+            self.revalidate_publication(task_id, data, {'read_error': str(error)}, 'Verification receipt is unavailable')
+            return
+        if not isinstance(evidence, dict):
+            self.revalidate_publication(task_id, data, evidence, 'Verification receipt is malformed')
+            return
         if evidence.get('passed') is not True or data.get('approved_fingerprint') != evidence.get('fingerprint'):
-            raise RuntimeError('Publish requires verified and reviewed evidence')
+            self.revalidate_publication(task_id, data, evidence, 'Publish requires verified and reviewed evidence')
+            return
         if evidence.get('base_sha') != task['base_sha']:
-            raise ContributionPaused('Verification baseline differs from the task baseline; revalidate')
+            self.revalidate_publication(task_id, data, evidence, 'Verification baseline differs from the task baseline')
+            return
         try:
             age = (dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(evidence['at'])).total_seconds()
         except (KeyError, ValueError, TypeError):
-            raise ContributionPaused('Verification timestamp is missing or invalid; revalidate before publication')
+            self.revalidate_publication(task_id, data, evidence, 'Verification timestamp is missing or invalid')
+            return
         if not 0 <= age <= self.options.get('verification_max_age_seconds', 86400):
-            raise ContributionPaused('Verification has expired; repeat baseline, patch checks and review')
+            self.revalidate_publication(task_id, data, evidence, 'Verification has expired')
+            return
         if self.p.fingerprint(work) != data['approved_fingerprint']:
-            raise RuntimeError('Patch changed after approval')
+            self.revalidate_publication(task_id, data, evidence, 'Patch changed after approval')
+            return
         command(['git', 'merge-base', '--is-ancestor', task['base_sha'], 'HEAD'], cwd=work)
         issue = self.live_issue(task)
         if not issue or issue['state'] != 'open' and not self.proactive(task_id, data, issue):
@@ -942,17 +1028,10 @@ class Autonomous:
         data['branch'] = branch
         self.store(task_id, data)
         prs = self.flat(f"repos/{task['repo']}/pulls?head={login}:{branch}&state=all&per_page=100")
-        if data.get('pr_create_pending'):
-            data['pr_reconciliation'] = reconcile_pending(data, prs, 'pr')
-            self.store(task_id, data)
-            if data['pr_reconciliation']['state'] != 'recovered':
-                raise ContributionPaused(data['pr_reconciliation']['reason'])
         if len(prs) > 1:
             raise ContributionPaused('Multiple PRs match this saved head; verify publication identity before continuing')
         if prs and prs[0]['state'] == 'closed':
             self.move(task_id, data, 'MERGED' if prs[0].get('merged_at') else 'CLOSED')
-            return
-        if not prs and data.get('pr_create_pending'):
             return
         if prs and not data.get('pr_number'):
             # Restore the unique saved head before new-feature admission can
@@ -1018,6 +1097,9 @@ class Autonomous:
             (folder / 'pr-body.md').write_text(self.pr_body(task_id, data, body), encoding='utf-8')
             features.check(self, task_id, data, 'publish')
             data['pr_create_pending'] = True
+            data['pr_publication_identity'] = {'repo': task['repo'], 'author': login,
+                'head_repo': f"{login}/{task['repo'].split('/')[1]}", 'branch': branch,
+                'commit': data['publish_commit'], 'base': upstream['default_branch']}
             self.store(task_id, data)
             url = command(['gh', 'pr', 'create', '-R', task['repo'], '--base', upstream['default_branch'], '--head', login + ':' + branch, '--title', data['plan']['pr_title'], '--body-file', str(folder / 'pr-body.md')], cwd=work).strip()
             pr = {'number': int(url.rstrip('/').split('/')[-1]), 'html_url': url}
@@ -1147,6 +1229,26 @@ class Autonomous:
     @observed('task', task=True)
     def advance(self, task_id):
         data = self.load(task_id)
+        if data.get('pr_create_pending'):
+            # Reconcile an already attempted publication independently of gates
+            # for new writes. Always return, even after a successful recovery.
+            from failures import record_failure, retry_ready
+            if not retry_ready(data, 'PR_RECONCILE'):
+                return data['stage']
+            try:
+                self.reconcile_pending_pr(task_id, data)
+            except BudgetExhausted:
+                raise
+            except ContributionPaused as error:
+                print(f'{task_id}: {error}', flush=True)
+            except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired, KeyError, TypeError) as error:
+                if not record_failure(data, 'PR_RECONCILE', error, self.options):
+                    data['pr_reconciliation'] = {'state': 'manual_verification', 'checked_at': now(),
+                        'intent_preserved': True, 'may_create': False,
+                        'reason': 'Unverified PR recovery response: ' + str(error)}
+                self.store(task_id, data)
+                self.p.event(task_id, 'Read-only PR recovery paused: ' + str(error))
+            return data['stage']
         from scheduling import reconcile_issue_duplicates
         reconcile_issue_duplicates(self.db)
         alias = self.db.execute('SELECT canonical_task FROM task_aliases WHERE task=?', (task_id,)).fetchone()
@@ -1243,10 +1345,13 @@ class Autonomous:
         return data['stage']
 
     def recover_dependency_setup(self, task_id, data):
-        from failures import recover_dependency_setup
+        from failures import recover_dependency_setup, recover_model_service
         if recover_dependency_setup(data, self.options):
             self.store(task_id, data, data['stage'])
             self.p.event(task_id, 'Reclassified dependency setup failure; retained prior retry evidence; ' + data['stage'])
+        if recover_model_service(self.db, data, task_id, self.options):
+            self.store(task_id, data)
+            self.p.event(task_id, 'Restored one model-service retry after verified later service success; retained failure history and existing budgets')
 
     def dispatch_candidates(self, rows, budget, attempted):
         """Dispatch once per run, sharing all original lane/model/time limits."""
@@ -1258,21 +1363,26 @@ class Autonomous:
             task = self.p.task(task_id)
             data = self.load(task_id)
             self.recover_dependency_setup(task_id, data)
-            if data['stage'] == 'FAILED':
+            pending_read = bool(data.get('pr_create_pending'))
+            if pending_read:
+                from delivery import reconciliation_due
+                if not reconciliation_due(data, 'pr') or not retry_ready(data, 'PR_RECONCILE'):
+                    continue
+            if data['stage'] == 'FAILED' and not pending_read:
                 continue
-            if (data['stage'] in ('ISSUE', 'PUBLISH') and data.get('publication_hold') == 'external_writes_disabled'
+            if (not pending_read and data['stage'] in ('ISSUE', 'PUBLISH') and data.get('publication_hold') == 'external_writes_disabled'
                     and self.p.allow_external_writes is not True):
                 continue
-            if (self.p.config.get('research', {}).get('batch_on_auto', False) and task['source'] == 'hunt'
+            if (not pending_read and self.p.config.get('research', {}).get('batch_on_auto', False) and task['source'] == 'hunt'
                     and not data.get('research', {}).get('approved')):
                 continue
-            if not retry_ready(data, data['stage']):
+            if not pending_read and not retry_ready(data, data['stage']):
                 continue
-            channel = ('hermes' if data['stage'] == 'AUTO_REVIEW' else
+            channel = None if pending_read else ('hermes' if data['stage'] == 'AUTO_REVIEW' else
                        'opencode' if data['stage'] in ('PLAN', 'REPAIR', 'PR_OPEN') else None)
             if ACTIVE.get() and channel and ACTIVE.get().channel_failures.get(channel, 0) >= 2:
                 continue
-            feature_start = (features.feature_task(self.p.config, task, data) and not data.get('pr_number')
+            feature_start = (not pending_read and features.feature_task(self.p.config, task, data) and not data.get('pr_number')
                              and data['stage'] in ('PLAN', 'WAITING_MAINTAINER'))
             feature_attempts = getattr(budget, 'feature_requests', set())
             if feature_start and (not features.options(self.p.config)[0]
@@ -1288,9 +1398,10 @@ class Autonomous:
                     features.turn(self, task)
                 # Reject a known policy hold before it occupies an implementation
                 # slot. Publication still performs its fresh checks in advance().
-                self.p.require_contribution(task)
+                if not pending_read:
+                    self.p.require_contribution(task)
                 candidate = self.db.execute('SELECT queue FROM research_candidates WHERE task=?', (task_id,)).fetchone()
-                lane = task_lane(task, data, candidate['queue'] if candidate else None)
+                lane = 'maintenance' if pending_read else task_lane(task, data, candidate['queue'] if candidate else None)
                 if not budget.admit(task_id, lane):
                     continue
                 if lane != 'maintenance':
@@ -1444,33 +1555,37 @@ class Autonomous:
     def candidates(self):
         rows = self.db.execute("""SELECT tasks.id,tasks.state,tasks.repo,tasks.number FROM tasks LEFT JOIN automation ON automation.task=tasks.id
             WHERE tasks.state NOT IN ('SKIPPED','CLOSED','MERGED','FAILED')
+               OR json_extract(automation.data,'$.pr_create_pending')=1
             ORDER BY CASE WHEN json_extract(automation.data,'$.pr_number') IS NOT NULL OR state='PR_OPEN' THEN 0
                           WHEN state='WAITING_MAINTAINER' THEN 1 WHEN state='DISCOVERED' THEN 3 ELSE 2 END,
                      score DESC,id""").fetchall()
-        rows = [r for r in rows if r['state'] != 'HOLD' or features.legacy_candidate(self.p.config, self.p.task(r['id']))]
+        pending = {r['id'] for r in rows if self.load(r['id']).get('pr_create_pending')}
+        rows = [r for r in rows if r['id'] in pending or r['state'] != 'HOLD' or features.legacy_candidate(self.p.config, self.p.task(r['id']))]
         indexed = {r['task']: dict(r) for r in self.db.execute('SELECT task,queue,priority FROM research_candidates')}
-        rows = [r for r in rows if indexed.get(r['id'], {}).get('queue') not in ('RESEARCH_ONLY', 'PAUSED_POLICY') or
+        rows = [r for r in rows if r['id'] in pending or indexed.get(r['id'], {}).get('queue') not in ('RESEARCH_ONLY', 'PAUSED_POLICY') or
                 self.load(r['id'])['stage'] == 'PLAN' and not self.load(r['id']).get('research', {}).get('approved')]
         # Stable sort preserves existing work/PR order; new approved features lead new bugs within each repository.
         rows.sort(key=lambda r: (0 if self.load(r['id'])['stage'] != 'PLAN' else 1,
                                 -indexed.get(r['id'], {}).get('priority', 0)))
         repos = self.p.effective_repositories(contribution=True)
         policies = self.p.config.get('repository_checks', {}).get('policies', {})
-        rows = [row for row in rows if row['repo'] in repos and
+        rows = [row for row in rows if row['id'] in pending or row['repo'] in repos and
                 (row['number'] or not policies.get(row['repo'], {}).get('manual_issue_submission'))]
         aliases = {r['task'] for r in self.db.execute('SELECT task FROM task_aliases')}
-        rows = [r for r in rows if r['id'] not in aliases or self.load(r['id']).get('pr_number')]
+        rows = [r for r in rows if r['id'] in pending or r['id'] not in aliases or self.load(r['id']).get('pr_number')]
         groups = {}
         for row in rows:
             task = self.p.task(row['id'])
             data = self.load(row['id'])
-            priority = priority_key(task, data, indexed.get(row['id'], {}).get('queue'))
-            if data['stage'] == 'PLAN' and not data.get('pr_number') and features.feature_task(self.p.config, task, data):
+            priority = 1 if row['id'] in pending else priority_key(task, data, indexed.get(row['id'], {}).get('queue'))
+            if row['id'] not in pending and data['stage'] == 'PLAN' and not data.get('pr_number') and features.feature_task(self.p.config, task, data):
                 if not features.options(self.p.config)[0] or features.options(self.p.config)[1] == 0:
                     continue
                 priority = 4.5  # After approved/active work, before new generic issues.
             groups.setdefault(priority, []).append(row)
         if 4.5 in groups:
             groups[4.5] = features.rotate(self, groups[4.5])
+        rotation_repos = list(dict.fromkeys([*repos, *(row['repo'] for row in rows if row['id'] in pending)]))
         return [row for priority in sorted(groups) for row in self.p.fair_candidates(groups[priority],
+                repositories=rotation_repos,
                 cursor_name='research' if priority == 7 else 'feature-requests' if priority == 4.5 else 'delivery')]

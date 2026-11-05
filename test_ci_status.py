@@ -2,9 +2,16 @@ import unittest
 from unittest.mock import Mock
 
 from ci_status import observe_ci
+from telemetry import BudgetExhausted, TaskBudgetExhausted
 
 
 class CIObservationTests(unittest.TestCase):
+    def test_budget_stops_are_not_downgraded_to_unknown_network_results(self):
+        for error in (BudgetExhausted('time_budget_exhausted'), TaskBudgetExhausted('task_time_budget_exhausted')):
+            with self.subTest(error=type(error).__name__), self.assertRaises(type(error)) as caught:
+                observe_ci('o/r', self.pr(), Mock(side_effect=error))
+            self.assertIs(error, caught.exception)
+
     def pr(self):
         return {'headRefOid': 'exact-head', 'statusCheckRollup': [
             {'name': 'standards', 'conclusion': 'SUCCESS'}]}

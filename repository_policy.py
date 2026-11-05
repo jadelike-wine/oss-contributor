@@ -53,6 +53,12 @@ def contribution_constraints(rules, configured=None):
     if direct:
         policy['manual_pr_submission'] = True
         evidence.append(direct.group(0))
+    autonomous_pr = re.search(r'\bif you have an? agent filing (?:prs?|pull requests?)\b'
+                             r'[^.!?]{0,120}\bautonomously\b[^.!?]{0,60}'
+                             r'\b(?:please )?turn it off for this repository\b', plain, flags=re.I)
+    if autonomous_pr:
+        policy['manual_pr_submission'] = True
+        evidence.append(autonomous_pr.group(0))
     if evidence:
         policy['automatic_submission_reason'] = 'Upstream prohibits autonomous AI submission; human submission required'
         policy['automatic_submission_evidence'] = list(dict.fromkeys(evidence))

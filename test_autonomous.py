@@ -86,6 +86,9 @@ class AutonomousTests(unittest.TestCase):
             return {'parent': {'full_name': 'owner/repo'}, 'clone_url': str(self.fork)}
         if endpoint == 'repos/owner/repo':
             return {'default_branch': 'main'}
+        if endpoint.startswith('repos/owner/repo/pulls/'):
+            number = int(endpoint.rsplit('/', 1)[1])
+            return next(pr for pr in self.created_prs if pr['number'] == number)
         return {'state': 'open', 'title': 'Value is wrong', 'number': 1}
 
     def fake_command(self, args, **kwargs):
@@ -94,7 +97,11 @@ class AutonomousTests(unittest.TestCase):
             self.assertFalse(any(arg.startswith('--remote') for arg in args))
             return 'fork exists'
         if args[:3] == ['gh', 'pr', 'create']:
-            self.created_prs.append({'number': 3, 'state': 'open', 'html_url': 'https://github.com/owner/repo/pull/3'})
+            author, branch = args[args.index('--head') + 1].split(':', 1)
+            self.created_prs.append({'number': 3, 'state': 'open', 'html_url': 'https://github.com/owner/repo/pull/3',
+                'user': {'login': author}, 'head': {'ref': branch, 'sha': self.git('rev-parse', 'HEAD'),
+                    'repo': {'full_name': author + '/repo'}},
+                'base': {'ref': args[args.index('--base') + 1], 'repo': {'full_name': 'owner/repo'}}})
             if self.lose_pr_response:
                 raise RuntimeError('Network lost after server created PR')
             return self.created_prs[-1]['html_url']
@@ -245,8 +252,9 @@ class AutonomousTests(unittest.TestCase):
             self.engine.verify(self.key, data)
             self.engine.review(self.key, data)
             (self.work / 'value.py').write_text('VALUE = 9000\n', encoding='utf-8')
-            with self.assertRaisesRegex(RuntimeError, 'changed after approval'):
-                self.engine.publish_pr(self.key, data)
+            self.engine.publish_pr(self.key, data)
+            self.assertEqual('PATCH_READY', data['stage'])
+            self.assertNotIn('approved_fingerprint', data)
         self.assertEqual([], self.created_prs)
 
     def test_dead_owner_with_live_child_keeps_lock(self):

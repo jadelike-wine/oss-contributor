@@ -94,9 +94,19 @@ class RepairOutputTests(unittest.TestCase):
 
 
 class RepairOutputVerificationTests(unittest.TestCase):
-    setUp = fixtures.AutonomousTests.setUp
     tearDown = fixtures.AutonomousTests.tearDown
     git = fixtures.AutonomousTests.git
+
+    def setUp(self):
+        fixtures.AutonomousTests.setUp(self)
+        original = subprocess.Popen
+        def local_only(args, *positional, **kwargs):
+            if isinstance(args, str) or kwargs.get('shell') or Path(str(args[0])).stem.lower() == 'gh':
+                raise AssertionError('This verification test permits local commands only')
+            return original(args, *positional, **kwargs)
+        guard = patch('subprocess.Popen', side_effect=local_only)
+        guard.start()
+        self.addCleanup(guard.stop)
 
     def test_recovered_summary_still_runs_real_red_green_and_review_gate(self):
         self.p.config.update(model='test/model', opencode_executable='opencode')
@@ -105,6 +115,7 @@ class RepairOutputVerificationTests(unittest.TestCase):
         data = {'stage': 'REPAIR', 'attempts': {}, 'plan': self.plan}
         self.engine.store(self.key, data, 'REPAIR')
         with patch('autonomous.opencode_executable', return_value='opencode'), \
+                patch('autonomous.gh', side_effect=lambda *args: fixtures.AutonomousTests.fake_gh(self, *args)), \
                 patch('autonomous.execute', return_value=subprocess.CompletedProcess([], 0, stream(), '')):
             self.engine.repair(self.key, data)
         self.engine.verify(self.key, data)

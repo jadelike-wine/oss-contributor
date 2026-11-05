@@ -406,11 +406,22 @@ class FeatureExecutionIntegrationTests(unittest.TestCase):
         self.assertNotIn(('gh', 'pr', 'create'), self.order)
 
     def test_other_own_linked_pr_does_not_bypass_feature_competition_check(self):
-        with self.mocks():
+        def judge(key, purpose, packet):
+            result = {'approved': True, 'reason': 'Explicit fixture review.'}
+            if purpose == 'feature-linked-pr-review':
+                pr = self.linked_prs[0]
+                result['decisions'] = [{'url': pr['html_url'], 'head_sha': pr['head']['sha'],
+                    'relation': 'competing', 'reason': 'This other branch implements the requested value.',
+                    'evidence': [{'source': 'issue', 'quote': self.issue['body']},
+                                 {'source': 'pr', 'quote': pr['body']}]}]
+            return result
+        with self.mocks(), patch.object(self.engine, 'judge', side_effect=judge):
             data = self.verified_publication()
             self.linked_prs = [{'number': 44, 'state': 'open', 'user': {'login': 'bot'},
                                'html_url': 'https://github.com/owner/repo/pull/44',
-                               'head': {'ref': 'different-branch', 'sha': 'different-head'}}]
+                               'base': {'repo': {'full_name': 'owner/repo'}},
+                               'title': 'Return the second value', 'body': 'Return the second value in this implementation.',
+                               'head': {'ref': 'different-branch', 'sha': 'a' * 40}}]
             with self.assertRaisesRegex(ContributionPaused, 'Existing open linked PR'):
                 self.engine.publish_pr(self.key, data)
         self.assertNotIn('pr_number', data)

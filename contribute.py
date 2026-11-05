@@ -340,14 +340,35 @@ class Pipeline:
     def require_contribution(self, task, publishing=False, refresh=False):
         repo = task['repo']
         reason = None
-        if publishing or refresh:
+        # Initialize the broad cache first: doing this after a fresh target read
+        # used to overwrite its current guide with yesterday's cached rules.
+        self.effective_repositories(contribution=True)
+        retired = next((value for name, value in self.config.get('repository_checks', {}).get('retired', {}).items()
+                        if name.casefold() == repo.casefold()), None)
+        allowlisted = repo in self.config.get('repositories', []) and retired is None
+        if (publishing or refresh) and allowlisted:
             # Cached scans never authorize a public write. Refresh the target's rules.
-            meta, _, rules, _, reason = inspect_repository(repo,
+            meta, readme, rules, guide_url, reason = inspect_repository(repo,
                 self.config.get('repository_checks', {}).get('max_inactive_days', 180), gh, command)
             self._repository_evidence[repo] = (meta, rules)
+            self._repository_status = self._repository_status or {}
+            status = {**self._repository_status.get(repo, {}), 'checked_at': now(),
+                      'active': reason is None, 'contribute': reason is None, 'reason': reason,
+                      'canonical': meta.get('full_name', repo), 'pushed_at': meta.get('pushed_at'),
+                      'contributing': guide_url, 'evidence': f'https://github.com/{repo}#readme'}
+            self._repository_status[repo] = status
+            # Retain the same fresh material alongside its success timestamp.
+            # Issue-specific Ready and personal-review gates still run below.
+            if reason is None:
+                snapshot = self.root / 'runs/snapshots' / repo.replace('/', '--')
+                snapshot.mkdir(parents=True, exist_ok=True)
+                if readme is not None:
+                    (snapshot / 'README.md').write_text(readme, encoding='utf-8')
+                (snapshot / 'CONTRIBUTING.md').write_text(rules or '', encoding='utf-8')
+            save(self.root / 'state/repositories.json', {'checked_at': now(), 'repositories': self._repository_status})
             if reason:
                 raise ContributionPaused(reason)
-        if repo not in self.effective_repositories(contribution=True):
+        if not allowlisted or repo not in self.effective_repositories(contribution=True):
             reason = (self._repository_status or {}).get(repo, {}).get('reason') or 'Repository is outside the effective contribution allowlist'
         else:
             configured = self.config.get('repository_checks', {}).get('policies', {}).get(repo, {})

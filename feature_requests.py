@@ -55,10 +55,15 @@ def constraints(rules, configured=None):
     plain = re.sub(r'\s+', ' ', rules or '')
     patterns = {
         'feature_approval_required': [
-            r'(?:for (?:new )?features?|feature requests?|feature proposals?)[^.!?]{0,240}'
-            r'(?:must|should|require[sd]?|need|make sure|has been|have been|get)[^.!?]{0,180}'
-            r'(?:approv(?:ed|al)|accept(?:ed|ance))',
-            r'(?:approv(?:ed|al)|accept(?:ed|ance))[^.!?]{0,120}'
+            r'(?:features?|feature requests?|feature proposals?)[^.!?]{0,240}'
+            r'(?:(?:must|should|needs? to)\s+be\s+(?:approved|accepted)'
+            r'|(?:has|have)\s+been\s+(?:approved|accepted)'
+            r'|(?:must|should|need to)\s+(?:first\s+)?(?:get|obtain|receive)\s+(?:explicit\s+)?(?:maintainer\s+)?(?:approval|acceptance)'
+            r'|(?:require[sd]?|need)\s+(?:explicit\s+)?(?:maintainer\s+)?(?:approval|acceptance)'
+            r'|get\s+(?:the\s+)?proposal\s+(?:approved|accepted))',
+            r'(?:get|obtain|receive|seek)\s+(?:explicit\s+)?(?:maintainer\s+)?(?:approval|acceptance)(?!\s+tests?\b)[^.!?]{0,120}'
+            r'(?:before|prior to)[^.!?]{0,100}(?:implement|cod(?:e|ing)|work|pull request|\bPR\b)',
+            r'(?:approval|acceptance)\s+(?:is\s+)?(?:required|needed)[^.!?]{0,120}'
             r'(?:before|prior to)[^.!?]{0,100}(?:implement|cod(?:e|ing)|work|pull request|\bPR\b)',
         ],
         'discussion_required': [
@@ -117,6 +122,109 @@ def scope_digest(snapshot):
                     'body': issue.get('body') or ''})
 
 
+def linked_pr_identity(pr):
+    """Only controller-fetched, consistent PR identities can be scope reviewed."""
+    if not isinstance(pr, dict):
+        return None
+    number = pr.get('number')
+    base, head = pr.get('base'), pr.get('head')
+    repository = base.get('repo') if isinstance(base, dict) else None
+    repo = repository.get('full_name') if isinstance(repository, dict) else None
+    sha = head.get('sha') if isinstance(head, dict) else None
+    if (type(number) is not int or number <= 0 or not isinstance(repo, str)
+            or not re.fullmatch(r'[\w.-]+/[\w.-]+', repo)
+            or not isinstance(sha, str) or not re.fullmatch(r'[0-9a-fA-F]{40}', sha)
+            or str(pr.get('html_url', '')).casefold() != f'https://github.com/{repo}/pull/{number}'.casefold()):
+        return None
+    return {'url': pr['html_url'], 'repo': repo.casefold(), 'number': number, 'head_sha': sha.lower()}
+
+
+def linked_pr_review_key(snapshot, own_competition=False):
+    return _digest({'scope': scope_digest(snapshot), 'own_competition': own_competition,
+        'prs': [{'identity': linked_pr_identity(pr), **{key: pr.get(key) for key in
+                 ('state', 'merged', 'merged_at', 'title', 'body', 'user')}}
+                for pr in snapshot.get('linked_prs', []) if isinstance(pr, dict)]})
+
+
+def _linked_review(snapshot, approval_data, own_competition):
+    reasons, unknown, pending = [], [], []
+    linked = snapshot.get('linked_prs')
+    if not isinstance(linked, list):
+        return [], ['Linked PR records are unknown'], []
+    receipt = (approval_data or {}).get('feature_linked_pr_review') or {}
+    if not isinstance(receipt, dict):
+        receipt = {}
+    current = receipt.get('key') == linked_pr_review_key(snapshot, own_competition)
+    decisions = receipt.get('decisions') if current else None
+    for pr in linked:
+        identity = linked_pr_identity(pr)
+        if not identity:
+            unknown.append('Linked PR identity is unknown')
+            continue
+        state = str(pr.get('state', '')).casefold()
+        merged = pr.get('merged') is True or bool(pr.get('merged_at')) or state == 'merged'
+        if state not in ('open', 'closed', 'merged'):
+            unknown.append('Linked PR state is unknown: ' + identity['url'])
+            continue
+        if state == 'closed' and not merged:
+            if pr.get('merged') is not False:
+                unknown.append('Closed linked PR merge status is unknown: ' + identity['url'])
+            continue
+        if not isinstance(pr.get('title'), str) or not isinstance(pr.get('body'), (str, type(None))):
+            unknown.append('Linked PR scope content is unknown: ' + identity['url'])
+            continue
+        if not current:
+            pending.append('Linked PR scope needs review: ' + identity['url'])
+            continue
+        matches = [x for x in decisions if isinstance(x, dict) and x.get('url') == identity['url']
+                   and x.get('head_sha') == identity['head_sha']] if isinstance(decisions, list) else []
+        if len(matches) != 1:
+            unknown.append('Linked PR scope review is incomplete: ' + identity['url'])
+            continue
+        decision = matches[0]
+        relation, reason = decision.get('relation'), decision.get('reason')
+        evidence = decision.get('evidence')
+        sources = set()
+        valid = isinstance(evidence, list) and 1 <= len(evidence) <= 10
+        for quote in evidence if isinstance(evidence, list) else []:
+            if not isinstance(quote, dict):
+                valid = False
+                continue
+            source, text = quote.get('source'), quote.get('quote')
+            document = pr if source == 'pr' else snapshot.get('issue', {}) if source == 'issue' else {}
+            # Body excerpts are required: titles alone do not establish coverage.
+            if (not isinstance(text, str) or not text.strip() or len(text) > 2000
+                    or text not in (document.get('body') or '')):
+                valid = False
+            else:
+                sources.add(source)
+        if not valid or sources != {'pr', 'issue'} or not isinstance(reason, str) or not reason.strip():
+            unknown.append('Linked PR review lacks exact body evidence: ' + identity['url'])
+            continue
+        same_repo = identity['repo'] == str(snapshot.get('repo', '')).casefold()
+        if relation == 'implemented':
+            if same_repo and merged:
+                reasons.append('Linked PR implements the requested scope: ' + identity['url'])
+            else:
+                unknown.append('Unverified target implementation coverage: ' + identity['url'])
+        elif relation == 'competing':
+            if not same_repo or state != 'open' or merged:
+                unknown.append('Invalid competing PR classification: ' + identity['url'])
+            elif not own_competition:
+                reasons.append('Existing open linked PR implements this scope: ' + identity['url'])
+        elif relation == 'downstream':
+            if same_repo:
+                unknown.append('Target-repository PR cannot be downstream: ' + identity['url'])
+        elif relation == 'partial':
+            if not isinstance(decision.get('uncovered_scope'), str) or not decision['uncovered_scope'].strip():
+                unknown.append('Partial PR coverage lacks the remaining scope: ' + identity['url'])
+        elif relation != 'unrelated':
+            unknown.append('Linked PR scope remains unknown: ' + identity['url'])
+    if current and receipt.get('approved') is not True:
+        reasons.append('Linked PR scope review rejected: ' + str(receipt.get('reason', 'No affirmative review')))
+    return reasons, unknown, pending
+
+
 def _claims(comments):
     """Conservative explicit claim/interest signals, not a proof of no overlap.
 
@@ -126,7 +234,7 @@ def _claims(comments):
     active = {}
     own_text = lambda text: '\n'.join(line for line in re.sub(r'```[\s\S]*?```', '', text).splitlines()
                                       if not line.lstrip().startswith('>'))
-    release = re.compile(r"\b(?:i(?:'m| am)? (?:am )?(?:no longer|not) working on|i (?:will not|won't|cannot|can't) (?:work on|take)|unassign me|i(?:'m| am) (?:dropping|releasing) (?:this|the issue)|anyone (?:else )?can (?:take|pick) (?:this|it))\b", re.I)
+    release = re.compile(r"\b(?:i(?:'m| am)? (?:am )?(?:no longer|not) working on|i (?:will not|won't|cannot|can't|can no longer|am unable to) (?:work on|take)|unassign me|i(?:'m| am) (?:dropping|releasing) (?:this|the issue)|anyone (?:else )?can (?:take|pick) (?:this|it))\b", re.I)
     claim = re.compile(r"\b(?:i(?:'m| am) working on|i(?:'ll| will| would like to| want to) (?:work on|take|pick up|implement)|(?:can|could|may) i (?:work on|take|pick up|implement)|assign (?:this (?:issue )?to )?me|i (?:have started|started) (?:working on|implementing)|i(?:'ve| have) (?:opened|submitted) (?:a |the )?(?:pr|pull request))\b", re.I)
     for item in sorted(comments, key=lambda x: (x.get('created_at', ''), x['id'])):
         user = item['user']
@@ -138,12 +246,14 @@ def _claims(comments):
             active.pop(author, None)
         elif claim.search(body):
             active[author] = {'author': user['login'], 'comment_id': item['id'],
-                              'url': item.get('html_url'), 'kind': 'claim_or_interest'}
+                              'url': item.get('html_url'), 'kind': 'pr_submission' if re.fullmatch(
+                                  r"\s*i(?:'ve| have) (?:opened|submitted) (?:a |the )?(?:pr|pull request)\b[\s\S]*",
+                                  body, re.I) else 'claim_or_interest'}
     return list(active.values())
 
 
 def evaluate(snapshot, policy=None, *, actor, now, max_age_seconds=900,
-             stage='plan', approval_data=None):
+             stage='plan', approval_data=None, own_competition=False):
     """Evaluate a complete GET-only snapshot, with no side effects.
 
     Required snapshot fields: repo, issue, comments, linked_prs, observed_at,
@@ -157,6 +267,8 @@ def evaluate(snapshot, policy=None, *, actor, now, max_age_seconds=900,
     """
     if not isinstance(actor, str) or not actor.strip():
         raise ValueError('Authenticated actor is required')
+    if type(own_competition) is not bool:
+        raise ValueError('Own competition preference must be boolean')
     if type(max_age_seconds) not in (int, float) or not 0 < max_age_seconds <= 3600:
         raise ValueError('Freshness bound must be positive and at most one hour')
     if stage not in ('plan', 'repair', 'publish'):
@@ -206,7 +318,14 @@ def evaluate(snapshot, policy=None, *, actor, now, max_age_seconds=900,
         unknown.append('Discussion records are malformed')
         comments = []
     claims = _claims(comments)
-    if any(x['author'].casefold() != actor for x in claims):
+    def reviewed_competitor_claim(claim):
+        if not own_competition or claim['kind'] != 'pr_submission':
+            return False
+        return any(linked_pr_identity(pr) and linked_pr_identity(pr)['repo'] == str(repo).casefold()
+                   and str(pr.get('state', '')).casefold() == 'open'
+                   and str((pr.get('user') or {}).get('login', '')).casefold() == claim['author'].casefold()
+                   for pr in (snapshot.get('linked_prs') or []) if isinstance(pr, dict))
+    if any(x['author'].casefold() != actor and not reviewed_competitor_claim(x) for x in claims):
         reasons.append('Another contributor has an unresolved claim or implementation interest')
     own_claim = actor in assigned or any(x['author'].casefold() == actor for x in claims)
     labels = issue.get('labels')
@@ -215,19 +334,9 @@ def evaluate(snapshot, policy=None, *, actor, now, max_age_seconds=900,
         labels = []
     if any(x['name'].strip().casefold() in ('in progress', 'in-progress', 'status: in progress', 'claimed', 'wip') for x in labels) and not own_claim:
         reasons.append('Issue is marked as claimed or in progress')
-    linked = snapshot.get('linked_prs')
-    if not isinstance(linked, list):
-        unknown.append('Linked PR records are unknown')
-        linked = []
-    for pr in linked:
-        if not isinstance(pr, dict) or type(pr.get('number')) is not int or str(pr.get('state', '')).casefold() not in ('open', 'closed', 'merged'):
-            unknown.append('Linked PR state is unknown')
-        elif str(pr['state']).casefold() == 'open':
-            reasons.append('Existing open linked PR: ' + str(pr.get('html_url', pr.get('url', pr['number']))))
-        elif pr.get('merged') is True or pr.get('merged_at') or str(pr['state']).casefold() == 'merged':
-            reasons.append('Linked PR was merged; implementation coverage needs review')
-        elif str(pr['state']).casefold() == 'closed' and not (pr.get('merged') is False or pr.get('state') == 'CLOSED'):
-            unknown.append('Closed linked PR merge status is unknown')
+    linked_reasons, linked_unknown, linked_pending = _linked_review(snapshot, approval_data, own_competition)
+    reasons.extend(linked_reasons)
+    unknown.extend(linked_unknown)
     current_approval = (not unknown and has_scope_approval(approval_data or {})
                         and (approval_data or {})['maintainer_approval']['digest'] == _digest(human_maintainer_comments(comments))
                         and (approval_data or {}).get('feature_request_scope_digest') == scope_digest(snapshot))
@@ -257,8 +366,9 @@ def evaluate(snapshot, policy=None, *, actor, now, max_age_seconds=900,
     # already existing numbered request. This module never creates an issue.
     if stage == 'publish' and effective.get('human_pr_review_required'):
         reasons.append('Upstream requires personal code review before publication')
-    status = 'blocked' if reasons else 'unknown' if unknown else 'eligible'
-    return {'status': status, 'eligible': status == 'eligible', 'reasons': reasons + unknown,
+    status = 'blocked' if reasons else 'unknown' if unknown or linked_pending else 'eligible'
+    return {'status': status, 'eligible': status == 'eligible', 'reasons': reasons + unknown + linked_pending,
+            'linked_pr_review_pending': linked_pending,
             'unknown_reasons': unknown, 'claims': claims, 'scope_approval_current': bool(current_approval),
             'observed_at': snapshot.get('observed_at'), 'evidence_digest': _digest(snapshot),
             'scope_digest': scope_digest(snapshot), 'policy': effective, 'permits_publication': False}

@@ -96,7 +96,7 @@ class FeatureRequestFlowTests(unittest.TestCase):
 
     def fake_judge(self, key, purpose, packet):
         self.assertEqual(self.key, key)
-        self.assertIn(purpose, ('feature-scope-review', 'feature-request-review'))
+        self.assertIn(purpose, ('feature-scope-review', 'feature-request-review', 'feature-linked-pr-review'))
         self.judge_calls.append((purpose, copy.deepcopy(packet)))
         return copy.deepcopy(self.decisions.get(purpose, {'approved': True, 'reason': 'Explicit fake reviewer approval for this isolated test.'}))
 
@@ -217,12 +217,13 @@ class FeatureRequestFlowTests(unittest.TestCase):
     def test_linked_pr_is_fetched_currently_instead_of_trusting_timeline_state(self):
         self.responses[BASE + '/timeline?per_page=100&page=1'] = [reference(44, repo='other/fork', old_state='closed')]
         self.responses['repos/other/fork/pulls/44'] = {'number': 44, 'state': 'open',
-                                                     'html_url': 'https://github.com/other/fork/pull/44'}
-        with self.assertRaisesRegex(ContributionPaused, 'Existing open linked PR'):
+            'html_url': 'https://github.com/other/fork/pull/44', 'base': {'repo': {'full_name': 'other/fork'}},
+            'head': {'sha': 'a' * 40}, 'title': 'Related patch', 'body': 'Export behavior.'}
+        with self.assertRaisesRegex(ValueError, 'Invalid reviewer verdict'):
             self.check()
         self.assertIn(('api', 'repos/other/fork/pulls/44'), self.calls)
         self.assertEqual('open', self.artifact('feature-request-context.json')['linked_prs'][0]['state'])
-        self.judge.assert_not_called()
+        self.assertEqual(['feature-linked-pr-review'], [x[0] for x in self.judge_calls])
 
     def test_more_than_ten_linked_prs_is_bounded_and_unknown(self):
         self.responses[BASE + '/timeline?per_page=100&page=1'] = [reference(i) for i in range(30, 41)]
@@ -322,7 +323,8 @@ class FeatureRequestFlowTests(unittest.TestCase):
         self.responses['repos/owner/repo/pulls/44'] = {
             'number': 44, 'state': 'closed', 'merged': False,
             'html_url': 'https://github.com/owner/repo/pull/44',
-            'title': 'Previous implementation', 'body': 'Maintainer declined this direction.', 'head': {'sha': 'abc'}}
+            'title': 'Previous implementation', 'body': 'Maintainer declined this direction.',
+            'base': {'repo': {'full_name': 'owner/repo'}}, 'head': {'sha': 'a' * 40}}
         self.decisions['feature-request-review'] = {'approved': False, 'reason': 'Fake reviewer: prior implementation reveals unresolved design.'}
         with self.assertRaisesRegex(ContributionPaused, 'prior implementation reveals unresolved design'):
             self.check()

@@ -1,6 +1,7 @@
 """Read-only CI observation, including workflows without check runs yet."""
 import subprocess
 from urllib.parse import quote
+from telemetry import BudgetExhausted
 
 
 def observe_ci(repo, pr, gh):
@@ -41,6 +42,8 @@ def observe_ci(repo, pr, gh):
                 if key not in latest or order > latest[key][0]:
                     latest[key] = (order, run)
         result['workflow_runs'] = [item[1] for item in latest.values()]
+    except BudgetExhausted:
+        raise
     except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired, KeyError, TypeError) as error:
         result['error'] = str(error)
     for run in result['workflow_runs']:

@@ -1,4 +1,5 @@
 """Failure domains and bounded retry state; quality attempts stay separate."""
+import copy
 import datetime as dt
 import json
 import re
@@ -77,6 +78,84 @@ def recover_dependency_setup(data, options, at=None):
     data['stage'] = 'FAILED' if count >= options.get('max_stage_attempts', 3) else 'PLAN'
     data['failure_category'] = 'dependency_conflict'
     data['stop_reason'] = 'dependency_recipe_attempts_exhausted' if data['stage'] == 'FAILED' else 'dependency_recipe_replan'
+    return True
+
+
+def recover_model_service(db, data, task_id, options, at=None):
+    """Reopen one exhausted model-service retry window after proven recovery.
+
+    Read model-call receipts without reserving or refunding calls. The caller
+    persists the changed task; quality attempts and all lifetime calls remain.
+    """
+    stage = data.get('stage')
+    purpose = {'PLAN': 'plan', 'REPAIR': 'repair'}.get(stage)
+    record = data.get('infrastructure_failures', {}).get(stage, {})
+    error = data.get('last_error', '')
+    history = data.get('model_service_recoveries', [])
+    limit = options.get('max_infrastructure_attempts', 3)
+    if (not purpose or not isinstance(error, str)
+            or not error.startswith(f'OpenCode did not complete {purpose}:')
+            or category(RuntimeError(error)) != 'service_unavailable'
+            or data.get('failure_category') != 'service_unavailable'
+            or record.get('category') != 'service_unavailable'
+            or record.get('exhausted') is not True
+            or type(limit) is not int or limit <= 0
+            or type(record.get('count')) is not int or record['count'] < limit
+            or data.get('attempts', {}).get(stage, 0) >= options.get('max_stage_attempts', 3)
+            or not isinstance(history, list)
+            or any(not isinstance(item, dict) or item.get('stage') == stage for item in history)):
+        return False
+
+    def timestamp(value):
+        try:
+            parsed = dt.datetime.fromisoformat(value)
+            return parsed if parsed.utcoffset() is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def one(sql, params):
+        cursor = db.execute(sql, params)
+        row = cursor.fetchone()
+        return dict(zip((column[0] for column in cursor.description), row)) if row else None
+
+    at = at or dt.datetime.now(dt.timezone.utc)
+    recorded = timestamp(record.get('at'))
+    if at.utcoffset() is None or recorded is None or recorded > at:
+        return False
+    failed = one('SELECT * FROM model_calls WHERE task=? AND purpose=? '
+                 'ORDER BY started DESC,call_id DESC LIMIT 1', (task_id, purpose))
+    if (not failed or failed['channel'] != 'opencode' or not failed['model']
+            or failed['outcome'] != 'service_unavailable'):
+        return False
+    started, ended = timestamp(failed['started']), timestamp(failed['ended'])
+    # Telemetry completes the model call immediately before record_failure.
+    # A different/old failure cannot unlock the current exhausted record.
+    if (started is None or ended is None or started > ended
+            or not 0 <= (recorded - ended).total_seconds() <= 5):
+        return False
+    recent = at - dt.timedelta(hours=24)
+    success = one("SELECT * FROM model_calls WHERE channel=? AND model=? AND purpose=? "
+                  "AND outcome='success' AND ended IS NOT NULL "
+                  'AND julianday(started)>julianday(?) '
+                  'AND julianday(ended)>=julianday(?) AND julianday(ended)<=julianday(?) '
+                  'ORDER BY ended DESC,call_id DESC LIMIT 1',
+                  (failed['channel'], failed['model'], purpose,
+                   ended.isoformat(), recent.isoformat(), at.isoformat()))
+    if not success:
+        return False
+    success_start, success_end = timestamp(success['started']), timestamp(success['ended'])
+    if (success_start is None or success_end is None
+            or not ended < success_start <= success_end or not recent <= success_end <= at):
+        return False
+
+    data.setdefault('model_service_recoveries', []).append({
+        'at': at.isoformat(), 'task': task_id, 'stage': stage,
+        'previous': copy.deepcopy(record), 'error': error,
+        'failed_call': failed, 'success_call': success,
+        'reason': 'Same model/channel/purpose completed successfully after this outage within 24 hours',
+    })
+    del data['infrastructure_failures'][stage]
+    data['stop_reason'] = 'model_service_recovered_once'
     return True
 
 

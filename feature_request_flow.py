@@ -4,7 +4,9 @@ import json
 import re
 
 from contribute import ContributionPaused, gh, now, save
-from feature_requests import evaluate, is_feature_request, scope_digest
+from contribution_strategy import enabled, local_discovery, PRIORITY_GUIDANCE
+from feature_requests import (evaluate, is_feature_request, scope_digest,
+                              linked_pr_identity, linked_pr_review_key)
 from repository_policy import approval_receipt, human_maintainer_comments
 from telemetry import ACTIVE
 
@@ -123,6 +125,9 @@ def collect(engine, task):
             if not isinstance(pr, dict) or pr.get('number') != pr_number:
                 raise ValueError('Linked feature PR identity is invalid')
             snapshot['linked_prs'].append(pr)
+            identity = linked_pr_identity(pr)
+            if not identity or identity['repo'] != linked_repo.casefold():
+                complete = False
         snapshot['complete']['linked_prs'] = complete
         snapshot['actor'] = gh('api', 'user')['login']
         # A collection that took longer than the freshness allowance must not
@@ -161,9 +166,17 @@ def check(engine, task_id, data, phase='plan'):
     configured = dict(engine.p.config.get('repository_checks', {}).get('policies', {}).get(task['repo'], {}))
     if data.get('upstream_direction_required'):
         configured['feature_approval_required'] = True
+    # Match own_contribution's origin/author rule using the already fetched
+    # actor and issue, without another API request. Reused external issues are
+    # excluded by local_discovery, as in the existing contribution strategy.
+    own_competition = (enabled(engine.p.config, 'prefer_own_pr_on_competition')
+        and (local_discovery(task, data) or str((snapshot['issue'].get('user') or {}).get('login', '')).casefold()
+             == snapshot['actor'].casefold()))
     def assess():
         return evaluate(snapshot, configured, actor=snapshot['actor'], now=now(), stage=phase,
-                        approval_data=data)
+                        approval_data=data, own_competition=own_competition)
+    def blockers(verdict):
+        return [reason for reason in verdict['reasons'] if reason not in verdict['linked_pr_review_pending']]
     verdict = assess()
     save(engine.packet_dir(task_id) / 'feature-request-admission.json',
          {'status': 'unknown', 'eligible': False, 'permits_publication': False,
@@ -179,7 +192,7 @@ def check(engine, task_id, data, phase='plan'):
         'acceptance_plan': data.get('plan') if phase != 'plan' else None,
         'rules': snapshot['policy_rules'], 'policy': configured}, sort_keys=True).encode()).hexdigest()
     approval_reason = 'Upstream requires current human maintainer approval of this scope'
-    if (verdict['reasons'] == [approval_reason] and humans
+    if (blockers(verdict) == [approval_reason] and humans
             and data.get('feature_scope_review_key') != review_key):
         decision = engine.judge(task_id, 'feature-scope-review', {
             'gate': 'Do these verified human maintainer comments explicitly approve implementing the exact current '
@@ -191,6 +204,66 @@ def check(engine, task_id, data, phase='plan'):
             data['maintainer_approval'] = approval_receipt(humans, decision, now())
             data['feature_request_scope_digest'] = scope_digest(snapshot)
         engine.store(task_id, data)
+        verdict = assess()
+    if verdict['linked_pr_review_pending'] and not blockers(verdict):
+        decision = engine.judge(task_id, 'feature-linked-pr-review', {
+            'gate': 'Classify every open or merged linked PR against the exact requested scope. A timeline reference '
+                    'or matching title is not proof of implementation. Use the full supplied issue/PR bodies. '
+                    'Return decisions, one per open or merged PR, with url, head_sha, relation, reason, evidence. '
+                    'relation is unrelated, downstream, partial, competing, implemented, or unknown. '
+                    'downstream requires a different base repository; implemented requires a merged PR in the '
+                    'target repository that covers the requested behavior. competing is an open target-repository '
+                    'implementation of the same scope. partial must include nonempty uncovered_scope explaining '
+                    'the precise requested behavior still absent. Every item needs evidence with exact body excerpts '
+                    'from BOTH sources: [{source:"issue",quote:"..."},{source:"pr",quote:"..."}]. '
+                    'Use unknown if supplied evidence cannot establish the relation. Do not infer target baseline '
+                    'coverage from a foreign merged PR or a title. This only classifies overlap; normal duplicate '
+                    'review, upstream rules, acceptance tests and exact-patch review remain required. '
+                    'Set approved true only when this classification is evidence-backed and sufficiently complete. '
+                    + (PRIORITY_GUIDANCE if own_competition else
+                       'This is another contributor\'s issue: a same-scope open competing PR still blocks implementation.'),
+            'issue': snapshot['issue'], 'linked_prs': snapshot['linked_prs'],
+            'rules': snapshot['policy_rules'], 'own_competition': own_competition})
+        # A missing structured answer is a retryable reviewer-format failure,
+        # not a permanent policy hold cached against otherwise unchanged evidence.
+        if decision.get('approved') is True:
+            expected = {(linked_pr_identity(pr)['url'], linked_pr_identity(pr)['head_sha']): pr
+                        for pr in snapshot['linked_prs'] if str(pr.get('state', '')).casefold() in ('open', 'merged')
+                        or pr.get('merged') is True or pr.get('merged_at')}
+            items = decision.get('decisions')
+            if (not isinstance(items, list) or len(items) != len(expected)
+                    or any(not isinstance(item, dict) or not isinstance(item.get('url'), str)
+                           or not isinstance(item.get('head_sha'), str) for item in items)
+                    or {(item.get('url'), item.get('head_sha')) for item in items} != set(expected)):
+                raise ValueError('Invalid reviewer verdict: linked PR decisions must cover each exact inspected head')
+            for item in items:
+                relation = item.get('relation')
+                if relation not in ('unrelated', 'downstream', 'partial', 'competing', 'implemented', 'unknown'):
+                    raise ValueError('Invalid reviewer verdict: unknown linked PR relation')
+                if not isinstance(item.get('reason'), str) or not item['reason'].strip():
+                    raise ValueError('Invalid reviewer verdict: linked PR reason is missing')
+                if relation == 'partial' and (not isinstance(item.get('uncovered_scope'), str)
+                                               or not item['uncovered_scope'].strip()):
+                    raise ValueError('Invalid reviewer verdict: remaining feature scope is missing')
+                if relation == 'unknown':
+                    continue
+                pr = expected[(item['url'], item['head_sha'])]
+                evidence, sources = item.get('evidence'), set()
+                if not isinstance(evidence, list) or not 1 <= len(evidence) <= 10:
+                    raise ValueError('Invalid reviewer verdict: linked PR body evidence is missing')
+                for quote in evidence:
+                    source = quote.get('source') if isinstance(quote, dict) else None
+                    text = quote.get('quote') if isinstance(quote, dict) else None
+                    document = pr if source == 'pr' else snapshot['issue'] if source == 'issue' else {}
+                    if not isinstance(text, str) or not text.strip() or len(text) > 2000 or text not in (document.get('body') or ''):
+                        raise ValueError('Invalid reviewer verdict: linked PR body quote does not match evidence')
+                    sources.add(source)
+                if sources != {'issue', 'pr'}:
+                    raise ValueError('Invalid reviewer verdict: linked PR review requires both bodies')
+        data['feature_linked_pr_review'] = {**decision, 'key': linked_pr_review_key(snapshot, own_competition),
+                                          'observed_at': snapshot['observed_at']}
+        engine.store(task_id, data)
+        save(engine.packet_dir(task_id) / 'feature-linked-pr-review.json', data['feature_linked_pr_review'])
         verdict = assess()
     # Even repositories without a mandatory approval rule may have rejected
     # this particular proposal. Review the live discussion before spending code slots.

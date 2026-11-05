@@ -906,7 +906,7 @@ class Autonomous:
                 or not re.fullmatch(r'[0-9a-f]{40,64}', commit)):
             manual('Pending PR lacks a saved branch and exact commit; manual verification required')
         login = identity.get('author') or gh('api', 'user')['login']
-        expected_fork = identity.get('head_repo') or f"{login}/{task['repo'].split('/')[1]}"
+        expected_fork = identity.get('head_repo') or (data.get('publication_fork') or {}).get('full_name')
         if identity and (identity.get('repo') != task['repo'] or identity.get('branch') != branch
                          or identity.get('commit') != commit):
             manual('Pending PR publication identity differs from saved commit or target')
@@ -928,6 +928,15 @@ class Autonomous:
                 or not isinstance(head.get('repo'), dict) or not isinstance(base.get('repo'), dict)
                 or not isinstance(pr.get('user'), dict)):
             manual('Pending PR target or exact head identity is unavailable; manual verification required')
+        if not expected_fork:
+            # Legacy intents did not save the fork's real name. Recover it only
+            # from the exact PR head and a fresh owner/parent API verification.
+            from delivery import ForkIdentityError, verified_fork
+            try:
+                fork = verified_fork(task['repo'], login, head['repo'].get('full_name'), gh)
+            except ForkIdentityError as error:
+                manual('Pending PR fork identity could not be verified: ' + str(error))
+            expected_fork = fork['full_name']
         expected_url = f"https://github.com/{task['repo']}/pull/{number}"
         if (pr.get('number') != number or str(pr.get('html_url', '')).casefold() != expected_url.casefold()
                 or str((base.get('repo') or {}).get('full_name', '')).casefold() != task['repo'].casefold()
@@ -938,6 +947,9 @@ class Autonomous:
                 or pr.get('state') not in ('open', 'closed')):
             manual('Pending PR does not match the saved target, author and exact head; manual verification required')
         data.update(pr_number=number, pr_url=expected_url, pr_create_pending=False)
+        if not identity:
+            data['pr_publication_identity'] = {'repo': task['repo'], 'author': login,
+                'head_repo': expected_fork, 'branch': branch, 'commit': commit, 'base': base.get('ref')}
         data['pr_reconciliation']['publication'] = pr
         data['pr_reconciliation']['exact_head_verified'] = True
         save(self.packet_dir(task_id) / 'pr-reconciliation.json', data['pr_reconciliation'])
@@ -1047,10 +1059,12 @@ class Autonomous:
             self.store(task_id, data)
             self.p.require_external_write()
         features.check(self, task_id, data, 'publish')
-        command(['gh', 'repo', 'fork', task['repo'], '--clone=false'])
-        fork = gh('api', f"repos/{login}/{task['repo'].split('/')[1]}")
-        if (fork.get('parent') or {}).get('full_name', '').lower() != task['repo'].lower():
-            raise RuntimeError('Fork parent does not match upstream')
+        from delivery import resolve_publication_fork
+        fork = resolve_publication_fork(task['repo'], login, gh, execute,
+                                        (data.get('publication_fork') or {}).get('full_name'))
+        data['publication_fork'] = {'full_name': fork['full_name'], 'clone_url': fork['clone_url'],
+                                    'parent': task['repo'], 'owner': login, 'verified_at': now()}
+        self.store(task_id, data)
         if command(['git', 'status', '--porcelain'], cwd=work).strip():
             files = changed_files(work)
             if not files:
@@ -1098,7 +1112,7 @@ class Autonomous:
             features.check(self, task_id, data, 'publish')
             data['pr_create_pending'] = True
             data['pr_publication_identity'] = {'repo': task['repo'], 'author': login,
-                'head_repo': f"{login}/{task['repo'].split('/')[1]}", 'branch': branch,
+                'head_repo': fork['full_name'], 'branch': branch,
                 'commit': data['publish_commit'], 'base': upstream['default_branch']}
             self.store(task_id, data)
             url = command(['gh', 'pr', 'create', '-R', task['repo'], '--base', upstream['default_branch'], '--head', login + ':' + branch, '--title', data['plan']['pr_title'], '--body-file', str(folder / 'pr-body.md')], cwd=work).strip()

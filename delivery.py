@@ -6,10 +6,58 @@ These helpers never infer that a successful test grants publication permission.
 import datetime as dt
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import subprocess
 import tempfile
+
+
+class ForkIdentityError(RuntimeError):
+    """A successful read or CLI response could not establish a safe fork."""
+
+
+def verified_fork(upstream, login, full_name, gh):
+    """Read a named fork and validate its exact owner, parent and push target."""
+    if (not isinstance(full_name, str)
+            or not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', full_name)
+            or any(part in ('.', '..') for part in full_name.split('/'))
+            or full_name.split('/')[0].casefold() != login.casefold()):
+        raise ForkIdentityError('Fork identity must belong to the authenticated user')
+    fork = gh('api', 'repos/' + full_name)
+    if (not isinstance(fork, dict) or fork.get('fork') is not True
+            or str(fork.get('full_name', '')).casefold() != full_name.casefold()
+            or not isinstance(fork.get('owner'), dict)
+            or str(fork['owner'].get('login', '')).casefold() != login.casefold()
+            or not isinstance(fork.get('parent'), dict)
+            or str(fork['parent'].get('full_name', '')).casefold() != upstream.casefold()):
+        raise ForkIdentityError('Fork owner, parent or exact repository identity does not match')
+    expected_url = 'https://github.com/' + fork['full_name'] + '.git'
+    if str(fork.get('clone_url', '')).casefold() != expected_url.casefold():
+        raise ForkIdentityError('Fork clone URL does not match its verified repository identity')
+    return fork
+
+
+def resolve_publication_fork(upstream, login, gh, execute, saved=None):
+    """Use gh's actual fork identity, including renamed existing forks.
+
+The CLI response is only a discovery hint. A fresh API read must establish the
+authenticated owner, exact parent and clone URL before any commit or push.
+"""
+    if saved:
+        return verified_fork(upstream, login, saved, gh)
+    result = execute(['gh', 'repo', 'fork', upstream, '--clone=false'])
+    if result.returncode:
+        raise RuntimeError('GitHub fork command failed: ' + (result.stderr or '')[-2000:])
+    output = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', (result.stdout or '') + '\n' + (result.stderr or ''))
+    names = {match.group(0).casefold(): match.group(0) for match in re.finditer(
+        r'(?<![A-Za-z0-9_.-])' + re.escape(login) + r'/[A-Za-z0-9_.-]+', output, flags=re.I)}
+    if len(names) > 1:
+        raise ForkIdentityError('GitHub fork response contains multiple repository identities')
+    # Some CLI versions emit no identity; the conventional name remains only a
+    # candidate, subject to the same complete API validation.
+    name = next(iter(names.values()), login + '/' + upstream.split('/')[1])
+    return verified_fork(upstream, login, name, gh)
 
 
 def isolated_worktree_args(destination, revision):

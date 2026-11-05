@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from contribute import Pipeline, command
+from contribute import Pipeline, command, execute
 from autonomous import Autonomous, json_answer, validate_spec
 
 
@@ -35,6 +35,7 @@ class AutonomousTests(unittest.TestCase):
         self.git('commit', '-qm', 'baseline')
         self.base = self.git('rev-parse', 'HEAD')
         self.fork = self.root / 'fork.git'
+        self.fork_name = 'bot/repo'
         subprocess.check_call(['git', 'init', '--bare', '-q', str(self.fork)])
         self.key = self.p.hunt('owner/repo', 'fixture')
         with self.p.db:
@@ -82,8 +83,10 @@ class AutonomousTests(unittest.TestCase):
             return {'total_count': 0, 'items': [], 'incomplete_results': False}
         if endpoint == 'user':
             return {'login': 'bot'}
-        if endpoint == 'repos/bot/repo':
-            return {'parent': {'full_name': 'owner/repo'}, 'clone_url': str(self.fork)}
+        if endpoint == 'repos/' + self.fork_name:
+            return {'parent': {'full_name': 'owner/repo'}, 'owner': {'login': 'bot'},
+                    'full_name': self.fork_name, 'fork': True,
+                    'clone_url': 'https://github.com/' + self.fork_name + '.git'}
         if endpoint == 'repos/owner/repo':
             return {'default_branch': 'main'}
         if endpoint.startswith('repos/owner/repo/pulls/'):
@@ -95,12 +98,12 @@ class AutonomousTests(unittest.TestCase):
         if args[:3] == ['gh', 'repo', 'fork']:
             # gh rejects --remote (even false) when an explicit repository is supplied.
             self.assertFalse(any(arg.startswith('--remote') for arg in args))
-            return 'fork exists'
+            return self.fork_name + ' already exists'
         if args[:3] == ['gh', 'pr', 'create']:
             author, branch = args[args.index('--head') + 1].split(':', 1)
             self.created_prs.append({'number': 3, 'state': 'open', 'html_url': 'https://github.com/owner/repo/pull/3',
                 'user': {'login': author}, 'head': {'ref': branch, 'sha': self.git('rev-parse', 'HEAD'),
-                    'repo': {'full_name': author + '/repo'}},
+                    'repo': {'full_name': self.fork_name}},
                 'base': {'ref': args[args.index('--base') + 1], 'repo': {'full_name': 'owner/repo'}}})
             if self.lose_pr_response:
                 raise RuntimeError('Network lost after server created PR')
@@ -111,6 +114,8 @@ class AutonomousTests(unittest.TestCase):
             if self.lose_issue_response:
                 raise RuntimeError('Network lost after server created issue')
             return self.created_issues[-1]['html_url']
+        if args[0] == 'git':
+            args = [str(self.fork) if arg == 'https://github.com/' + self.fork_name + '.git' else arg for arg in args]
         return command(args, **kwargs)
 
     def mocks(self):
@@ -119,6 +124,11 @@ class AutonomousTests(unittest.TestCase):
         stack.enter_context(patch.object(self.engine, 'judge', return_value={'approved': True, 'reason': 'evidence supports it'}))
         stack.enter_context(patch('autonomous.gh', side_effect=self.fake_gh))
         stack.enter_context(patch('autonomous.command', side_effect=self.fake_command))
+        def local_execute(args, **kwargs):
+            if args[:3] == ['gh', 'repo', 'fork']:
+                return subprocess.CompletedProcess(args, 0, '', self.fake_command(args, **kwargs))
+            return execute(args, **kwargs)
+        stack.enter_context(patch('autonomous.execute', side_effect=local_execute))
         return stack
 
     def test_existing_issue_runs_red_green_review_and_real_git_push(self):

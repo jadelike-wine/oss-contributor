@@ -241,7 +241,13 @@ class FeatureExecutionIntegrationTests(unittest.TestCase):
         with self.fx.mocks(), patch('feature_request_flow.gh', side_effect=self.get), \
                 patch.object(self.p, 'require_contribution', side_effect=self.policy), \
                 patch('autonomous.command', side_effect=self.fake_command):
-            yield
+            from autonomous import execute
+            def tracked_execute(args, **kwargs):
+                if args[:3] == ['gh', 'repo', 'fork']:
+                    self.order.append(tuple(args[:3]))
+                return execute(args, **kwargs)
+            with patch('autonomous.execute', side_effect=tracked_execute):
+                yield
 
     def plan(self):
         self.engine.plan(self.key, self.engine.load(self.key))

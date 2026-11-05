@@ -10,10 +10,36 @@ import datetime as dt
 
 from contribute import ContributionPaused, command, execute, gh, now, opencode_executable, save
 from ci_status import observe_ci
-from telemetry import ACTIVE, BudgetExhausted, DeliveryBudgetExhausted, observed, model_call, stage, record_usage
+from telemetry import ACTIVE, BudgetExhausted, DeliveryBudgetExhausted, TaskBudgetExhausted, observed, model_call, stage, record_usage
 from repository_policy import human_maintainer_comments, approval_receipt, has_scope_approval
 from scheduling import RunTaskBudget, task_lane, priority_key
 from contribution_strategy import enabled, local_discovery, PRIORITY_GUIDANCE
+
+
+class ModelOutputFormatError(ValueError):
+    """Invalid optional repair summary after a verified completed model turn."""
+    def __init__(self, error, receipt):
+        super().__init__('Invalid model output JSON: ' + str(error))
+        self.receipt = {**receipt, 'parse_error': type(error).__name__, 'error': str(error)[:1000]}
+
+
+def completed_final_response(events):
+    """A terminal stop must belong to the final text, not an earlier tool step."""
+    if not events or events[-1].get('type') != 'step_finish':
+        return None
+    finish = events[-1].get('part', {})
+    final_text = next((event.get('part', {}) for event in reversed(events)
+                       if event.get('type') == 'text'), {})
+    message = final_text.get('messageID')
+    text = final_text.get('text')
+    if (finish.get('reason') != 'stop' or not isinstance(message, str) or not message
+            or finish.get('messageID') != message or not isinstance(text, str)):
+        return None
+    # Provider control fragments may represent unexecuted/incomplete tool calls,
+    # even if the CLI exits zero. They are not a completed narrative summary.
+    if re.search(r'<[^>\n]*DSML|<\|?(?:tool_calls?|function_calls?)\b', text, re.IGNORECASE):
+        return None
+    return {'message_id': message, 'finish_reason': 'stop'}
 
 
 def json_answer(text):
@@ -98,6 +124,14 @@ def public_text(text):
     return text
 
 
+def model_timeout(config, purpose):
+    timeouts = config.get('timeouts', {})
+    default = timeouts.get('model_seconds', config.get('timeout_seconds', 1500))
+    if purpose in ('research', 'research-correction'):
+        return timeouts.get('research_model_seconds', default)
+    return default
+
+
 class Autonomous:
     def __init__(self, pipeline):
         self.p = pipeline
@@ -174,17 +208,23 @@ class Autonomous:
                 '--pure', '--print-logs', '--log-level', 'ERROR', '--model', self.p.config['model'], '--format', 'json', '--dir', self.p.task(task_id)['workspace'], '--file', str(packet)]
         stamp = now().replace(':', '-')
         with self.p.lock('worker'):
-            result = execute(args, env=env, timeout=self.p.config.get('timeouts', {}).get('model_seconds', self.p.config['timeout_seconds']), started=lambda pid: self.p.track_process('worker', pid),
+            result = execute(args, env=env, timeout=model_timeout(self.p.config, purpose), started=lambda pid: self.p.track_process('worker', pid),
                              output_prefix=folder / f'{purpose}-{stamp}')
         (folder / f'{purpose}-{stamp}.jsonl').write_text(result.stdout, encoding='utf-8')
         (folder / f'{purpose}-{stamp}.stderr').write_text(result.stderr, encoding='utf-8')
         record_usage(result.stdout, 'opencode')
-        texts, errors = [], []
+        texts, errors, events = [], [], []
+        malformed_stream = False
         for line in result.stdout.splitlines():
             try:
                 event = json.loads(line)
             except ValueError:
+                malformed_stream |= bool(line.strip())
                 continue
+            if not isinstance(event, dict):
+                malformed_stream = True
+                continue
+            events.append(event)
             if event.get('type') == 'text':
                 texts.append(event.get('part', {}).get('text', ''))
             if event.get('type') == 'error':
@@ -192,7 +232,14 @@ class Autonomous:
         if result.returncode or errors or not texts:
             detail = '; '.join(str(event.get('error', {}).get('data', {}).get('message', 'unknown error')) for event in errors)
             raise RuntimeError('OpenCode did not complete ' + purpose + (': ' + detail[:1000] if detail else f' (exit {result.returncode})'))
-        answer = json_answer(texts[-1])
+        try:
+            answer = json_answer(texts[-1])
+        except ValueError as error:
+            receipt = completed_final_response(events) if purpose == 'repair' and not malformed_stream else None
+            if receipt:
+                raise ModelOutputFormatError(error, {**receipt,
+                    'output_log': str(folder / f'{purpose}-{stamp}.jsonl')}) from error
+            raise
         save(folder / (purpose + '.json'), answer)
         return answer
 
@@ -244,7 +291,7 @@ class Autonomous:
         with self.p.lock('worker'):
             # Empty -t selects platform defaults in Hermes; a nonempty empty-toolset
             # selection is required. Never silently fall back to the default tools.
-            result = execute(['hermes', 'chat', '--provider', provider, '--model', name, '--ignore-rules', '-t', 'none', '--query-file', str(query), '--oneshot', '--format', 'stream-json'], cwd=self.p.root, timeout=self.p.config.get('timeouts', {}).get('model_seconds', self.p.config['timeout_seconds']), started=lambda pid: self.p.track_process('worker', pid), output_prefix=folder / (purpose + '-review'))
+            result = execute(['hermes', 'chat', '--provider', provider, '--model', name, '--ignore-rules', '-t', 'none', '--query-file', str(query), '--oneshot', '--format', 'stream-json'], cwd=self.p.root, timeout=model_timeout(self.p.config, purpose), started=lambda pid: self.p.track_process('worker', pid), output_prefix=folder / (purpose + '-review'))
         (folder / (purpose + '-review.jsonl')).write_text(result.stdout, encoding='utf-8')
         (folder / (purpose + '-review.stderr')).write_text(result.stderr, encoding='utf-8')
         record_usage(result.stdout, 'hermes')
@@ -742,7 +789,17 @@ class Autonomous:
                   json.dumps({'pr_number': data.get('pr_number'), 'feedback': data.get('feedback'),
                               'published_scope': data['plan'].get('pr_body'), 'task': task, 'plan': data['plan'],
                               'last_failure': data.get('last_error'), 'verification_logs': failure_logs}, ensure_ascii=False, indent=2))
-        self.model(task_id, 'repair', prompt, edit=True)
+        try:
+            self.model(task_id, 'repair', prompt, edit=True)
+        except ModelOutputFormatError as error:
+            # The summary is descriptive only. A completed edit still needs the
+            # ordinary exact-patch tests and review; no verdict is inferred here.
+            receipt = {**error.receipt, 'at': now(), 'next_stage': 'PATCH_READY',
+                       'verification': 'not_run', 'review': 'not_run'}
+            data['repair_output_format'] = receipt
+            save(self.packet_dir(task_id) / 'repair-output-format.json', receipt)
+            self.store(task_id, data)
+            self.p.event(task_id, 'Completed repair summary was not JSON; retained output and proceeding to required patch verification')
         self.move(task_id, data, 'PATCH_READY')
 
     @observed('testing', task=True)
@@ -1148,6 +1205,74 @@ class Autonomous:
             self.store(task_id, data, data['stage'])
             self.p.event(task_id, 'Reclassified dependency setup failure; retained prior retry evidence; ' + data['stage'])
 
+    def dispatch_candidates(self, rows, budget, attempted):
+        """Dispatch once per run, sharing all original lane/model/time limits."""
+        from failures import retry_ready
+        for row in rows:
+            task_id = row['id']
+            if task_id in attempted or (ACTIVE.get() and task_id in ACTIVE.get().paused_tasks):
+                continue
+            task = self.p.task(task_id)
+            data = self.load(task_id)
+            self.recover_dependency_setup(task_id, data)
+            if data['stage'] == 'FAILED':
+                continue
+            if (data['stage'] in ('ISSUE', 'PUBLISH') and data.get('publication_hold') == 'external_writes_disabled'
+                    and self.p.allow_external_writes is not True):
+                continue
+            if (self.p.config.get('research', {}).get('batch_on_auto', False) and task['source'] == 'hunt'
+                    and not data.get('research', {}).get('approved')):
+                continue
+            if not retry_ready(data, data['stage']):
+                continue
+            channel = ('hermes' if data['stage'] == 'AUTO_REVIEW' else
+                       'opencode' if data['stage'] in ('PLAN', 'REPAIR', 'PR_OPEN') else None)
+            if ACTIVE.get() and channel and ACTIVE.get().channel_failures.get(channel, 0) >= 2:
+                continue
+            attempted.add(task_id)
+            try:
+                # Reject a known policy hold before it occupies an implementation
+                # slot. Publication still performs its fresh checks in advance().
+                self.p.require_contribution(task)
+                candidate = self.db.execute('SELECT queue FROM research_candidates WHERE task=?', (task_id,)).fetchone()
+                lane = task_lane(task, data, candidate['queue'] if candidate else None)
+                if not budget.admit(task_id, lane):
+                    continue
+                if lane != 'maintenance':
+                    (self.p.research_turn if lane == 'research' else self.p.delivery_turn)(task['repo'])
+                if ACTIVE.get():
+                    ACTIVE.get().remaining()
+                self.advance(task_id)
+            except ContributionPaused as error:
+                print(f'{task_id}: {error}', flush=True)
+            except TaskBudgetExhausted as error:
+                if ACTIVE.get():
+                    ACTIVE.get().paused_tasks.add(task_id)
+                data = self.load(task_id)
+                data['stop_reason'] = str(error)
+                self.store(task_id, data)
+                self.p.event(task_id, 'Task budget pause: ' + str(error))
+            except DeliveryBudgetExhausted:
+                break
+
+    def handoff_research(self, researched, budget, attempted):
+        """Only auto hands freshly reviewed ready research to normal delivery."""
+        fresh = set(researched) - attempted
+        if ACTIVE.get():
+            fresh -= ACTIVE.get().paused_tasks
+        if not fresh:
+            return
+        rows = []
+        for row in self.candidates():
+            if row['id'] not in fresh:
+                continue
+            data = self.load(row['id'])
+            candidate = self.db.execute('SELECT queue FROM research_candidates WHERE task=?', (row['id'],)).fetchone()
+            if (data['stage'] == 'PLAN' and data.get('research', {}).get('approved') is True
+                    and candidate and candidate['queue'] == 'READY_TO_IMPLEMENT'):
+                rows.append(row)
+        self.dispatch_candidates(rows, budget, attempted)
+
     @observed('auto')
     def run(self):
         if self.options.get('enabled') is not True:
@@ -1162,33 +1287,10 @@ class Autonomous:
             rows = self.candidates()
             budget = ACTIVE.get().task_budget if ACTIVE.get() else RunTaskBudget(self.p.config)
             self._task_budget = budget
+            attempted = set()
             if ACTIVE.get():
                 ACTIVE.get().reserve_research = bool(self.p.config.get('research', {}).get('batch_on_auto', False))
-            for row in rows:
-                task = self.p.task(row['id'])
-                data = self.load(row['id'])
-                self.recover_dependency_setup(row['id'], data)
-                if data['stage'] == 'FAILED':
-                    continue
-                if (data['stage'] in ('ISSUE', 'PUBLISH') and data.get('publication_hold') == 'external_writes_disabled'
-                        and self.p.allow_external_writes is not True):
-                    continue
-                if (self.p.config.get('research', {}).get('batch_on_auto', False) and task['source'] == 'hunt'
-                        and not data.get('research', {}).get('approved')):
-                    continue
-                candidate = self.db.execute('SELECT queue FROM research_candidates WHERE task=?', (row['id'],)).fetchone()
-                lane = task_lane(task, data, candidate['queue'] if candidate else None)
-                from failures import retry_ready
-                if not retry_ready(data, data['stage']) or not budget.admit(row['id'], lane):
-                    continue
-                if lane != 'maintenance':
-                    (self.p.research_turn if lane == 'research' else self.p.delivery_turn)(task['repo'])
-                try:
-                    if ACTIVE.get():
-                        ACTIVE.get().remaining()
-                    self.advance(row['id'])
-                except DeliveryBudgetExhausted:
-                    break
+            self.dispatch_candidates(rows, budget, attempted)
             if ACTIVE.get():
                 ACTIVE.get().reserve_research = False
             if self.options.get('weekly_hunts'):
@@ -1201,26 +1303,47 @@ class Autonomous:
                         continue  # Preserve weekly IDs generated by older research prompts.
                     self.p.hunt(repo, 'Prioritize valuable features across multiple harnesses using official code, tests, designs and user feedback. Research features first, then performance, security, UX and reliability; verify implementation, project scope and duplicates. Research batch ' + week)
             if self.p.config.get('research', {}).get('batch_on_auto', False):
-                self.research_batch(locked=True)
+                discovery_limit = self.p.config.get('research', {}).get('source_discovery_per_run', 0)
+                if type(discovery_limit) is not int or not 0 <= discovery_limit <= 2:
+                    raise ValueError('research.source_discovery_per_run must be 0..2')
+                preferred = []
+                if discovery_limit:
+                    from source_discovery import register_scopes
+                    preferred = register_scopes(self, discovery_limit)
+                researched = self.research_batch(locked=True, preferred_task_ids=preferred)
+                self.handoff_research(researched, budget, attempted)
 
     @observed('research_batch')
-    def research_batch(self, locked=False):
+    def research_batch(self, locked=False, preferred_task_ids=()):
         """Only collect/review local proposals; never call advance or publication methods."""
         if not locked:
             self.p.recover_locks()
             with self.p.lock('autonomous'):
-                return self.research_batch(locked=True)
+                return self.research_batch(locked=True, preferred_task_ids=preferred_task_ids)
         count = self.p.config.get('research', {}).get('candidates_per_run', 3)
         if type(count) is not int or not 1 <= count <= 10:
             raise ValueError('research.candidates_per_run must be 1..10')
-        rows = self.db.execute("SELECT id,repo FROM tasks WHERE source='hunt' AND state IN ('DISCOVERED','PLAN') ORDER BY score DESC,id").fetchall()
+        source_limit = self.p.config.get('research', {}).get('source_discovery_per_run', 0)
+        if type(source_limit) is not int or not 0 <= source_limit <= 2:
+            raise ValueError('research.source_discovery_per_run must be 0..2')
+        rows = self.db.execute("SELECT id,repo,payload FROM tasks WHERE source='hunt' AND state IN ('DISCOVERED','PLAN') ORDER BY score DESC,id").fetchall()
         completed = []
+        source_attempts = 0
         from repository_catalog import research_pool
         pool = research_pool(self.p)
         ordered = self.p.fair_candidates(rows, repositories=pool)
         included = {r['id'] for r in ordered}
         ordered += [r for r in rows if r['id'] not in included and r['repo'] in pool]
+        # Source discovery shares this batch's total candidate quota. Only
+        # already eligible queued tasks can be promoted, at most two per run.
+        preferred = set(list(dict.fromkeys(preferred_task_ids))[:2])
+        ordered.sort(key=lambda row: row['id'] not in preferred)
         for row in ordered:
+            if ACTIVE.get() and row['id'] in ACTIVE.get().paused_tasks:
+                continue
+            source_scope = isinstance(json.loads(row['payload']).get('source_discovery'), dict)
+            if source_scope and source_attempts >= source_limit:
+                continue
             data = self.load(row['id'])
             from failures import retry_ready, record_failure
             channel = self.p.config.get('research', {}).get('model_channel', 'opencode')
@@ -1237,9 +1360,18 @@ class Autonomous:
                 budget.limits['research'] = count
             if budget and not budget.admit(row['id'], 'research'):
                 break
+            if source_scope:
+                source_attempts += 1
             self.p.research_turn(row['repo'])
             try:
                 self.research(row['id'], data)
+            except TaskBudgetExhausted as error:
+                if ACTIVE.get():
+                    ACTIVE.get().paused_tasks.add(row['id'])
+                data = self.load(row['id'])
+                data['stop_reason'] = str(error)
+                self.store(row['id'], data)
+                self.p.event(row['id'], 'Task budget pause: ' + str(error))
             except BudgetExhausted:
                 raise
             except ContributionPaused:

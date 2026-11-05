@@ -13,6 +13,7 @@ CATEGORIES = ('context_history', 'session_recovery', 'tools', 'permissions_sandb
               'terminal_observability', 'plugins_configuration', 'security_publication')
 STATUSES = ('implemented', 'partial', 'not_found', 'unknown')
 QUEUES = ('READY_TO_IMPLEMENT', 'NEEDS_MAINTAINER_CONFIRMATION', 'RESEARCH_ONLY', 'PAUSED_POLICY')
+LOCAL_FIX_CATEGORIES = ('bug', 'tests', 'ux', 'reliability', 'performance')
 
 
 def evidence_catalog(packet):
@@ -151,6 +152,41 @@ def build(answer, task, packet):
             'contribution_path': 'research_only', 'created_at': stamp, 'updated_at': stamp}
 
 
+def local_fix_evidence(matrix):
+    """Require grounded target scope before exempting a local fix from peer comparison.
+
+    Matrix quotes have already been checked against pinned content by build().
+    This is research admission only: review must establish the proposed defect's
+    value, and the existing reproduction/patch checks still run afterwards.
+    """
+    repo, sha = matrix.get('target_repo'), matrix.get('target_sha')
+    target = matrix.get('feature_status', {}).get(repo, {})
+    if (not isinstance(sha, str) or not re.fullmatch(r'[a-f0-9]{40}', sha)
+            or target.get('sha') != sha
+            or target.get('status') not in ('implemented', 'partial', 'not_found')):
+        return False
+    for field in ('user_scenario', 'gap_analysis'):
+        if not isinstance(matrix.get(field), str) or not matrix[field].strip():
+            return False
+    for field in ('affected_files', 'implementation_plan', 'validation_plan'):
+        values = matrix.get(field)
+        if (not isinstance(values, list) or not 1 <= len(values) <= 20
+                or any(not isinstance(value, str) or not value.strip() for value in values)):
+            return False
+    for path in matrix['affected_files']:
+        if (PurePosixPath(path).is_absolute() or '..' in PurePosixPath(path).parts
+                or any(character in path for character in ('\\', ':', '*', '?', '<', '>', '\n', '\r'))):
+            return False
+    scope = target.get('checked_paths', [])
+    return isinstance(scope, list) and any(
+        isinstance(item, dict) and item.get('repo') == repo and item.get('sha') == sha
+        and isinstance(item.get('path'), str) and item['path'] in scope
+        and file_type(item['path']) in ('source', 'test')
+        and isinstance(item.get('quote'), str) and bool(item['quote'].strip())
+        for item in target.get('evidence', [])
+    )
+
+
 def route(answer, matrix, *, reviewed=False, duplicate_clear=False, maintainer=False, policy=None, proactive=False):
     policy = policy or {}
     if answer.get('category') == 'security' or answer.get('decision') != 'candidate':
@@ -167,10 +203,14 @@ def route(answer, matrix, *, reviewed=False, duplicate_clear=False, maintainer=F
     if not reviewed or not duplicate_clear:
         return 'RESEARCH_ONLY', 0, 'review_or_duplicate_gate_pending'
     if matrix:
-        target = matrix['feature_status'][matrix['target_repo']]['status']
-        peers = [v for k, v in matrix['feature_status'].items() if k != matrix['target_repo']]
-        if len(peers) < 3 or target not in ('not_found', 'partial') or not any(p['status'] == 'implemented' for p in peers):
-            return 'RESEARCH_ONLY', 0, 'insufficient_gap_or_peer_evidence'
+        if answer.get('category') in LOCAL_FIX_CATEGORIES:
+            if not local_fix_evidence(matrix):
+                return 'RESEARCH_ONLY', 0, 'insufficient_target_fix_evidence'
+        else:
+            target = matrix['feature_status'][matrix['target_repo']]['status']
+            peers = [v for k, v in matrix['feature_status'].items() if k != matrix['target_repo']]
+            if len(peers) < 3 or target not in ('not_found', 'partial') or not any(p['status'] == 'implemented' for p in peers):
+                return 'RESEARCH_ONLY', 0, 'insufficient_gap_or_peer_evidence'
     # Model value prose is retained for review; model numerical scores never determine admission.
     priority = 60 + (10 if answer['risk'] == 'low' else 0)
     discussion = ((answer['category'] == 'feature' or answer['risk'] != 'low') and not proactive

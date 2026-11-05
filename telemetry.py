@@ -26,6 +26,10 @@ class DeliveryBudgetExhausted(BudgetExhausted):
     """Yield the remaining reserved budget to research, without raising total caps."""
 
 
+class TaskBudgetExhausted(BudgetExhausted):
+    """Pause one task while other tasks may use the remaining run budget."""
+
+
 def utc():
     return dt.datetime.now(dt.timezone.utc).isoformat()
 
@@ -108,6 +112,7 @@ class Run:
         self.call_id = None
         self.task = None
         self.task_elapsed = {}
+        self.paused_tasks = set()
         self.task_active_since = self.start
         with self.db:
             self.db.execute('INSERT INTO runs(run_id,entry,started,outcome,owner_pid) VALUES (?,?,?,?,?)',
@@ -129,22 +134,34 @@ class Run:
 
     def remaining(self):
         current = time.monotonic()
+        daily = self.db.execute('SELECT coalesce(sum(elapsed),0) FROM runs WHERE started>=? AND run_id!=?',
+                                (self.started[:10], self.id)).fetchone()[0]
+        global_remaining = min(self.start + self.options.get('run_seconds', 5400) - current,
+                               self.options.get('daily_seconds', 21600) - daily - (current - self.start))
+        if global_remaining <= 0:
+            self.stop('time_budget_exhausted')
+        limits = [global_remaining]
+        if self.task:
+            spent = self.task_elapsed.get(self.task, 0) + current - self.task_active_since
+            task_remaining = self.options.get('task_seconds', 3600) - spent
+            if task_remaining <= 0:
+                self.paused_tasks.add(self.task)
+                self.count('task_budget_pauses')
+                raise TaskBudgetExhausted('task_time_budget_exhausted')
+            limits.append(task_remaining)
+        stage_remaining = min(self.deadlines, default=float('inf')) - current
+        if stage_remaining <= 0:
+            if self.task:
+                self.paused_tasks.add(self.task)
+                self.count('task_budget_pauses')
+                raise TaskBudgetExhausted('task_stage_time_budget_exhausted')
+            self.stop('time_budget_exhausted')
+        limits.append(stage_remaining)
         if self.reserve_research:
             reserve = self.p.config.get('research', {}).get('reserve_seconds', 600)
             if current - self.start >= max(0, self.options.get('run_seconds', 5400) - reserve):
                 raise DeliveryBudgetExhausted('delivery_time_share_exhausted')
-        limits = [self.start + self.options.get('run_seconds', 5400) - current]
-        limits += [deadline - current for deadline in self.deadlines]
-        if self.task:
-            spent = self.task_elapsed.get(self.task, 0) + current - self.task_active_since
-            limits.append(self.options.get('task_seconds', 3600) - spent)
-        daily = self.db.execute('SELECT coalesce(sum(elapsed),0) FROM runs WHERE started>=? AND run_id!=?',
-                                (self.started[:10], self.id)).fetchone()[0]
-        limits.append(self.options.get('daily_seconds', 21600) - daily - (current - self.start))
-        remaining = min(limits)
-        if remaining <= 0:
-            self.stop('time_budget_exhausted')
-        return remaining
+        return min(limits)
 
     def switch_task(self, task):
         if task == self.task:
@@ -162,8 +179,8 @@ class Run:
             if used >= max(0, self.options.get('run_model_calls', 16) - reserve):
                 raise DeliveryBudgetExhausted('delivery_model_share_exhausted')
         checks = [('run_model_calls', 16, 'run_id=?', (self.id,)),
-                  ('task_model_calls', 40, 'task=?', (task,)),
-                  ('daily_model_calls', None, 'started>=?', (self.started[:10],))]
+                  ('daily_model_calls', None, 'started>=?', (self.started[:10],)),
+                  ('task_model_calls', 40, 'task=?', (task,))]
         # Reserve before launching, including failed/interrupted calls. A crash cannot refund it.
         with self.db:
             self.db.execute('BEGIN IMMEDIATE')
@@ -174,6 +191,10 @@ class Run:
                 count = self.db.execute('SELECT count(*) FROM model_calls WHERE ' + where, params).fetchone()[0]
                 if count >= limit:
                     self.db.rollback()
+                    if key == 'task_model_calls':
+                        self.paused_tasks.add(task)
+                        self.count('task_budget_pauses')
+                        raise TaskBudgetExhausted('task_model_calls_exhausted')
                     self.stop(key + '_exhausted')
             call_id = uuid.uuid4().hex
             self.db.execute('INSERT INTO model_calls(call_id,run_id,task,purpose,model,channel,started,outcome) '
@@ -209,6 +230,8 @@ def run(pipeline, entry):
 
 
 def classify(error):
+    if isinstance(error, TaskBudgetExhausted):
+        return 'task_budget_exhausted'
     if isinstance(error, BudgetExhausted):
         return 'budget_exhausted'
     if isinstance(error, subprocess.TimeoutExpired):
@@ -244,8 +267,9 @@ def stage(name, task=None):
         current.remaining()
     except BaseException as error:
         outcome, reason = classify(error), str(error) if isinstance(error, BudgetExhausted) else type(error).__name__
-        current.outcome = outcome
-        current.reason = current.reason or reason
+        if not isinstance(error, TaskBudgetExhausted):
+            current.outcome = outcome
+            current.reason = current.reason or reason
         raise
     finally:
         with current.db:
@@ -349,7 +373,9 @@ def timed_command(function):
         except subprocess.TimeoutExpired:
             current.count('timeouts')
             if remaining <= requested:
-                current.stop('time_budget_exhausted')
+                # Re-check which deadline actually expired. A single task or
+                # stage limit must not turn into whole-run exhaustion.
+                current.remaining()
             raise
     return wrapper
 

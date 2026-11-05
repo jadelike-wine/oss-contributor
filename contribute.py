@@ -667,16 +667,30 @@ class Pipeline:
             if task["workspace"]:
                 if not Path(task["workspace"]).is_dir():
                     raise RuntimeError("Recorded workspace is missing")
+                if read_only and json.loads(task['payload']).get('source_discovery'):
+                    from source_discovery import pinned_scope
+                    sha = pinned_scope(self, task)
+                    actual = command(['git', 'rev-parse', 'HEAD'], cwd=task['workspace']).strip()
+                    if actual != sha:
+                        raise RuntimeError('Source research workspace differs from registered fixed SHA')
+                    if command(['git', 'status', '--porcelain'], cwd=task['workspace']).strip():
+                        raise RuntimeError('Source research workspace contains local changes')
                 return task["workspace"]
             repo = repo_name(task["repo"])
             base = self.root / "workspaces" / repo.replace("/", "--")
             base.parent.mkdir(exist_ok=True)
-            if not base.exists():
-                command(["git", "clone", "--filter=blob:none", "--no-checkout", f"https://github.com/{repo}.git", str(base)], timeout=self.config.get('timeouts', {}).get('git_seconds', 600), started=lambda pid: self.track_process('prepare', pid))
-            meta = gh("api", f"repos/{repo}")
-            ref = "refs/remotes/origin/" + meta["default_branch"]
-            command(["git", "fetch", "origin", f"+refs/heads/{meta['default_branch']}:{ref}"], cwd=base, timeout=self.config.get('timeouts', {}).get('git_seconds', 600), started=lambda pid: self.track_process('prepare', pid))
-            sha = command(["git", "rev-parse", ref], cwd=base).strip()
+            if json.loads(task['payload']).get('source_discovery'):
+                from source_discovery import pinned_scope
+                sha = pinned_scope(self, task)
+                if not base.is_dir():
+                    raise RuntimeError('Registered source discovery clone is missing')
+            else:
+                if not base.exists():
+                    command(["git", "clone", "--filter=blob:none", "--no-checkout", f"https://github.com/{repo}.git", str(base)], timeout=self.config.get('timeouts', {}).get('git_seconds', 600), started=lambda pid: self.track_process('prepare', pid))
+                meta = gh("api", f"repos/{repo}")
+                ref = "refs/remotes/origin/" + meta["default_branch"]
+                command(["git", "fetch", "origin", f"+refs/heads/{meta['default_branch']}:{ref}"], cwd=base, timeout=self.config.get('timeouts', {}).get('git_seconds', 600), started=lambda pid: self.track_process('prepare', pid))
+                sha = command(["git", "rev-parse", ref], cwd=base).strip()
             work = self.root / "workspaces" / task_id
             if work.exists():
                 actual = command(['git', 'rev-parse', 'HEAD'], cwd=work).strip()
@@ -758,7 +772,9 @@ class Pipeline:
                 except (RuntimeError, OSError):
                     shutil.rmtree(entry, ignore_errors=True)
                 with self.db:
-                    self.db.execute('UPDATE tasks SET workspace=NULL,base_sha=NULL WHERE id=? AND workspace=?',
+                    self.db.execute("UPDATE tasks SET workspace=NULL,base_sha=CASE WHEN "
+                                    "json_type(payload,'$.source_discovery')='object' THEN base_sha ELSE NULL END "
+                                    'WHERE id=? AND workspace=?',
                                     (entry.name, str(entry)))
             removed.append({'name': entry.name, 'bytes': size, 'size_capped': capped})
             freed += size

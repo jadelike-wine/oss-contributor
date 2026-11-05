@@ -9,8 +9,8 @@
 ```text
 核验研究目录（只读） + 核验原有贡献白名单
   → 优先推进 PR 有效反馈、待提交补丁、已复现任务和研究通过的候选
-  → 有界串行：当前实现最多 6 个任务、维护最多 6 个任务、研究最多 5 个候选
-  → 目标基线 SHA + 3–5 个不同 peer 的固定 SHA
+  → 有界串行：当前实现最多 8 个任务、维护最多 6 个任务、研究最多 8 个候选
+  → 目标基线 SHA；跨项目功能研究另采集 3–5 个不同 peer 的固定 SHA
   → 有界代码/测试/文档采集 + 精确引文校验
   → 功能矩阵 + 架构迁移分析 + 定向查重 + 审查
   → READY_TO_IMPLEMENT / NEEDS_MAINTAINER_CONFIRMATION / RESEARCH_ONLY / PAUSED_POLICY
@@ -56,7 +56,7 @@ python -X utf8 catalog_sweep.py --output runs/catalog-sweep --analyze-only --rep
 python -X utf8 contribute.py hunt SWE-agent/mini-swe-agent "Compare session recovery and checkpoints"
 python -X utf8 contribute.py analyze <上一步任务ID>
 
-# 研究已有 hunt 队列，当前最多 5 个候选；不会调用发布或实现入口
+# 研究已有 hunt 队列，当前最多 8 个候选；不会调用发布或实现入口
 python -X utf8 contribute.py research-batch
 
 # 默认禁止外部写入；auto/tick 会推进本地实现及研究
@@ -78,7 +78,7 @@ python -X utf8 contribute.py clean-workspaces --all
 
 `scan` 和 `tick` 保留完整的已核验研究目录范围，不受 `peer_repositories` 同行子集或模型研究候选额度的限制。`tick` 先观察已有 PR，再推进已有任务和有预留份额的研究，最后扫描，避免模型耗尽预算后漏掉 PR 跟进；各阶段仍共享同一运行预算。当前每轮最多实际请求 12 个尚未命中缓存的仓库，按持久游标续扫。单独 `scan` 不受该 12 项上限限制，仍遵守运行时间预算。两者都可复用当前配置的 6 小时成功扫描缓存；将 `scanning.cache_seconds` 设为 `0` 可关闭复用。缓存命中不延长原观察时间。
 
-扫描仍排除过期、暂停、拒绝、退役、归档、禁用及未授予研究权限的目录项。没有目录文件的旧配置继续使用原白名单；已有目录却没有合格项时明确报错，提示 `catalog --verify`。单独 `scan` 无需核验贡献看板权限；实现和发布继续受贡献政策门禁约束。仓库健康检查另使用 `repository_checks.cache_seconds`，当前也是 6 小时；Issue/PR 发布前强制实时检查目标仓库与贡献规则，缓存不能授予发布资格。
+扫描仍排除过期、暂停、拒绝、退役、归档、禁用及未授予研究权限的目录项。没有目录文件的旧配置继续使用原白名单；已有目录却没有合格项时明确报错，提示 `catalog --verify`。单独 `scan` 无需核验贡献看板权限；实现和发布继续受贡献政策门禁约束。仓库健康检查另使用 `repository_checks.cache_seconds`，当前为 24 小时；Issue/PR 发布前强制实时检查目标仓库与贡献规则，缓存不能授予发布资格。
 
 每轮 `runs/scan-summary.json` 保存完整计划范围、全部仓库、逐仓库 Issue / PR 数及总数。实际采集标为 `scanned`，有效复用标为 `cached`，网络失败记为 `unknown`，尚未访问的项保持 `not_scanned`。开始新轮前先保留所有有效旧检查点，中断后继续；失败项重新尝试，不能把未知当空结果。统计分别报告实际扫描和缓存数，进程正常退出也不表示全目录都已成功采集。
 
@@ -89,6 +89,8 @@ python -X utf8 contribute.py clean-workspaces --all
 `catalog_sweep.py` 默认遍历核验目录中的全部研究仓库，保存完整 `scope.json` 和 `results.json`，不会把缺失项当作无问题。每仓库最多扫描 100 个开放 Issue、200 个开放 PR，并有界读取固定 SHA 的规则、源码和测试；模型分析不是运行目标项目的测试。成功采集与分诊可恢复，失败保留 `unknown` 和诊断；原有模型预算仍生效。此入口不会自动实现或发布，静态候选的政策判断仅供后续核对，正式贡献仍须读取完整上游规则、查重、复现和验证。实际运行及上游贡献见 [2026-10-18 全目录运行记录](docs/catalog-sweep-2026-10-18.md)。
 
 `hunt` 和只读研究入口通过已核验研究目录准入，不先探测全部贡献仓库的看板权限。`research-batch` 不自行创建新任务；`auto/tick` 优先推进已有任务，再注册或复用调查并批量研究。实现、维护和研究有独立的任务额度，同一任务跨阶段不重复占用同一类额度。研究与交付分别持久轮转，研究池包括只允许研究的仓库；已有工作优先不改写研究游标。
+
+`auto/tick` 在研究后会再次检查本轮新通过审查、查重且进入 `READY_TO_IMPLEMENT` 的候选，在剩余实现、调用和时间额度内继续正常状态机，不必固定等待六小时。已尝试或已用尽本轮任务预算的候选不会同轮重复派发。政策暂停与已知模型服务熔断在占用实现名额前检查。独立 `research-batch` 仍只研究，不实现或发布。
 
 跨周相同仓库、相同主题的调查复用既有任务，成功研究不因新一周重新调用模型。规范仓库名与 Issue 编号相同的历史任务通过 `task_aliases` 关联，不删除历史；已存在独立 PR 的任务仍保留维护。日历变化或无关默认分支 SHA 变化不是重评依据；相关源码、政策、用户需求或竞争实现出现完整新证据后才应审阅重评，失败采集仍是 unknown。
 
@@ -135,6 +137,12 @@ README 没有提到功能不构成缺失证据；README 声称支持也不能替
 | `PAUSED_POLICY` | 明确禁止自动 Issue（`automated_issue=false`）、本人提交/审查要求（`manual_issue_submission`/`human_pr_review_required`）或高风险人工门槛，暂停自动贡献。模型仅报告 `automated_pr=false` 不再判死——该候选降级为 `NEEDS_MAINTAINER_CONFIRMATION`，经讨论 Issue 等待维护者方向，不会自动实现或发 PR |
 
 数值优先级只在证据与政策门槛通过后产生：可实现候选优先于待确认提案，低风险略优先，功能类别本身不再固定加分。审查要求考虑明确需求、用户价值、范围、独立复现、验证成本、架构适配、候选时效及已有维护者/外部贡献观察；缺失信息保持 unknown，不编造接受概率。原有 Issue 初筛关键词分数只是分诊线索，不能代替证据、查重和政策门禁。高价值功能研究保留在单独研究份额中。
+
+跨项目功能迁移仍要求至少三个 peer 和可验证的功能差距。本地 bug、测试、UX、可靠性及性能修复不以“另一个项目已经实现”为必要条件，但必须具备固定 SHA 的目标源码/测试引文、明确用户场景、缺陷范围和具体验证计划；目标状态 `unknown` 或仅有文档的候选仍不能进入实现。所有候选继续通过查重、审查、上游政策与真实基线复现。旧拒绝记录不会因门槛修正而自动清零或发布。
+
+源码自发现每轮最多占用两个研究名额：从已存在且来源已核验的本地仓库选择一个源码模块和匹配测试，完整读取适用规则，固定到缓存中的 upstream SHA。注册时不 clone/fetch；真正轮到该候选才创建隔离工作区。仓库和模块游标持久保存，以源码、测试和规则内容共同标识研究范围，避免仅因日期或无关提交变化重复研究。规则、源码或测试材料不完整时保持 unknown；该通道不凭空生成跨项目功能对比，也不把“没有收集 Issue”当作查重通过。
+
+实现调用的总结只用于说明，不是发布凭据。若 OpenCode 已明确完整结束、最后文本和终止事件属于同一消息，仅总结不符合 JSON 格式，则保留原始输出和异常记录，将补丁送入正常红绿验证及审查，避免重复实现。缺失结束事件、工具调用残片、服务失败和超时仍失败；规划、查重、审查等结构化决策不适用此恢复。
 
 查重由控制器统一仓库限定，清除模型查询中的仓库名普通词和自带 `repo:`，避免假阴性；记录原始及实际查询。结果超过第一页时控制器自动翻页拉取（每查询最多 100 条），全部命中都经审查后才算完整搜索；超过上限或上游 `incomplete_results` 仍记为不完整，可以依据已读结果拒绝，不能据此放行。功能查重区分已有实现/竞争 PR 和开放的功能请求，已有报告优先复用，不重复开 Issue；竞争实现按下述自己的贡献规则判断，不能把用户需求当作维护者批准。
 
@@ -186,15 +194,16 @@ Goose 的指定看板 `Ready`、`manual_issue_submission`、`human_pr_review_req
 | 配置 | 默认值/约束 |
 | --- | --- |
 | `automation.scheduled_external_writes` | 当前 `true`，用户已授权持续调度发布；缺省/`false` 关闭，仅由 `hermes_tick.py` 转换为全局发布参数 |
-| `automation.implementation_tasks_per_tick` | 当前 6；缺省沿用 `max_tasks_per_tick`，有界串行推进不同任务 |
+| `automation.implementation_tasks_per_tick` | 当前 8；缺省沿用 `max_tasks_per_tick`，有界串行推进不同任务 |
 | `automation.maintenance_tasks_per_tick` | 当前 6；独立于实现/研究额度，PR 修复进入代码阶段后还需实现名额 |
 | `automation.max_infrastructure_attempts` | 默认/当前 3；基础设施故障与质量失败分别计数 |
 | `automation.infrastructure_cooldown_seconds` | 默认/当前 300 秒，指数退避，每次最多 3,600 秒；耗尽后停止自动重试 |
 | `automation.verification_max_age_seconds` | 缺省 86,400 秒；发布前验证收据超时须重跑红绿检查及审查 |
 | `scanning.repositories_per_tick` | 当前 12；每轮实际网络采集上限，保留完整目录和持久扫描游标 |
-| `scanning.cache_seconds` / `repository_checks.cache_seconds` | 当前均为 21,600 秒；旧配置缺省 0，设 0 禁用对应缓存 |
+| `scanning.cache_seconds` / `repository_checks.cache_seconds` | 当前扫描 21,600 秒、成功仓库健康检查 86,400 秒；发布前仍实时核验目标规则；旧配置缺省 0，设 0 禁用对应缓存 |
 | `research.model_channel` | `opencode` 或 `hermes`；缺省 OpenCode，当前配置 Hermes；不静默切换 |
-| `research.candidates_per_run` | 缺省 3，当前 5，范围 1–10 |
+| `research.candidates_per_run` | 缺省 3，当前 8，范围 1–10；候选上限不是 Issue/PR 发布指标 |
+| `research.source_discovery_per_run` | 缺省 0，当前 2，范围 0–2；源码自发现占上述研究额度，使用已存在的固定版本源码，不额外扩大总额度 |
 | `research.reserve_model_calls` / `research.reserve_seconds` | 缺省预留 2 次调用和 600 秒给研究；从单轮既有总额度内分配，不增加总预算 |
 | `research.peers_per_candidate` | 3，范围 3–5 |
 | `research.files_per_peer` | 4，范围 2–6 |
@@ -206,17 +215,20 @@ Goose 的指定看板 `Ready`、`manual_issue_submission`、`human_pr_review_req
 | `timeouts.command_seconds` | 普通命令 180 秒 |
 | `timeouts.git_seconds` | clone/fetch/worktree/push 600 秒 |
 | `timeouts.model_seconds` / `test_seconds` | 当前 1,500 秒，缺省回退 `timeout_seconds` |
+| `timeouts.research_model_seconds` | 当前 240 秒；仅研究生成和结构纠错，其他规划、实现、审查超时不变；缺省沿用模型超时 |
 | `timeouts.stage_seconds` | 单阶段 2,400 秒；auto/task 等包含多个阶段的观测跨度不另加阶段截止线 |
 | `timeouts.remote_ci_seconds` | 现有专用远端 CI 轮询最多 1,800 秒，再受运行预算限制 |
 | `budgets.run_model_calls` | 缺省 16，当前 32 次模型入口调用；本轮未增加该总预算，审查计入 |
 | `budgets.task_model_calls` | 单任务跨轮累计最多 40 次入口调用 |
 | `budgets.daily_model_calls` | 默认 `null`，每日模型调用次数不限；设置数字可恢复上限 |
-| `budgets.run_seconds` / `task_seconds` | 单轮 5,400 秒；单任务本轮 3,600 秒 |
+| `budgets.run_seconds` / `task_seconds` | 单轮 5,400 秒；单任务本轮 1,800 秒，耗尽后保存进度并让其他任务继续 |
 | `budgets.daily_seconds` | UTC 日累计已记录运行时间最多 21,600 秒 |
 | `budgets.run_cost_usd` / `daily_cost_usd` | 默认 null；当前无可信账单数据，金额限制不执行，依靠调用/时间限制 |
 | `review_model` | `provider/model`，缺省沿用实现模型，默认没有切换供应商或模型 |
 
 所有受管命令都会被当前阶段、任务、运行及日预算的剩余时间进一步截短。达到预算后保留阶段、研究 checkpoint 和已预留调用，下一轮从保存处继续，不消耗普通失败重试。单任务累计调用耗尽不会自动清零，需要检查原因，不能通过提高预算掩盖重复失败。执行耗时使用单调时钟，追踪时间使用 UTC。
+
+单任务时间、任务内阶段时间和单任务累计调用上限使用独立的任务暂停结果，继续调度其他任务；整轮或当日时间/调用上限仍停止整轮。以上扩展没有增加当前单轮 32 次模型调用、90 分钟或每日 6 小时的总预算。
 
 网络、限流、证书、服务不可用、模型 JSON 格式、超时、证据不足、补丁错误和政策阻塞分别记录。前六类采用独立基础设施计数与有界冷却，不增加候选质量失败次数；证据和补丁问题仍走质量重试路径，政策暂停保持原阶段。模型通道同轮两次传输/服务故障后暂停该通道后续模型阶段，仍允许不依赖模型的本地阶段。不会关闭 TLS 校验或静默切换模型。详见 [恢复和故障处理](docs/conversion-recovery-2026-10-31.md)。
 

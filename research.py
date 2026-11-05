@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from contribute import command, execute, gh, now, save
-from telemetry import BudgetExhausted
+from telemetry import BudgetExhausted, TaskBudgetExhausted
 
 
 CATEGORIES = ('feature', 'performance', 'security', 'ux', 'reliability', 'bug', 'tests')
@@ -182,6 +182,20 @@ def collect(engine, task):
     from telemetry import ACTIVE, BudgetExhausted
     p, options = engine.p, limits(engine.p)
     checkpoint = engine.packet_dir(task['id']) / 'research-context.json'
+    payload = json.loads(task['payload']) if isinstance(task.get('payload'), str) else task.get('payload', {})
+    if payload.get('source_discovery'):
+        from source_discovery import load_packet
+        packet = load_packet(p, task)
+        save(checkpoint, packet)
+        if len(json.dumps(packet, ensure_ascii=False)) > options['context_characters']:
+            raise TaskBudgetExhausted('research_context_characters_exhausted')
+        current = ACTIVE.get()
+        if current:
+            current.count('researched_repositories')
+            from feature_matrix import file_type
+            for path in packet['target']['files']:
+                current.count('files_' + file_type(path))
+        return packet
     packet = {}
     if checkpoint.exists():
         previous = json.loads(checkpoint.read_text(encoding='utf-8'))
@@ -197,7 +211,7 @@ def collect(engine, task):
     def budget():
         nonlocal requests
         if requests >= options['network_requests']:
-            raise BudgetExhausted('research_network_requests_exhausted')
+            raise TaskBudgetExhausted('research_network_requests_exhausted')
         requests += 1
         packet['network_requests'] += 1
         current = ACTIVE.get()
@@ -242,7 +256,7 @@ def collect(engine, task):
             policy_names = list(dict.fromkeys(x for x in policy_names if x in paths))
             while True:
                 if len(policy_names) >= options['target_files']:
-                    raise BudgetExhausted('target_policy_file_budget_exhausted')
+                    raise TaskBudgetExhausted('target_policy_file_budget_exhausted')
                 selected = policy_names + select_paths([x for x in paths if x not in policy_names],
                     focus, options['target_files'] - len(policy_names), matches, preferred)
                 nested = [x for x in paths if x.endswith('/AGENTS.md') and x not in policy_names
@@ -281,7 +295,7 @@ def collect(engine, task):
         from feature_matrix import evidence_catalog
         packet['evidence_sources'] = evidence_catalog(packet)
         if len(json.dumps(packet, ensure_ascii=False)) > options['context_characters']:
-            raise BudgetExhausted('research_context_characters_exhausted')
+            raise TaskBudgetExhausted('research_context_characters_exhausted')
         packet['complete'] = True
         current = ACTIVE.get()
         if current:
@@ -352,7 +366,8 @@ def validate(answer, task, packet):
             item['url'] = f"https://github.com/{item['repo']}/blob/{sha}/{quote(item['path'], safe='/')}"
     if not any(x['repo'] == task['repo'] for x in answer['evidence']):
         raise ValueError('Target implementation evidence required')
-    if answer['category'] == 'feature' and not any(x['repo'] != task['repo'] for x in answer['evidence']):
+    if (answer['category'] == 'feature' and packet.get('mode') != 'source_discovery'
+            and not any(x['repo'] != task['repo'] for x in answer['evidence'])):
         raise ValueError('Feature comparisons require actual peer implementation evidence')
 
 
@@ -408,6 +423,11 @@ def run(engine, task_id, data):
     from contribution_strategy import local_discovery, PRIORITY_GUIDANCE
     if local_discovery(task, data) and not data.get('contribution_origin'):
         data['contribution_origin'] = {'kind': 'local_discovery', 'task': task_id, 'at': now()}
+        payload = json.loads(task['payload']) if isinstance(task.get('payload'), str) else task.get('payload', {})
+        if payload.get('source_discovery'):
+            scope = payload['source_discovery']
+            data['contribution_origin'].update(scope_id=scope['scope_id'], sha=scope['sha'],
+                                               source_paths=scope['source_paths'])
         engine.store(task_id, data)
     proactive = engine.proactive(task_id, data)
     before = p.fingerprint(task['workspace'])
@@ -458,6 +478,16 @@ def run(engine, task_id, data):
         prompt += ('\nEND OF SOURCE DATA. Output schema reminder:\n' + PROMPT +
                    '\nOnly these files were actually read; checked_paths and quotes MUST use this inventory:\n' +
                    json.dumps({s['repo']: list(s['files']) for s in [packet['target'], *packet['peers']]}))
+    if packet.get('mode') == 'source_discovery':
+        prompt += ('\nSOURCE DISCOVERY MODE: this real tracked module and nearby tests were selected independently '
+                   'of upstream issues. Find at most ONE concrete local bug, reliability, performance, UX or test '
+                   'defect with an actual trigger, observed code behavior, expected behavior and a cheap falsifiable '
+                   'regression oracle. Merely adding coverage, style cleanup or hypothetical missing features is '
+                   'not a demonstrated defect. Return none when the supplied scope is insufficient. No tests have '
+                   'run yet. No peers were collected; do not invent comparisons. The feature matrix covers the '
+                   'target only; migration_analysis describes the local adaptation. A feature idea needs separate '
+                   'cross-project research and cannot enter implementation from this packet. Upstream issue/PR '
+                   'absence has not been established; the controller performs duplicate searches after a candidate.')
     if data.get('research_feedback'):
         prompt += ('\nRevise the proposal to address this prior review. Treat it as feedback, not new source evidence. '
                    'When existing_issue is supplied, this proposal continues that discussion, never files a new issue. '
@@ -516,6 +546,12 @@ def run(engine, task_id, data):
         data['reason'] = answer['reason']
         engine.move(task_id, data, 'SKIPPED')
         return result
+    if packet.get('mode') == 'source_discovery':
+        from feature_matrix import LOCAL_FIX_CATEGORIES
+        if answer.get('category') not in LOCAL_FIX_CATEGORIES:
+            data['reason'] = 'Source-only feature idea requires separate cross-project evidence and review'
+            engine.move(task_id, data, 'SKIPPED')
+            return result  # Existing RESEARCH_ONLY matrix and opportunity retain the idea.
     candidate = {'plan': answer, 'contribution_origin': data.get('contribution_origin', {})}
     # A validated model result is checkpointed before duplicate/reviewer calls.
     data['research_pending'] = result
@@ -530,7 +566,8 @@ def run(engine, task_id, data):
     for row in engine.db.execute('SELECT task,queue,matrix FROM research_candidates WHERE lower(repo)=lower(?) AND task!=? ORDER BY updated_at DESC LIMIT 20', (task['repo'], task_id)):
         prior = json.loads(row['matrix'])
         local_candidates.append({'task': row['task'], 'queue': row['queue'],
-            **{key: prior.get(key) for key in ('feature_key', 'name', 'user_scenario', 'gap', 'category')}})
+            **{key: prior.get(key) for key in ('feature_key', 'feature_name', 'user_scenario',
+                                              'gap_analysis', 'affected_files', 'category')}})
     gate = engine.judge(task_id, 'research-review', {
         'gate': 'Is this valuable, non-duplicate, grounded in actual implementation and project scope? '
                 'Check policy evidence, feature absence claims, concrete demand, bounded scope, reproduction '
@@ -605,7 +642,7 @@ def needs_discussion(opportunity, *, proactive=False):
 
 def research_answer(engine, task_id, purpose, prompt):
     if len(prompt) > limits(engine.p)['context_characters'] + 12000:
-        raise BudgetExhausted('research_prompt_characters_exhausted')
+        raise TaskBudgetExhausted('research_prompt_characters_exhausted')
     channel = engine.p.config.get('research', {}).get('model_channel', 'opencode')
     if channel == 'opencode':
         return engine.model(task_id, purpose, prompt)

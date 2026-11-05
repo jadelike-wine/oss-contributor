@@ -30,7 +30,12 @@ def category(error):
         return 'service_unavailable'
     if isinstance(error, subprocess.TimeoutExpired):
         return 'timeout'
-    if isinstance(error, (ConnectionError, TimeoutError)) or any(x in text for x in ('connection reset', 'connection refused', 'timed out', 'could not resolve', 'network is unreachable', 'network unavailable', 'http/2 stream', 'econnreset', ': eof', 'unexpected eof')):
+    # Package resolution conflicts need a corrected setup recipe. Repeating the
+    # same install as a network retry can exhaust recovery without changing it.
+    if any(x in text for x in ('eresolve', 'could not resolve dependency', 'conflicting peer dependency',
+                               'unable to resolve dependency tree', 'resolutionimpossible')):
+        return 'dependency_conflict'
+    if isinstance(error, (ConnectionError, TimeoutError)) or any(x in text for x in ('connection reset', 'connection refused', 'timed out', 'could not resolve host', 'could not resolve hostname', 'could not resolve proxy', 'name or service not known', 'temporary failure in name resolution', 'getaddrinfo', 'enotfound', 'eai_again', 'network is unreachable', 'network unavailable', 'http/2 stream', 'econnreset', ': eof', 'unexpected eof')):
         return 'network'
     if any(x in text for x in ('evidence', 'quote', 'duplicate search incomplete', 'unread path', 'insufficient')):
         return 'insufficient_evidence'
@@ -44,6 +49,35 @@ def retry_ready(data, stage, at=None):
     if not record.get('retry_after'):
         return True
     return (at or dt.datetime.now(dt.timezone.utc)) >= dt.datetime.fromisoformat(record['retry_after'])
+
+
+def recover_dependency_setup(data, options, at=None):
+    """Reclassify only the historical npm setup/DNS collision, retaining evidence.
+
+    Repeating the same install was not three different recipe failures. Charge
+    one failed recipe and re-plan within the existing stage-attempt limit.
+    Service outages and all unrelated exhausted retries remain untouched.
+    """
+    stage = data.get('stage')
+    record = data.get('infrastructure_failures', {}).get(stage, {})
+    error = data.get('last_error', '')
+    if (stage != 'REPRODUCE' or record.get('category') != 'network'
+            or not error.startswith('Baseline setup failed; not a reproduction:')
+            or category(RuntimeError(error)) != 'dependency_conflict'):
+        return False
+    at = at or dt.datetime.now(dt.timezone.utc)
+    data.setdefault('failure_reclassifications', []).append({
+        'at': at.isoformat(), 'stage': stage, 'previous': dict(record),
+        'error': error, 'category': 'dependency_conflict',
+        'reason': 'Dependency resolution was incorrectly classified as DNS failure',
+    })
+    del data['infrastructure_failures'][stage]
+    count = data.setdefault('attempts', {}).get(stage, 0) + 1
+    data['attempts'][stage] = count
+    data['stage'] = 'FAILED' if count >= options.get('max_stage_attempts', 3) else 'PLAN'
+    data['failure_category'] = 'dependency_conflict'
+    data['stop_reason'] = 'dependency_recipe_attempts_exhausted' if data['stage'] == 'FAILED' else 'dependency_recipe_replan'
+    return True
 
 
 def record_failure(data, stage, error, options, at=None):

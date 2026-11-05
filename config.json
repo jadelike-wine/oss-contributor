@@ -154,6 +154,7 @@
   "opencode_executable": "opencode",
   "automation": {
     "enabled": true,
+    "scheduled_external_writes": true,
     "max_tasks_per_tick": 6,
     "max_stage_attempts": 3,
     "weekly_hunts": true,

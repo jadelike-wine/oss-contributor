@@ -45,17 +45,18 @@ def focus_terms(focus):
     return sorted(w for w in words if len(w) > 3)
 
 
-def select_paths(paths, focus, count, content_matches=()):
+def select_paths(paths, focus, count, content_matches=(), preferred_paths=()):
     from feature_matrix import file_type
     words = focus_terms(focus)
     matches = set(content_matches)
+    preferred = set(preferred_paths)
     def relevance(path):
         runtime = bool(re.search(r'(^|/)(src|lib|core|agents?)/', path.lower()))
         housekeeping = path.startswith(('.github/', 'scripts/', 'docs/', 'examples/'))
         helper = Path(path).name in ('__init__.py', '__main__.py', 'conftest.py')
         tokens = re.findall(r'[a-z0-9]+', re.sub(r'([a-z])([A-Z])', r'\1_\2', path).lower())
         score = sum(any(t.startswith(w) for t in tokens) for w in words) + 3 * (path in matches)
-        return (helper, -score, housekeeping, not runtime, len(path), path)
+        return (path not in preferred, helper, -score, housekeeping, not runtime, len(path), path)
     ordered = sorted((p for p in paths if file_type(p) != 'configuration'), key=relevance)
     selected = []
     # Reserve coverage for executable evidence and documentation, then fill by relevance.
@@ -64,6 +65,38 @@ def select_paths(paths, focus, count, content_matches=()):
         if match and len(selected) < count:
             selected.append(match)
     return (selected + [p for p in ordered if p not in selected])[:count]
+
+
+def demand_selection(task, recent, paths):
+    """Use issue text only as bounded search hints, never evidence or instructions."""
+    title = task['title']
+    original = {'focus': title, 'preferred_paths': [], 'basis': 'task focus'}
+    if (task.get('source') != 'hunt' or
+            not title.startswith('Prioritize valuable features across multiple harnesses') or
+            not re.search(r'Research batch \d{4}-W\d{2}', title)):
+        return original
+    from feature_matrix import file_type
+    eligible = {path for path in paths if file_type(path) in ('source', 'test')}
+    candidates = []
+    for item in recent[:20]:
+        if item.get('state') != 'open' or item.get('is_pull_request') or 'pull_request' in item:
+            continue
+        issue_title = str(item.get('title') or '').strip()[:300]
+        if not issue_title or not str(item.get('number', '')).isdigit():
+            continue
+        text = issue_title + '\n' + str(item.get('body') or '')[:2000]
+        references = []
+        for token in re.findall(r'[A-Za-z0-9_./@+\[\]-]+', text):
+            path = token.removeprefix('./')
+            if path in eligible and path not in references:
+                references.append(path)
+        candidates.append({'focus': issue_title, 'preferred_paths': references[:8],
+                           'issue_number': str(item['number']),
+                           'basis': 'untrusted recent open issue discovery hints; not verified demand or approval'})
+    # Keep API recency order within each group; explicit baseline paths give a
+    # firmer scope than a title alone. Later duplicate/policy gates still apply.
+    return next((item for item in candidates if item['preferred_paths']),
+                candidates[0] if candidates else original)
 
 
 def search_target(work, sha, focus, paths):
@@ -180,6 +213,12 @@ def collect(engine, task):
     def persist():
         save(checkpoint, packet)
     try:
+        if 'recent_issues_and_prs' not in packet:
+            packet['recent_issues_and_prs'] = [
+                {**{k: str(item.get(k) or '')[:2000] for k in ('number', 'title', 'body', 'html_url', 'state')},
+                 'is_pull_request': 'pull_request' in item}
+                for item in request('api', f"repos/{task['repo']}/issues?state=all&sort=updated&per_page=20")]
+            persist()
         if 'target' not in packet:
             work = Path(task['workspace'])
             # Read tracked content at the recorded baseline, never mutable/untracked files.
@@ -193,9 +232,11 @@ def collect(engine, task):
             policy_names = [p.contributing_path(task['repo']), 'CONTRIBUTING.md', 'docs/contributing.md',
                             '.github/CONTRIBUTING.md', 'docs/CONTRIBUTING.md', '.github/contributing.md', 'AGENTS.md',
                             'SECURITY.md', '.github/SECURITY.md', 'docs/SECURITY.md']
+            selection = demand_selection(task, packet['recent_issues_and_prs'], paths)
+            focus, preferred = selection['focus'], selection['preferred_paths']
             # Include nested rules applying to selected code paths, within the target read cap.
-            matches = search_target(work, task['base_sha'], task['title'], paths)
-            selected = select_paths(paths, task['title'], options['target_files'], matches)
+            matches = search_target(work, task['base_sha'], focus, paths)
+            selected = select_paths(paths, focus, options['target_files'], matches, preferred)
             policy_names += [x for x in paths if x.endswith('/AGENTS.md') and
                              any(y.startswith(x.rsplit('/', 1)[0] + '/') for y in selected)]
             policy_names = list(dict.fromkeys(x for x in policy_names if x in paths))
@@ -203,7 +244,7 @@ def collect(engine, task):
                 if len(policy_names) >= options['target_files']:
                     raise BudgetExhausted('target_policy_file_budget_exhausted')
                 selected = policy_names + select_paths([x for x in paths if x not in policy_names],
-                    task['title'], options['target_files'] - len(policy_names), matches)
+                    focus, options['target_files'] - len(policy_names), matches, preferred)
                 nested = [x for x in paths if x.endswith('/AGENTS.md') and x not in policy_names
                           and any(y.startswith(x.rsplit('/', 1)[0] + '/') for y in selected)]
                 if not nested:
@@ -213,7 +254,8 @@ def collect(engine, task):
                      for path in selected}
             packet['policy'] = {path: files[path] for path in policy_names}
             packet['target'] = {'repo': task['repo'], 'sha': task['base_sha'], 'files': files, 'checked_paths': selected,
-                                'content_search': {'terms': focus_terms(task['title']), 'matched_paths': matches,
+                                'selection': selection,
+                                'content_search': {'terms': focus_terms(focus), 'matched_paths': matches,
                                                    'scope': 'eligible tracked baseline text; matches are not absence proof'}}
         # Also repair older checkpoints whose diagnostic inventory exceeded the
         # context cap. Preserve all pinned source evidence and peer identities.
@@ -224,17 +266,13 @@ def collect(engine, task):
             if any(s['repo'] == peer and not s.get('error') for s in packet['peers']):
                 continue
             try:
-                source = snapshot(peer, task['title'], options, request, raw)
+                source = snapshot(peer, packet['target'].get('selection', {}).get('focus', task['title']),
+                                  options, request, raw)
             except BudgetExhausted:
                 raise
             except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired, KeyError, TypeError) as error:
                 source = {'repo': peer, 'sha': None, 'files': {}, 'error': type(error).__name__, 'status': 'unknown'}
             packet['peers'] = [s for s in packet['peers'] if s['repo'] != peer] + [source]
-            persist()
-        if 'recent_issues_and_prs' not in packet:
-            packet['recent_issues_and_prs'] = [
-                {k: str(item.get(k) or '')[:2000] for k in ('number', 'title', 'body', 'html_url', 'state')}
-                for item in request('api', f"repos/{task['repo']}/issues?state=all&sort=updated&per_page=20")]
             persist()
         if 'recent_releases' not in packet:
             packet['recent_releases'] = [

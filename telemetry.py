@@ -380,11 +380,61 @@ def metrics(path, limit=10):
         tasks = [dict(r) for r in db.execute('SELECT state,count(*) tasks FROM tasks GROUP BY state')]
         quality = quality_metrics(db, tables)
         return {'runs': runs, 'stage_outcomes_all_time': stages, 'candidate_queues': queues,
-                'task_states': tasks, 'quality_all_time': quality,
+                'task_states': tasks, 'quality_all_time': quality, 'pr_maintenance': maintenance_gaps(db),
                 'cost_status': 'unavailable: adapters do not report reliable billable usage',
                 'cost_caps_enforced': False, 'note': 'Running records without ended are incomplete, never assumed successful. Stage attempts are not unique contributions.'}
     finally:
         db.close()
+
+
+def maintenance_gaps(db):
+    """Report observed open PRs without a live task link; never adopt a patch.
+
+    Followup observations include manually published PRs, whereas automation
+    only knows explicitly registered PR numbers. Keep these scopes separate
+    from the submitted-PR quality metrics and retain observation timestamps.
+    """
+    tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    result = {'open_observed_prs': 0, 'gap_count': 0, 'gaps': [],
+              'scope': 'Last locally observed open PRs; not a fresh upstream check or an automatic repair queue.'}
+    if 'pr_observations' not in tables:
+        return result
+    linked = {}
+    if {'tasks', 'automation'} <= tables:
+        for task, repo, state, raw in db.execute(
+                'SELECT tasks.id,tasks.repo,tasks.state,automation.data '
+                'FROM tasks JOIN automation ON automation.task=tasks.id'):
+            data = json.loads(raw)
+            number = data.get('pr_number')
+            if type(number) is int:
+                linked.setdefault((repo.casefold(), number), []).append(
+                    {'task': task, 'state': state, 'stage': data.get('stage', state)})
+    # Repository spelling may have changed case between old observations.
+    observations = {}
+    for row in db.execute('SELECT repo,number,head_sha,state,ci_state,maintainer_response,observed_at '
+                          'FROM pr_observations ORDER BY observed_at'):
+        observations[(row[0].casefold(), row[1])] = row
+    from scheduling import TERMINAL
+    for key, (repo, number, sha, state, ci, response, observed_at) in sorted(observations.items()):
+        if state != 'OPEN':
+            continue
+        result['open_observed_prs'] += 1
+        tasks = linked.get(key, [])
+        if any(task['state'] not in TERMINAL and task['stage'] not in TERMINAL for task in tasks):
+            continue
+        signals = []
+        if ci in ('failed', 'approval_required', 'unknown'):
+            signals.append('ci_' + ci)
+        if response:
+            signals.append('maintainer_response_observed')
+        result['gaps'].append({'repo': repo, 'number': number,
+                              'url': f'https://github.com/{repo}/pull/{number}',
+                              'head_sha': sha, 'ci_state': ci, 'observed_at': observed_at,
+                              'reason': 'inactive_linked_task' if tasks else 'untracked_pr',
+                              'linked_tasks': tasks, 'signals': signals,
+                              'next_step': 'Verify ownership, current head/base and local patch identity before registering or restoring maintenance; inspect CI and feedback.'})
+    result['gap_count'] = len(result['gaps'])
+    return result
 
 
 def observe_pr(db, repo, pr):

@@ -1053,6 +1053,7 @@ class Autonomous:
         if alias and not data.get('pr_number'):
             self.p.event(task_id, 'Duplicate identity; continue canonical task ' + alias['canonical_task'])
             return data['stage']
+        self.recover_dependency_setup(task_id, data)
         methods = {'PLAN': self.plan, 'REPRODUCE': self.reproduce, 'ISSUE': self.publish_issue,
                    'WAITING_MAINTAINER': self.wait_maintainer, 'REPAIR': self.repair, 'PATCH_READY': self.verify,
                    'AUTO_REVIEW': self.review, 'PUBLISH': self.publish_pr, 'PR_OPEN': self.feedback}
@@ -1141,6 +1142,12 @@ class Autonomous:
         self.p.report()
         return data['stage']
 
+    def recover_dependency_setup(self, task_id, data):
+        from failures import recover_dependency_setup
+        if recover_dependency_setup(data, self.options):
+            self.store(task_id, data, data['stage'])
+            self.p.event(task_id, 'Reclassified dependency setup failure; retained prior retry evidence; ' + data['stage'])
+
     @observed('auto')
     def run(self):
         if self.options.get('enabled') is not True:
@@ -1160,6 +1167,9 @@ class Autonomous:
             for row in rows:
                 task = self.p.task(row['id'])
                 data = self.load(row['id'])
+                self.recover_dependency_setup(row['id'], data)
+                if data['stage'] == 'FAILED':
+                    continue
                 if (data['stage'] in ('ISSUE', 'PUBLISH') and data.get('publication_hold') == 'external_writes_disabled'
                         and self.p.allow_external_writes is not True):
                     continue

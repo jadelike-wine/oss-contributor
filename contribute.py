@@ -1000,6 +1000,11 @@ class Pipeline:
                 self.observe_pr_completion(repo, pr)
         save(file, current)
         save(self.root / "runs/pr-updates.json", changes)
+        from telemetry import maintenance_gaps
+        maintenance = maintenance_gaps(self.db)
+        save(self.root / 'runs/pr-maintenance.json', maintenance)
+        if maintenance['gaps']:
+            print(f"PR maintenance gaps: {len(maintenance['gaps'])}; report: {self.root / 'runs/pr-maintenance.json'}", file=sys.stderr)
         return changes
 
     def observe_pr_completion(self, repo, pr):
@@ -1038,7 +1043,7 @@ class Pipeline:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--allow-external-writes', action='store_true',
-                        help='Enable remote writes only when this session explicitly authorizes publication')
+                        help='Enable remote writes with explicit publication authorization, including configured scheduled authorization')
     sub = parser.add_subparsers(dest="action", required=True)
     scan_parser = sub.add_parser("scan")
     scan_parser.add_argument('--force', action='store_true', help='Refresh cached or cooled-down reads once; preserve failure history')
@@ -1120,11 +1125,15 @@ def dispatch(pipeline, args):
             engine.run()
     elif args.action == "tick":
         pipeline.recover_locks()
-        if pipeline.config.get('automation', {}).get('enabled'):
-            from autonomous import Autonomous
-            Autonomous(pipeline).run()
         changed, updates = 0, []
-        for operation in ('scan', 'followup'):
+        # Observe published PRs before model work can exhaust the shared run
+        # budget. Keep exhaustion visible and preserve the same bounded budget.
+        for operation in ('followup', 'auto', 'scan'):
+            if operation == 'auto':
+                if pipeline.config.get('automation', {}).get('enabled'):
+                    from autonomous import Autonomous
+                    Autonomous(pipeline).run()
+                continue
             try:
                 result = (pipeline.scan(max_repositories=pipeline.config.get('scanning', {}).get('repositories_per_tick'))
                           if operation == 'scan' else pipeline.followup())
@@ -1132,13 +1141,13 @@ def dispatch(pipeline, args):
                     changed = result
                 else:
                     updates = result
+                    for pr in updates:
+                        print(f"PR update: {pr['state']} {pr['url']} {pr['title']}")
             except BudgetExhausted:
                 raise
             except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as error:
                 pipeline.event('scheduler', operation + ' failed: ' + str(error))
                 print(operation + ' failed; existing tasks will still be checked: ' + str(error), file=sys.stderr)
-        for pr in updates:
-            print(f"PR update: {pr['state']} {pr['url']} {pr['title']}")
         if changed:
             print(f"New/updated issues: {changed}; report: {pipeline.root / 'runs/queue.md'}")
         if not pipeline.config.get('automation', {}).get('enabled') and args.analyze:
@@ -1163,8 +1172,10 @@ def dispatch(pipeline, args):
                     pipeline.report()
                     raise
     elif args.action == "status":
+        from telemetry import maintenance_gaps
         print(json.dumps({"states": [dict(r) for r in pipeline.db.execute("SELECT state,count(*) AS count FROM tasks GROUP BY state")],
                           "locks": [dict(r) for r in pipeline.db.execute("SELECT * FROM locks")],
+                          "pr_maintenance": maintenance_gaps(pipeline.db),
                           "repositories": json.loads((pipeline.root / 'state/repositories.json').read_text(encoding='utf-8'))
                           if (pipeline.root / 'state/repositories.json').exists() else None}, indent=2))
     elif args.action == "hunt":

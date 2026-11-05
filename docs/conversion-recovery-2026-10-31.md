@@ -4,9 +4,11 @@
 
 ## 授权与运行入口
 
-`Pipeline` 默认 `allow_external_writes=False`。默认 `auto`、`tick`、`analyze` 等入口可以读取上游、调用配置的模型、修改本地隔离工作区、执行测试并保存材料，但不能推送远端或创建、修改 GitHub 内容。`automation.enabled`、仓库白名单及模型审查结果均不替代本次会话发布授权。
+`Pipeline` 默认 `allow_external_writes=False`。直接调用 `auto`、`tick`、`analyze` 等入口可以读取上游、调用配置的模型、修改本地隔离工作区、执行测试并保存材料，但不能推送远端或创建、修改 GitHub 内容。`automation.enabled`、仓库白名单及模型审查结果均不替代明确的发布授权。
 
-只有当前会话已经明确授权相应远端操作时，才使用全局开关 `python -X utf8 contribute.py --allow-external-writes auto`。开关位于子命令之前；它只是执行条件，不是获得授权的方法。没有授权时保留本地材料和 `publication_hold=external_writes_disabled`，不要为了走完状态机开启外写。
+只有已经明确授权相应远端操作时，才使用全局开关 `python -X utf8 contribute.py --allow-external-writes auto`。开关位于子命令之前；它只是执行条件，不是获得授权的方法。没有授权时保留本地材料和 `publication_hold=external_writes_disabled`，不要为了走完状态机开启外写。
+
+2026-11-05 更新：用户已明确授权本项目持续定时发布，当前 `automation.scheduled_external_writes=true`。`hermes_tick.py` 每次启动读取该布尔值并传入 `--allow-external-writes tick`；缺省或 `false` 不传入，其他类型拒绝启动。开关修改从下次启动生效，所有仓库政策和补丁验证门禁继续生效。
 
 ```powershell
 # 只读本地指标与研究记录，不触发数据库迁移

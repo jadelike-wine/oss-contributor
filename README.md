@@ -16,13 +16,13 @@
   → READY_TO_IMPLEMENT / NEEDS_MAINTAINER_CONFIRMATION / RESEARCH_ONLY / PAUSED_POLICY
   → 原有状态机：规划 → 基线真实失败 → 实现 → 同一测试通过 + 项目检查
   → 单独审查通道 → 内容身份及政策门禁 → 本地待提交材料
-  → 仅有会话发布授权且显式启用外写时：发布意图 → Issue/PR
+  → 有明确发布授权（含已启用的持续调度授权）时：发布意图 → Issue/PR
   → 精确 head SHA 的 CI 观察、维护者回应、合并或关闭
 ```
 
 默认实现模型与审查模型仍为 `tokenking/devin/swe-2`。当前研究通道显式配置为 Hermes，研究审查标识为 **`same_model_separate_invocation`**；OpenCode 实现与 Hermes 审查仍为 `same_model_separate_channel`，均不宣称两个独立模型。新功能必须获得维护者明确方向才进入实现；高风险候选在确认方向后仍暂停等待人工补丁审查，目前没有可绕过这一门槛的人工批准 CLI。
 
-默认禁止远端推送、创建 Issue/PR、修改 PR 和其他 GitHub 写操作。`automation.enabled=true` 和仓库白名单不授予本次会话的发布权限；只有已获明确授权时才可使用全局参数 `--allow-external-writes`。无外写授权时仍可运行模型、准备隔离补丁、验证、审查和生成本地发布材料。恢复规则见 [贡献恢复说明](docs/conversion-recovery-2026-10-31.md)，本轮验收进度见 [2026-10-31 工程记录](docs/conversion-progress-2026-10-31.md)。
+直接调用 `contribute.py` 默认禁止远端推送、创建 Issue/PR、修改 PR 和其他 GitHub 写操作。当前项目已于 2026-11-05 获得用户的持续调度发布授权，并启用 `automation.scheduled_external_writes=true`：`hermes_tick.py` 每轮读取此项，严格为布尔值 `true` 时传入全局参数 `--allow-external-writes`；缺省或 `false` 则关闭。`automation.enabled=true` 和仓库白名单本身不授予发布权限，仓库规则、复现、验证和审查门禁继续生效。无外写授权时仍可准备本地补丁与发布材料。恢复规则见 [贡献恢复说明](docs/conversion-recovery-2026-10-31.md)，此前验收进度见 [2026-10-31 工程记录](docs/conversion-progress-2026-10-31.md)。
 
 ## 快速使用
 
@@ -64,7 +64,7 @@ python -X utf8 contribute.py auto --dry-run
 python -X utf8 contribute.py auto
 python -X utf8 contribute.py tick
 
-# 仅在本次会话已明确授权对应远端写入时使用；参数本身不能代替授权
+# 仅在已明确授权对应远端写入时使用；参数本身不能代替授权
 # python -X utf8 contribute.py --allow-external-writes auto
 
 # 清理任务 worktree：默认只删终态(SKIPPED/CLOSED/MERGED/FAILED)任务、base-* 临时副本和孤儿 worktree
@@ -76,7 +76,7 @@ python -X utf8 contribute.py clean-workspaces --all
 
 `auto --dry-run` 不调用模型或发布，但仍可能进行只读健康核验。`metrics/candidates/matrix/catalog`（不带 `--verify`）使用本地资料；`metrics/candidates/matrix` 通过 SQLite `mode=ro` 连接，不触发迁移。旧 `scan/status/followup/prepare/analyze/repair/verify/review/hunt/unlock` CLI 保留。
 
-`scan` 和 `tick` 保留完整的已核验研究目录范围，不受 `peer_repositories` 同行子集或模型研究候选额度的限制。`tick` 先推进已有任务和有预留份额的研究，再扫描及观察 PR；当前每轮最多实际请求 12 个尚未命中缓存的仓库，按持久游标续扫。单独 `scan` 不受该 12 项上限限制，仍遵守运行时间预算。两者都可复用当前配置的 6 小时成功扫描缓存；将 `scanning.cache_seconds` 设为 `0` 可关闭复用。缓存命中不延长原观察时间。
+`scan` 和 `tick` 保留完整的已核验研究目录范围，不受 `peer_repositories` 同行子集或模型研究候选额度的限制。`tick` 先观察已有 PR，再推进已有任务和有预留份额的研究，最后扫描，避免模型耗尽预算后漏掉 PR 跟进；各阶段仍共享同一运行预算。当前每轮最多实际请求 12 个尚未命中缓存的仓库，按持久游标续扫。单独 `scan` 不受该 12 项上限限制，仍遵守运行时间预算。两者都可复用当前配置的 6 小时成功扫描缓存；将 `scanning.cache_seconds` 设为 `0` 可关闭复用。缓存命中不延长原观察时间。
 
 扫描仍排除过期、暂停、拒绝、退役、归档、禁用及未授予研究权限的目录项。没有目录文件的旧配置继续使用原白名单；已有目录却没有合格项时明确报错，提示 `catalog --verify`。单独 `scan` 无需核验贡献看板权限；实现和发布继续受贡献政策门禁约束。仓库健康检查另使用 `repository_checks.cache_seconds`，当前也是 6 小时；Issue/PR 发布前强制实时检查目标仓库与贡献规则，缓存不能授予发布资格。
 
@@ -99,6 +99,8 @@ python -X utf8 contribute.py clean-workspaces --all
 目标文件由控制器从 `git show <base_sha>:<path>` 读取，同行文件从 GitHub 的 `contents?ref=<sha>` 读取。目标适用的贡献、安全和嵌套 `AGENTS.md` 优先纳入有限上下文；随后按主题选择源码、测试、文档及可用设计/更新材料。大于 60,000 字节的文件不进入候选读取范围；每个文件再受字符截断限制。截断以外的内容不能用于引文验证。控制器保存 `evidence_sources` 编号，绑定仓库、固定 SHA、路径和内容摘要；模型优先返回 `{evidence_id,quote}`，展开后仍精确校验引文，未知、过期或冲突编号均拒绝。旧 `{repo,path,quote}` 格式仍受相同证据门禁约束。
 
 目标采集先在固定 SHA 上进行主题内容检索，再按源码、测试和文档配额选择材料；贡献规则单独预留位置。文件名按词匹配，避免 `minisweagent` 这样的包名让所有文件误中 `agent`。配置和初始化辅助文件不再优先挤占功能源码。研究模型只接收这些有界材料：OpenCode 拒绝全部工具，Hermes 使用非空 `-t none`（空字符串会启用平台默认工具），并拒收包含工具事件的结果。研究模型不可自行读取更多文件、联网、执行命令或委派。实现/规划入口仍使用原有受限工具权限。文件采集完成后立即保存 checkpoint；预算中断会保留已完成的目标和 peer 快照。失败 peer 可以在下一次研究重试；请求失败不会变成能力缺失。
+
+通用周研究在首次选取目标源码前读取原有的最多 20 条近期 Issue/PR 清单，从开放 Issue 提取具体搜索主题，优先核对其中精确匹配固定版本文件清单的源码/测试路径。PR 和关闭条目不作为这一步的需求线索；Issue 文本仅帮助选材，不是事实证据、维护者批准或可执行指令。显式研究主题、既有源码检查点、已选 peer 和材料配额保持原样。
 
 | 状态 | 程序门槛 |
 | --- | --- |
@@ -144,7 +146,7 @@ README 没有提到功能不构成缺失证据；README 声称支持也不能替
 2. `submit_issue_and_pr_together`：上述任务在上游规则允许、范围清晰、可验证时，可以同一轮先提交 Issue，再提交通过复现、补丁测试和审查的 PR，无须额外等待接纳表态。不会为了抢先省略验证，也不把本地偏好写成 `maintainer_approved`。明确要求事先批准、指定标签、人工提交/审查，以及高风险和安全披露门禁继续生效。
 3. `link_pr_in_own_issue`：自己的 PR 创建或恢复后，读取自己 Issue 的最新描述，保留原内容并追加/更新 “Our implementation” 链接区块；幂等核验，失败后在后续 PR 观察中重试。只修改当前认证账号自己提交的 Issue；复用他人的 Issue 时，保留 PR 描述里的关联，不改他人的描述。
 
-来源依据是认证账号与 Issue 作者核验，以及持久化的本地发现记录；不会据此声称已经证明全球最早发现。旧配置缺省关闭这些偏好，当前 `config.json` 已全部开启。规则配置本身不会触发远端写入；实际发布仍遵循会话授权与 `--allow-external-writes` 门禁。
+来源依据是认证账号与 Issue 作者核验，以及持久化的本地发现记录；不会据此声称已经证明全球最早发现。旧配置缺省关闭这些偏好，当前 `config.json` 已全部开启。这些贡献偏好本身不会触发远端写入；实际发布仍须明确授权并通过 `--allow-external-writes` 门禁，当前定时入口按已授权的持续调度配置传入该参数。
 
 队列是原有状态机的附加门禁，不替代状态机。旧任务继续按 `PLAN → REPRODUCE → ISSUE/REPAIR → PATCH_READY → AUTO_REVIEW → PUBLISH → PR_OPEN` 恢复。维护者确认不能覆盖 `automated_issue=false` 或本人审查要求；`automated_pr=false` 只能阻止直接实现/发布，不阻止讨论 Issue。
 
@@ -183,6 +185,7 @@ Goose 的指定看板 `Ready`、`manual_issue_submission`、`human_pr_review_req
 
 | 配置 | 默认值/约束 |
 | --- | --- |
+| `automation.scheduled_external_writes` | 当前 `true`，用户已授权持续调度发布；缺省/`false` 关闭，仅由 `hermes_tick.py` 转换为全局发布参数 |
 | `automation.implementation_tasks_per_tick` | 当前 6；缺省沿用 `max_tasks_per_tick`，有界串行推进不同任务 |
 | `automation.maintenance_tasks_per_tick` | 当前 6；独立于实现/研究额度，PR 修复进入代码阶段后还需实现名额 |
 | `automation.max_infrastructure_attempts` | 默认/当前 3；基础设施故障与质量失败分别计数 |
@@ -217,11 +220,15 @@ Goose 的指定看板 `Ready`、`manual_issue_submission`、`human_pr_review_req
 
 网络、限流、证书、服务不可用、模型 JSON 格式、超时、证据不足、补丁错误和政策阻塞分别记录。前六类采用独立基础设施计数与有界冷却，不增加候选质量失败次数；证据和补丁问题仍走质量重试路径，政策暂停保持原阶段。模型通道同轮两次传输/服务故障后暂停该通道后续模型阶段，仍允许不依赖模型的本地阶段。不会关闭 TLS 校验或静默切换模型。详见 [恢复和故障处理](docs/conversion-recovery-2026-10-31.md)。
 
+依赖解析冲突（如 npm `ERESOLVE`）单独记为 `dependency_conflict`，复现阶段转回规划以修正安装方案，不原样作网络重试。历史上被误记为网络失败的同类基线安装记录，会保留完整旧错误和次数到 `failure_reclassifications`，按一份失败方案累计原有阶段次数，再转回规划；达到原阶段上限则停止。真实服务故障、DNS 故障及终态任务不会因此清零或复活。
+
 每条调用记录是一次 **OpenCode/Hermes CLI 入口调用尝试**，在启动前预留，启动失败也消耗调用预算，不等于单个 HTTP 模型请求。OpenCode 一次入口内部可以有多个模型步骤；日志可取得时另记 `reported_provider_steps`。入口预算和运行时限是硬门槛，当前不提供每个内部步骤的实时费用熔断。研究入口禁用工具，不能依靠内部工具循环扩大源码读取范围。
 
 原生日志提供 token 时统计输入（含缓存读写输入）和输出；缺失即 null。当前适配器不提供可核实的账单费用，OpenCode 的零费用占位值也不作为实际成本。未完成的调用保留 `running`，不算成功。不同审查模型只表示配置身份不同，不等于已证明其判断质量独立；不可用配置会失败关闭，不自动换模型。
 
 `metrics` 显示最近运行、阶段耗时/结果/原因、CLI 调用和 token、候选类别/证据/多 peer 完成度/重复尝试/政策队列，以及实现、红绿验证、审查、PR、CI、维护者回应和合并的独立口径。比例带分子、分母和 scope，无样本时为 null。CI 通过仅表示观察到的检查通过，不推断未查询的分支保护要求；开放 PR 标为待观察。
+
+`metrics/status` 的 `pr_maintenance` 和每次跟进保存的 `runs/pr-maintenance.json` 持续列出已观察但没有有效任务关联的开放 PR，附精确 head、观察时间、CI 和维护者回应信号。即使 PR 没有新变化，缺口仍保留；报告不会自动接管手工发布的补丁，须先核对作者、远端版本和本地工作区身份。
 
 [运行报告夹具](examples/metrics.fixture.json) 来自本地真实阶段计时及红绿测试，模型和 GitHub 发布接口被模拟，不是实际上游贡献。旧数据库迁移后的真实只读输出摘录为：
 
@@ -260,7 +267,7 @@ Goose 的指定看板 `Ready`、`manual_issue_submission`、`human_pr_review_req
 - 本人提交、本人工程审查、看板门槛及自动贡献禁令高于模型或一般维护者回复。
 - 旧 PR 跟进、精确 head SHA 的 CI 观察、特殊 OpenCode Linux 验证收据继续保留。该远端 CI 配方仍只适用于原有特定任务，不是通用 CI 服务。
 
-worktree 不是操作系统沙箱。实际测试/依赖安装会在本机执行；研究入口全部禁用模型工具，但实现阶段仍需可信的执行环境。`hermes_tick.py` 继续调用相同 `tick`；克隆仓库不复制本机调度，也不自动启动 gateway。
+worktree 不是操作系统沙箱。实际测试/依赖安装会在本机执行；研究入口全部禁用模型工具，但实现阶段仍需可信的执行环境。`hermes_tick.py` 继续调用相同 `tick`，按 `automation.scheduled_external_writes` 选择是否传入发布参数，并报告本轮权限状态；修改开关从下一次启动生效。克隆仓库不复制本机调度，也不自动启动 gateway。
 
 ## 验证与边界
 

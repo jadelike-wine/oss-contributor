@@ -9,7 +9,7 @@
 ```text
 核验研究目录（只读） + 核验原有贡献白名单
   → 优先推进 PR 有效反馈、待提交补丁、已复现任务和研究通过的候选
-  → 有界串行：当前实现最多 8 个任务、维护最多 6 个任务、研究最多 8 个候选
+  → 有界串行：当前实现最多 8 个任务、维护最多 6 个任务、研究最多 3 个候选
   → 目标基线 SHA；跨项目功能研究另采集 3–5 个不同 peer 的固定 SHA
   → 有界代码/测试/文档采集 + 精确引文校验
   → 功能矩阵 + 架构迁移分析 + 定向查重 + 审查
@@ -59,7 +59,7 @@ python -X utf8 catalog_sweep.py --output runs/catalog-sweep --analyze-only --rep
 python -X utf8 contribute.py hunt SWE-agent/mini-swe-agent "Compare session recovery and checkpoints"
 python -X utf8 contribute.py analyze <上一步任务ID>
 
-# 研究已有 hunt 队列，当前最多 8 个候选；不会调用发布或实现入口
+# 研究已有 hunt 队列，当前最多 3 个候选；不会调用发布或实现入口
 python -X utf8 contribute.py research-batch
 
 # 默认禁止外部写入；auto/tick 会推进本地实现及研究
@@ -103,7 +103,7 @@ python -X utf8 contribute.py clean-workspaces --all
 
 `hunt` 和只读研究入口通过已核验研究目录准入，不先探测全部贡献仓库的看板权限。`research-batch` 不自行创建新任务；`auto/tick` 优先推进已有任务，再注册或复用调查并批量研究。实现、维护和研究有独立的任务额度，同一任务跨阶段不重复占用同一类额度。研究与交付分别持久轮转，研究池包括只允许研究的仓库；已有工作优先不改写研究游标。
 
-`auto/tick` 在研究后会再次检查本轮新通过审查、查重且进入 `READY_TO_IMPLEMENT` 的候选，在剩余实现、调用和时间额度内继续正常状态机，不必固定等待六小时。已尝试或已用尽本轮任务预算的候选不会同轮重复派发。政策暂停与已知模型服务熔断在占用实现名额前检查。独立 `research-batch` 仍只研究，不实现或发布。
+`auto/tick` 每完成一个研究候选，就立即检查它是否通过审查、查重并进入 `READY_TO_IMPLEMENT`，在剩余实现、调用和时间额度内继续正常交付，不等整批研究耗完预算。研究结束后，未用完的研究预留可让给之前仅因预留份额而暂停的交付；真实失败、已耗尽任务和已处理候选不会借此重复执行。派发前先检查额度，有余量才读取候选的上游政策，避免实现名额用完后继续联网检查整个队列。仓库轮转、最终发布的实时政策核验和单轮总预算不变。独立 `research-batch` 仍只研究，不实现或发布。
 
 跨周相同仓库、相同主题的调查复用既有任务，成功研究不因新一周重新调用模型。规范仓库名与 Issue 编号相同的历史任务通过 `task_aliases` 关联，不删除历史；已存在独立 PR 的任务仍保留维护。日历变化或无关默认分支 SHA 变化不是重评依据；相关源码、政策、用户需求或竞争实现出现完整新证据后才应审阅重评，失败采集仍是 unknown。
 
@@ -228,7 +228,7 @@ Goose 的指定看板 `Ready`、`manual_issue_submission`、`human_pr_review_req
 | `scanning.repositories_per_tick` | 当前 12；每轮实际网络采集上限，保留完整目录和持久扫描游标 |
 | `scanning.cache_seconds` / `repository_checks.cache_seconds` | 当前扫描 21,600 秒、成功仓库健康检查 86,400 秒；发布前仍实时核验目标规则；旧配置缺省 0，设 0 禁用对应缓存 |
 | `research.model_channel` | `opencode` 或 `hermes`；缺省 OpenCode，当前配置 Hermes；不静默切换 |
-| `research.candidates_per_run` | 缺省 3，当前 8，范围 1–10；候选上限不是 Issue/PR 发布指标 |
+| `research.candidates_per_run` | 缺省 3，当前 3，范围 1–10；缩小单轮研究批次，优先把已有候选交付；候选上限不是 Issue/PR 发布指标 |
 | `research.source_discovery_per_run` | 缺省 0，当前 2，范围 0–2；源码自发现占上述研究额度，使用已存在的固定版本源码，不额外扩大总额度 |
 | `research.reserve_model_calls` / `research.reserve_seconds` | 缺省预留 2 次调用和 600 秒给研究；从单轮既有总额度内分配，不增加总预算 |
 | `research.peers_per_candidate` | 3，范围 3–5 |

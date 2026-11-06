@@ -94,11 +94,15 @@ class RunTaskBudget:
                 raise ValueError(lane + ' task budget must be an integer from 0 to 100')
         self.used = {lane: set() for lane in self.limits}
 
+    def can_admit(self, task_id, lane):
+        """Check capacity without charging a slot or changing rotation."""
+        return task_id in self.used[lane] or len(self.used[lane]) < self.limits[lane]
+
     def admit(self, task_id, lane):
         seen = self.used[lane]
         if task_id in seen:
             return True
-        if len(seen) >= self.limits[lane]:
+        if not self.can_admit(task_id, lane):
             return False
         seen.add(task_id)
         return True

@@ -237,6 +237,8 @@ def run(pipeline, entry):
 
 
 def classify(error):
+    if isinstance(error, DeliveryBudgetExhausted):
+        return 'yielded'
     if isinstance(error, TaskBudgetExhausted):
         return 'task_budget_exhausted'
     if isinstance(error, BudgetExhausted):
@@ -274,7 +276,7 @@ def stage(name, task=None):
         current.remaining()
     except BaseException as error:
         outcome, reason = classify(error), str(error) if isinstance(error, BudgetExhausted) else type(error).__name__
-        if not isinstance(error, TaskBudgetExhausted):
+        if not isinstance(error, (TaskBudgetExhausted, DeliveryBudgetExhausted)):
             current.outcome = outcome
             current.reason = current.reason or reason
         raise

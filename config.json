@@ -182,7 +182,7 @@
   "repository_catalog": "repository-catalog.json",
   "research": {
     "model_channel": "hermes",
-    "candidates_per_run": 8,
+    "candidates_per_run": 3,
     "source_discovery_per_run": 2,
     "peers_per_candidate": 3,
     "files_per_peer": 4,

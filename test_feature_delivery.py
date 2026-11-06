@@ -7,6 +7,7 @@ import contextlib
 import copy
 import json
 from pathlib import Path
+import platform
 import subprocess
 import tempfile
 import unittest
@@ -170,6 +171,9 @@ class FeatureSchedulingIntegrationTests(unittest.TestCase):
 
 class FeatureExecutionIntegrationTests(unittest.TestCase):
     def setUp(self):
+        # Windows' first platform query may run `ver` through a shell. Cache
+        # host metadata before the guard; all contribution commands remain guarded.
+        platform.uname()
         real_popen = subprocess.Popen
         def local_only(args, *positional, **kwargs):
             if isinstance(args, str) or kwargs.get('shell'):

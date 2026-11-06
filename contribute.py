@@ -93,7 +93,7 @@ def save(path, value):
 def execute(args, cwd=None, timeout=180, env=None, started=None, output_prefix=None):
     enforce_external_write_policy(args)
     env = dict(os.environ if env is None else env)
-    entries = {'npm': 'npm/bin/npm-cli.js', 'pnpm': 'pnpm/bin/pnpm.cjs', 'corepack': 'corepack/dist/corepack.js'}
+    entries = {'npm': 'npm/bin/npm-cli.js', 'pnpm': 'pnpm/bin/pnpm.cjs', 'corepack': 'corepack/dist/corepack.js', 'yarn': 'yarn/bin/yarn.js'}
     if os.name == 'nt' and args[0] in entries:
         from delivery import node_command
         args = [*node_command(args[0]), *args[1:]]
@@ -473,13 +473,23 @@ class Pipeline:
         return repos
 
     @observed('scan')
-    def scan(self, max_repositories=None, force=False):
+    def scan(self, max_repositories=None, force=False, *, only_repositories=None):
         changed = 0
         with self.lock("scan"):
             repos = self.scan_repositories()
+            selected = None
+            if only_repositories is not None:
+                allowed = {repo.casefold(): repo for repo in repos}
+                if (not isinstance(only_repositories, (list, tuple)) or not only_repositories
+                        or any(not isinstance(repo, str) or repo.casefold() not in allowed for repo in only_repositories)):
+                    raise ValueError('Requested scan repositories must belong to the complete verified research pool')
+                selected = {allowed[repo.casefold()] for repo in only_repositories}
             scope = 'verified_catalog' if (self.root / self.config.get('repository_catalog', 'repository-catalog.json')).exists() else 'legacy_allowlist'
             summary = {'started': now(), 'scope': scope, 'planned_repositories': len(repos), 'completed': False,
                        'repositories': [{'repo': repo, 'status': 'not_scanned'} for repo in repos]}
+            if selected is not None:
+                summary['requested_repositories'] = [repo for repo in repos if repo in selected]
+                summary['requested_completed'] = False
             summary_path = self.root / 'runs/scan-summary.json'
             from scheduling import reusable_scan_record, scan_key
             try:
@@ -491,26 +501,66 @@ class Pipeline:
             if cursor and cursor['last_repo'] in repos:
                 start = repos.index(cursor['last_repo']) + 1
                 summary['repositories'] = summary['repositories'][start:] + summary['repositories'][:start]
-            failed = {record.get('repo') for record in previous.get('repositories', []) if record.get('status') == 'unknown'}
+            failed = {record.get('repo') for record in previous.get('repositories', [])
+                      if record.get('status') == 'unknown' and not record.get('retry_exhausted')}
             summary['repositories'].sort(key=lambda record: record['repo'] not in failed)
             requested = 0
+            recovery_probes = 0
+            probe_limit = self.config.get('scanning', {}).get('recovery_probes_per_tick', 1)
+            if type(probe_limit) is not int or not 1 <= probe_limit <= 10:
+                raise ValueError('scanning.recovery_probes_per_tick must be 1..10')
+            probe_limit = min(probe_limit, 1)  # One recovery probe leaves room for normal scanning.
             previous_records = {record.get('repo'): record for record in previous.get('repositories', [])}
             # Preserve every valid checkpoint before the first write, including on interruption.
             for record in summary['repositories']:
+                if selected is not None and record['repo'] not in selected:
+                    record.update(previous_records.get(record['repo'], {}))
+                    record['requested'] = False
+                    continue
                 cached = reusable_scan_record(previous, record['repo'], now(), ttl, self.config['scan_limit'])
                 if cached:
                     record.update(cached)
                 elif previous_records.get(record['repo'], {}).get('status') == 'unknown':
                     record.update(previous_records[record['repo']])
+                # Previous targeted runs retain checkpoints without authorizing
+                # a request; eligibility belongs to this run's explicit scope.
+                if selected is not None:
+                    record['requested'] = True
+                else:
+                    record.pop('requested', None)
+            single_lane_turn = False
+            if not force:
+                eligible = [record for record in summary['repositories']
+                            if record.get('requested', True) and record['status'] != 'cached'
+                            and (record['status'] != 'unknown' or record.get('retry_after', '') <= now())]
+                due_probes = sorted([record for record in eligible if record.get('retry_exhausted')],
+                                    key=lambda record: (record.get('recovery_probes', 0), record.get('retry_after', '')))
+                regular = [record for record in eligible if not record.get('retry_exhausted')]
+                if due_probes and regular:
+                    if max_repositories == 1:
+                        # A one-slot tick cannot serve both lanes. Alternate the
+                        # reserved lane persistently; first turn probes recovery.
+                        lane = self.db.execute("SELECT last_repo FROM scheduler WHERE name='scan-recovery-lane'").fetchone()
+                        probe_limit = 0 if lane and lane[0] == 'probe' else 1
+                        single_lane_turn = True
+                    elif max_repositories is not None:
+                        probe_limit = min(probe_limit, max(0, max_repositories - 1))
+                promoted = {record['repo']: index for index, record in enumerate(due_probes[:probe_limit])}
+                summary['repositories'].sort(key=lambda record: (0, promoted[record['repo']])
+                    if record['repo'] in promoted else (1, 0))
             save(summary_path, summary)
             print(f'scan scope: {scope} ({len(repos)} repositories)', file=sys.stderr)
             try:
                 for record in summary['repositories']:
                     repo = record['repo']
+                    if not record.get('requested', True):
+                        continue
                     if record['status'] == 'cached':
                         continue
                     if not force and record.get('status') == 'unknown':
-                        if record.get('retry_exhausted') or record.get('retry_after', '') > now():
+                        if record.get('retry_after', '') > now():
+                            continue
+                        if record.get('retry_exhausted') and recovery_probes >= probe_limit:
                             continue
                     cached = reusable_scan_record(previous, repo, now(), ttl, self.config['scan_limit'])
                     if cached:
@@ -520,6 +570,13 @@ class Pipeline:
                     if max_repositories is not None and requested >= max_repositories:
                         continue
                     requested += 1
+                    if single_lane_turn:
+                        with self.db:
+                            self.db.execute("INSERT INTO scheduler VALUES ('scan-recovery-lane',?) ON CONFLICT(name) "
+                                "DO UPDATE SET last_repo=excluded.last_repo", ('probe' if record.get('retry_exhausted') else 'regular',))
+                    if record.get('retry_exhausted'):
+                        recovery_probes += 1
+                        record['recovery_probes'] = record.get('recovery_probes', 0) + 1
                     try:
                         # One transaction per repository: malformed responses must not leave partial updates.
                         with self.db:
@@ -532,7 +589,8 @@ class Pipeline:
                         failures = record.get('failure_attempts', 0) + 1
                         record.update(status='unknown', error=f'{type(error).__name__}: {error}', failure_category=category(error),
                                       failure_attempts=failures, retry_exhausted=failures >= 3,
-                                      retry_after=(dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=min(300 * 2 ** min(failures - 1, 4), 3600))).isoformat())
+                                      retry_after=(dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=
+                                          3600 if failures >= 3 else 300 * 2 ** (failures - 1))).isoformat())
                         message = f"scan {repo}: FAILED ({type(error).__name__}): {error}"
                     else:
                         for key in ('error', 'failure_category', 'failure_attempts', 'retry_after', 'retry_exhausted'):
@@ -558,25 +616,43 @@ class Pipeline:
                     save(summary_path, summary)
                     print(message, file=sys.stderr)
                 summary['completed'] = all(r['status'] not in ('not_scanned', 'unknown') for r in summary['repositories'])
+                if selected is not None:
+                    summary['requested_completed'] = all(r['status'] not in ('not_scanned', 'unknown')
+                        for r in summary['repositories'] if r.get('requested', True))
                 self.report()
             finally:
                 summary['ended'] = now()
-                summary['totals'] = {'scanned_repositories': sum(r['status'] == 'scanned' for r in summary['repositories']),
-                                     'cached_repositories': sum(r['status'] == 'cached' for r in summary['repositories']),
-                                     **{field: sum(r.get(field, 0) for r in summary['repositories']) for field in ('issues', 'prs', 'changed')}}
+                requested_records = [r for r in summary['repositories'] if r.get('requested', True)]
+                summary['totals'] = {'scanned_repositories': sum(r['status'] == 'scanned' for r in requested_records),
+                                     'cached_repositories': sum(r['status'] == 'cached' for r in requested_records),
+                                     **{field: sum(r.get(field, 0) for r in requested_records) for field in ('issues', 'prs', 'changed')}}
                 save(summary_path, summary)
         return changed
 
-    def scan_repository(self, repo):
+    def scan_repository(self, repo, *, issue_numbers=None):
+        """Refresh recent issues plus bounded stale holds, or exact requested issues.
+
+        The caller owns the transaction. Exact refreshes never revive terminal
+        work or bypass planning, scope review, reproduction or publication gates.
+        """
+        from issue_relations import classify_pr, github_identity
         repo_name(repo)
-        cached = self._repository_evidence.get(repo)
+        cached = None if issue_numbers is not None else self._repository_evidence.get(repo)
         meta = cached[0] if cached and type(cached[0].get('archived')) is bool else gh("api", f"repos/{repo}")
         if not isinstance(meta, dict) or type(meta.get('archived')) is not bool:
             raise ValueError('Invalid repository metadata')
         if meta["archived"]:
             return None
-        issues = gh("issue", "list", "-R", repo, "--state", "open", "--limit", str(self.config["scan_limit"]),
-                    "--json", "number,title,body,labels,assignees,updatedAt,url,author")
+        fields = 'number,title,body,labels,assignees,updatedAt,url,author'
+        if issue_numbers is not None:
+            if (not isinstance(issue_numbers, (list, tuple)) or not 1 <= len(issue_numbers) <= 10
+                    or any(type(number) is not int or number <= 0 for number in issue_numbers)):
+                raise ValueError('Exact issue refresh requires 1..10 positive issue numbers')
+            issues = [gh('issue', 'view', str(number), '-R', repo, '--json', fields + ',state')
+                      for number in dict.fromkeys(issue_numbers)]
+        else:
+            issues = gh("issue", "list", "-R", repo, "--state", "open", "--limit", str(self.config["scan_limit"]),
+                        "--json", fields)
         prs = gh("pr", "list", "-R", repo, "--state", "open", "--limit", "200",
                  "--json", "number,title,body,url,closingIssuesReferences")
         for kind, items in (('issue', issues), ('PR', prs)):
@@ -592,10 +668,85 @@ class Pipeline:
                         or any(not isinstance(label, dict) or not isinstance(label.get('name'), str)
                                for label in item.get('labels', []))):
                     raise ValueError('Invalid issue title/labels')
+                if kind == 'issue' and github_identity(item['url']) != (repo.casefold(), item['number']):
+                    raise ValueError('Issue URL does not match repository and number')
+                if kind == 'issue' and issue_numbers is not None and (
+                        item['number'] not in issue_numbers or str(item.get('state', '')).casefold() not in ('open', 'closed')):
+                    raise ValueError('Invalid exact issue observation')
                 if kind == 'PR' and (not isinstance(item.get('closingIssuesReferences', []), list)
                         or any(not isinstance(ref, dict) or type(ref.get('number')) is not int
                                for ref in item.get('closingIssuesReferences', []))):
                     raise ValueError('Invalid PR closing issue references')
+        if issue_numbers is not None and {issue['number'] for issue in issues} != set(issue_numbers):
+            raise ValueError('Incomplete exact issue observation')
+        scan_options = self.config.get('scanning', {})
+        held_limit = scan_options.get('held_issues_per_repository', 2)
+        held_age = scan_options.get('held_issue_refresh_seconds', 21600)
+        pr_refresh_limit = scan_options.get('linked_pr_refresh_limit', 4)
+        if (type(held_limit) is not int or not 0 <= held_limit <= 10
+                or type(held_age) is not int or not 0 <= held_age <= 604800
+                or type(pr_refresh_limit) is not int or not 0 <= pr_refresh_limit <= 20):
+            raise ValueError('Invalid bounded held-issue refresh options')
+        refresh_errors = []
+        refreshed = []
+        refresh_queue = bool(self.db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='issue_refresh_queue'").fetchone())
+        def queue_result(task_id, error=None):
+            if not refresh_queue:
+                return
+            at = now()
+            status = 'unknown' if error else 'completed'
+            retry_at = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=1)).isoformat() if error else None
+            result = self.db.execute("UPDATE issue_refresh_queue SET status=?,attempts=attempts+1,last_attempted_at=?,"
+                "retry_after=?,last_error=?,completed_at=? WHERE task=? AND status IN ('pending','unknown')",
+                (status, at, retry_at, error, None if error else at, task_id))
+            if result.rowcount:
+                self.db.execute('INSERT INTO events(task,event,at) VALUES (?,?,?)',
+                    (task_id, 'Queued issue refresh ' + status + (': ' + error if error else ''), at))
+        if issue_numbers is None and held_limit:
+            cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=held_age)).isoformat()
+            seen = {issue['number'] for issue in issues}
+            stale = [row for row in self.db.execute(
+                "SELECT id,number FROM tasks WHERE lower(repo)=? AND state='HOLD' AND number IS NOT NULL "
+                "AND updated<? ORDER BY updated,id", (repo.casefold(), cutoff)) if row['number'] not in seen]
+            cursor_name = 'scan-held:' + repo.casefold()
+            cursor = self.db.execute('SELECT last_repo FROM scheduler WHERE name=?', (cursor_name,)).fetchone()
+            if cursor:
+                ids = [row['id'] for row in stale]
+                if cursor[0] in ids:
+                    start = ids.index(cursor[0]) + 1
+                    stale = stale[start:] + stale[:start]
+            if refresh_queue:
+                cooling = {row[0] for row in self.db.execute(
+                    "SELECT task FROM issue_refresh_queue WHERE lower(repo)=? AND status IN ('pending','unknown') "
+                    "AND retry_after>?", (repo.casefold(), now()))}
+                stale = [row for row in stale if row['id'] not in cooling]
+                queued = [row for row in self.db.execute(
+                    "SELECT tasks.id,tasks.number FROM issue_refresh_queue q JOIN tasks ON tasks.id=q.task "
+                    "WHERE lower(q.repo)=? AND q.status IN ('pending','unknown') AND tasks.state='HOLD' "
+                    "AND (q.retry_after IS NULL OR q.retry_after<=?) "
+                    "ORDER BY CASE WHEN q.last_attempted_at IS NULL THEN 0 ELSE 1 END,"
+                    "q.last_attempted_at,q.queued_at,q.task", (repo.casefold(), now())) if row['number'] not in seen]
+                queued_ids = {row['id'] for row in queued}
+                stale = queued + [row for row in stale if row['id'] not in queued_ids]
+            for row in stale[:held_limit]:
+                self.db.execute('INSERT INTO scheduler VALUES (?,?) ON CONFLICT(name) DO UPDATE SET last_repo=excluded.last_repo',
+                                (cursor_name, row['id']))
+                try:
+                    issue = gh('issue', 'view', str(row['number']), '-R', repo, '--json', fields + ',state')
+                    if (not isinstance(issue, dict) or issue.get('number') != row['number']
+                            or github_identity(issue.get('url')) != (repo.casefold(), row['number'])
+                            or str(issue.get('state', '')).casefold() not in ('open', 'closed')):
+                        raise ValueError('Invalid exact held-issue observation')
+                    # rank validates label/name types before any task is changed.
+                    rank(issue, allow_features=self.config.get('feature_requests', {}).get('enabled') is True)
+                    issues.append(issue)
+                    refreshed.append(row['number'])
+                except BudgetExhausted:
+                    raise
+                except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired, KeyError, TypeError) as error:
+                    refresh_errors.append({'issue': row['number'], 'status': 'unknown', 'error': str(error)})
+                    queue_result(row['id'], str(error))
         snapshot = self.root / "runs/snapshots" / repo.replace("/", "--")
         save(snapshot / "repository.json", {k: meta[k] for k in ("full_name", "stargazers_count", "default_branch", "pushed_at")})
         save(snapshot / "open-prs.json", prs)
@@ -608,19 +759,52 @@ class Pipeline:
             rules.write_text(text, encoding='utf-8')
         changed = 0
         contribution_login = None
+        fetched_prs = {}
+        pr_refreshes = 0
         for issue in issues:
             task_id = repo.replace("/", "--") + "--" + str(issue["number"])
             from scheduling import find_issue_task
             existing = find_issue_task(self.db, repo, issue['number'], {repo: meta.get('full_name', repo)})
             if existing:
                 task_id = existing
-            score, holds = rank(issue, allow_features=self.config.get('feature_requests', {}).get('enabled') is True)
-            related = [p for p in prs if
-                       any(x["number"] == issue["number"] for x in p.get("closingIssuesReferences", [])) or
-                       re.search(r"(?<![\w/])#" + str(issue["number"]) + r"\b", p.get("body") or "") or
-                       issue["url"] in (p.get("body") or "")]
-            payload = json.dumps(issue, ensure_ascii=False)
             old = self.db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            score, holds = rank(issue, allow_features=self.config.get('feature_requests', {}).get('enabled') is True)
+            candidates = {pr['url']: pr for pr in prs}
+            unknown_prs = []
+            # A capped recent-PR list cannot clear a historical competition hold.
+            previous_prs = [url for reason in json.loads(old['holds']) if reason.startswith('existing PR: ')
+                            for url in reason.removeprefix('existing PR: ').split(', ')] if old else []
+            for url in previous_prs:
+                if url in candidates:
+                    continue
+                identity = github_identity(url, 'pull')
+                if url not in fetched_prs and identity and identity[0] == repo.casefold() and pr_refreshes < pr_refresh_limit:
+                    pr_refreshes += 1
+                    try:
+                        pr = gh('pr', 'view', str(identity[1]), '-R', repo, '--json',
+                                'number,title,body,url,closingIssuesReferences,state,headRefOid')
+                        if (not isinstance(pr, dict) or github_identity(pr.get('url'), 'pull') != identity
+                                or str(pr.get('state', '')).casefold() not in ('open', 'closed', 'merged')):
+                            raise ValueError('Invalid exact linked-PR observation')
+                        classify_pr(issue, pr, repo)
+                        fetched_prs[url] = pr
+                    except BudgetExhausted:
+                        raise
+                    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired, KeyError, TypeError) as error:
+                        fetched_prs[url] = None
+                        refresh_errors.append({'issue': issue['number'], 'pr': url, 'status': 'unknown', 'error': str(error)})
+                if fetched_prs.get(url) is None:
+                    unknown_prs.append(url)
+                else:
+                    candidates[url] = fetched_prs[url]
+            relations = [relation for pr in candidates.values() if (relation := classify_pr(issue, pr, repo))]
+            related = [relation for relation in relations if relation['relation'] == 'competing']
+            issue = dict(issue)
+            if relations or unknown_prs:
+                issue['_scan_relations'] = {'prs': relations, 'unknown_prs': unknown_prs,
+                                            'scope_review_required': bool(unknown_prs) or any(r['review_required'] for r in relations),
+                                            'absence_verified': False}
+            payload = json.dumps(issue, ensure_ascii=False)
             from contribution_strategy import enabled, local_discovery
             own = False
             if related and enabled(self.config, 'prefer_own_pr_on_competition'):
@@ -638,8 +822,17 @@ class Pipeline:
                     holds = [reason for reason in holds if reason != 'feature needs maintainer approval']
             if related and not own:
                 holds.append("existing PR: " + ", ".join(p["url"] for p in related))
+            if unknown_prs:
+                holds.append('existing PR: ' + ', '.join(unknown_prs))
             changed += int(old is None or old["payload"] != payload)
             initial = "HOLD" if holds else "DISCOVERED"
+            if str(issue.get('state', 'open')).casefold() == 'closed':
+                initial = 'CLOSED'
+            if old and old['holds'] != json.dumps(holds):
+                self.db.execute('INSERT INTO events(task,event,at) VALUES (?,?,?)', (task_id,
+                    'Scan hold reassessment: ' + json.dumps({'before': json.loads(old['holds']), 'after': holds,
+                        'prior_state': old['state'], 'issue_updated_at': issue.get('updatedAt'),
+                        'relations': relations, 'unknown_prs': unknown_prs}, ensure_ascii=False), now()))
             self.db.execute('''INSERT INTO tasks(id,repo,number,source,title,url,score,state,holds,payload,updated)
                           VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
                           title=excluded.title,score=excluded.score,holds=excluded.holds,payload=excluded.payload,
@@ -647,6 +840,11 @@ class Pipeline:
                           THEN excluded.state ELSE tasks.state END''',
                           (task_id, repo, issue["number"], "issue", issue["title"], issue["url"], score, initial,
                            json.dumps(holds), payload, now()))
+            queue_result(task_id, 'Linked PR observation incomplete: ' + ', '.join(unknown_prs) if unknown_prs else None)
+        save(snapshot / 'issue-refresh.json', {'observed_at': now(), 'exact_issues': issue_numbers,
+            'refreshed_held_issues': refreshed, 'errors': refresh_errors,
+            'recent_issue_limit': self.config['scan_limit'], 'backlog_complete': False,
+            'linked_pr_refreshes': pr_refreshes})
         return changed, len(issues), len(prs)
 
     def report(self):
@@ -1063,7 +1261,7 @@ class Pipeline:
 
     def followup_repository(self, repo):
         prs = gh('pr', 'list', '-R', repo, '--author', '@me', '--state', 'all', '--limit', '100',
-                 '--json', 'number,title,state,url,updatedAt,reviewDecision,statusCheckRollup,headRefOid')
+                 '--json', 'number,title,state,url,updatedAt,reviewDecision,statusCheckRollup,headRefOid,headRefName,baseRefOid,baseRefName,mergeable,mergeStateStatus')
         if not isinstance(prs, list):
             raise ValueError('Invalid PR list')
         for pr in prs:
@@ -1072,6 +1270,8 @@ class Pipeline:
                     or not isinstance(pr.get('title'), str) or not isinstance(pr.get('url'), str)):
                 raise ValueError('Invalid PR record')
             if pr['state'] == 'OPEN':
+                from pr_maintenance import with_target_base
+                pr.update(with_target_base(repo, pr, gh))
                 pr['ci'] = observe_ci(repo, pr, gh)
                 for field, endpoint in (('comments', f"issues/{pr['number']}/comments"),
                                         ('inline_comments', f"pulls/{pr['number']}/comments"),
@@ -1087,6 +1287,26 @@ def main():
     sub = parser.add_subparsers(dest="action", required=True)
     scan_parser = sub.add_parser("scan")
     scan_parser.add_argument('--force', action='store_true', help='Refresh cached or cooled-down reads once; preserve failure history')
+    rescan_parser = sub.add_parser('rescan-issues', help='Refresh up to 10 known issue identities and their PR relations; never publish')
+    rescan_parser.add_argument('repo')
+    rescan_parser.add_argument('numbers', type=int, nargs='+')
+    register_parser = sub.add_parser('register-pr', help='Verify and optionally bind an existing owned PR for maintenance; never publish')
+    register_parser.add_argument('repo')
+    register_parser.add_argument('number', type=int)
+    register_parser.add_argument('workspace')
+    register_parser.add_argument('--baseline', required=True)
+    register_parser.add_argument('--expected-head', required=True)
+    register_parser.add_argument('--expected-base', required=True, help='Exact PR metadata base SHA snapshot; the live target branch tip is verified separately')
+    register_parser.add_argument('--task')
+    register_parser.add_argument('--issue', type=int)
+    register_parser.add_argument('--plan', help='JSON plan containing a verification spec; omit for observation only')
+    register_parser.add_argument('--apply', action='store_true', help='Persist the verified local maintenance binding')
+    scope_review = sub.add_parser('review-research-overlap', help='Review a saved local scope overlap once per material change; never publish')
+    scope_review.add_argument('task')
+    scope_resolve = sub.add_parser('resolve-research-overlap', help='Record an explicit reviewed remaining scope and return to normal planning')
+    scope_resolve.add_argument('task')
+    scope_resolve.add_argument('--reason', required=True)
+    scope_resolve.add_argument('--scope', required=True, help='Exact current scope identity from the saved overlap report')
     sub.add_parser("status")
     sub.add_parser("followup")
     metrics_parser = sub.add_parser("metrics", help="Read-only local runtime and outcome report")
@@ -1147,7 +1367,8 @@ def main():
 
 
 def dispatch(pipeline, args):
-    research_only = (args.action in ('scan', 'hunt', 'research-batch') or
+    research_only = (args.action in ('scan', 'rescan-issues', 'register-pr', 'hunt', 'research-batch',
+                                    'review-research-overlap', 'resolve-research-overlap') or
                      (args.action == 'analyze' and pipeline.task(args.task)['source'] == 'hunt'))
     if args.action not in ('status', 'unlock', 'clean-workspaces') and not research_only:
         pipeline.effective_repositories()
@@ -1156,6 +1377,42 @@ def dispatch(pipeline, args):
         print(json.dumps(Autonomous(pipeline).research_batch(), ensure_ascii=False, indent=2))
     elif args.action == "scan":
         print(f"New/updated issues: {pipeline.scan(force=getattr(args, 'force', False))}")
+    elif args.action == 'rescan-issues':
+        repo_name(args.repo)
+        numbers = list(dict.fromkeys(args.numbers))
+        if not numbers or len(numbers) > 10 or any(type(number) is not int or number <= 0 for number in numbers):
+            raise ValueError('Provide between 1 and 10 positive issue numbers')
+        pipeline.require_research({'repo': args.repo})
+        with pipeline.lock('maintenance'):
+            with pipeline.db:
+                result = pipeline.scan_repository(args.repo, issue_numbers=numbers)
+            pipeline.report()
+        print(json.dumps({'repo': args.repo, 'issues': numbers, 'result': result}, ensure_ascii=False))
+    elif args.action == 'register-pr':
+        from pr_maintenance import register_existing_pr
+        plan = json.loads(Path(args.plan).read_text(encoding='utf-8')) if args.plan else None
+        with pipeline.lock('maintenance'):
+            result = register_existing_pr(pipeline, args.repo, args.number, args.workspace, args.baseline,
+                                          expected_head=args.expected_head, expected_base=args.expected_base,
+                                          task_id=args.task, issue_number=args.issue, plan=plan, apply=args.apply)
+            if args.apply:
+                pipeline.report()
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.action in ('review-research-overlap', 'resolve-research-overlap'):
+        from autonomous import Autonomous
+        from research_scope import review_pending, resolve_overlap
+        engine = Autonomous(pipeline)
+        pipeline.require_research(pipeline.task(args.task))
+        with pipeline.lock('maintenance'):
+            data = engine.load(args.task)
+            if args.action == 'review-research-overlap':
+                attempted = review_pending(engine, args.task, data)
+                result = {'attempted': attempted, 'review': engine.load(args.task).get('scope_overlap_review')}
+            else:
+                result = resolve_overlap(pipeline.db, args.task, args.reason, args.scope)
+                engine.move(args.task, engine.load(args.task), 'PLAN')
+            pipeline.report()
+        print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.action == "auto":
         from autonomous import Autonomous
         engine = Autonomous(pipeline)

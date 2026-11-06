@@ -8,7 +8,7 @@ from pathlib import Path
 import tempfile
 import time
 
-from contribute import Pipeline, command, gh, repo_name, save
+from contribute import ContributionPaused, Pipeline, command, gh, repo_name, save
 
 
 def refresh(pipeline, task_id, receipt_file):
@@ -28,7 +28,7 @@ def refresh(pipeline, task_id, receipt_file):
     repo = repo_name(receipt['repository'])
     remote = gh('api', f'repos/{repo}')
     if remote['owner']['login'].lower() != gh('api', 'user')['login'].lower() or not remote['private']:
-        raise ValueError('CI refresh requires the authenticated user private controller repository')
+        raise ContributionPaused('CI refresh requires the authenticated user private controller repository')
     if command(['git', 'ls-files', '--others', '--exclude-standard'], cwd=task['workspace']).strip():
         raise ValueError('Untracked files are not covered by CI refresh')
     patch = command(['git', 'diff', task['base_sha'], '--binary'], cwd=task['workspace'])

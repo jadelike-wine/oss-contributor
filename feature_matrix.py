@@ -245,6 +245,15 @@ def persist(engine, task, answer, matrix, **gates):
                            json.dumps(matrix, ensure_ascii=False), matrix['created_at'], matrix['updated_at']))
     from contribute import save
     save(engine.packet_dir(task['id']) / 'feature-matrix.json', matrix)
+    if gates.get('reviewed') and gates.get('duplicate_clear'):
+        from research_scope import alias_exact, overlaps
+        overlap = overlaps(engine.db, task, matrix)
+        if overlap:
+            save(engine.packet_dir(task['id']) / 'local-scope-overlap.json', overlap)
+        canonical = alias_exact(engine.db, task, matrix)
+        if canonical:
+            engine.p.event(task['id'], 'Exact local scope reused: ' + canonical)
+            return 'RESEARCH_ONLY', True
     return queue, False
 
 

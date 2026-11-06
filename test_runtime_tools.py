@@ -35,6 +35,13 @@ class RuntimeToolDiscoveryTests(unittest.TestCase):
         entry = self.install('pnpm', 'corepack/dist/pnpm.js')
         self.assertEqual([self.paths['node'], entry], self.discover()['pnpm'])
 
+    def test_yarn_resolves_both_standalone_and_corepack_entry_points(self):
+        for entry in ('yarn/bin/yarn.js', 'corepack/dist/yarn.js'):
+            with self.subTest(entry=entry):
+                resolved = self.install('yarn', entry)
+                self.assertEqual([self.paths['node'], resolved], self.discover()['yarn'])
+                Path(resolved).unlink()
+
     def test_standalone_pnpm_and_npm_keep_native_node_entry_points(self):
         pnpm = self.install('pnpm', 'pnpm/bin/pnpm.cjs')
         npm = self.install('npm', 'npm/bin/npm-cli.js')

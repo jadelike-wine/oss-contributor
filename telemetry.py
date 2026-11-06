@@ -62,9 +62,16 @@ def migrate(db):
       review_decision TEXT, human_approval INTEGER NOT NULL,
       merged_at TEXT, state TEXT NOT NULL, observed_at TEXT NOT NULL,
       PRIMARY KEY(repo,number));
+    CREATE TABLE IF NOT EXISTS pr_maintenance_observations (
+      repo TEXT NOT NULL, number INTEGER NOT NULL, head_sha TEXT, base_sha TEXT,
+      base_ref TEXT, mergeable TEXT, merge_state TEXT, observed_at TEXT NOT NULL,
+      PRIMARY KEY(repo,number));
     ''')
     if 'owner_pid' not in {r[1] for r in db.execute('PRAGMA table_info(runs)')}:
         db.execute('ALTER TABLE runs ADD COLUMN owner_pid INTEGER')
+        db.commit()
+    if 'target_base_sha' not in {r[1] for r in db.execute('PRAGMA table_info(pr_maintenance_observations)')}:
+        db.execute('ALTER TABLE pr_maintenance_observations ADD COLUMN target_base_sha TEXT')
         db.commit()
 
 
@@ -405,8 +412,14 @@ def metrics(path, limit=10):
         queues = [dict(r) for r in db.execute('SELECT category,queue,count(*) candidates FROM research_candidates GROUP BY category,queue')]
         tasks = [dict(r) for r in db.execute('SELECT state,count(*) tasks FROM tasks GROUP BY state')]
         quality = quality_metrics(db, tables)
+        from research_scope import report_pending
+        scope_reviews = report_pending(db) if {'automation', 'tasks'} <= tables else []
+        issue_refreshes = ([dict(row) for row in db.execute(
+            'SELECT status,count(*) count FROM issue_refresh_queue GROUP BY status')]
+                           if 'issue_refresh_queue' in tables else [])
         return {'runs': runs, 'stage_outcomes_all_time': stages, 'candidate_queues': queues,
                 'task_states': tasks, 'quality_all_time': quality, 'pr_maintenance': maintenance_gaps(db),
+                'scope_overlap_reviews': scope_reviews, 'issue_refresh_queue': issue_refreshes,
                 'cost_status': 'unavailable: adapters do not report reliable billable usage',
                 'cost_caps_enforced': False, 'note': 'Running records without ended are incomplete, never assumed successful. Stage attempts are not unique contributions.'}
     finally:
@@ -420,8 +433,10 @@ def maintenance_gaps(db):
     only knows explicitly registered PR numbers. Keep these scopes separate
     from the submitted-PR quality metrics and retain observation timestamps.
     """
+    from scheduling import TERMINAL
     tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     result = {'open_observed_prs': 0, 'gap_count': 0, 'gaps': [],
+              'pending_action_count': 0, 'pending_actions': [],
               'scope': 'Last locally observed open PRs; not a fresh upstream check or an automatic repair queue.'}
     if 'pr_observations' not in tables:
         return result
@@ -435,8 +450,25 @@ def maintenance_gaps(db):
             if type(number) is int:
                 linked.setdefault((repo.casefold(), number), []).append(
                     {'task': task, 'state': state, 'stage': data.get('stage', state)})
+                merge = data.get('pr_merge') or {}
+                pending = data.get('maintenance_pending') or {}
+                if state not in TERMINAL and data.get('stage', state) not in TERMINAL and (merge.get('state') in ('pending', 'merging', 'resolved_unverified',
+                                          'identity_unavailable', 'needs_verification_recipe', 'target_changed')
+                        or pending.get('reason') == 'publication_identity_changed'
+                        or data.get('maintenance_observation_only')):
+                    result['pending_actions'].append({'repo': repo, 'number': number, 'task': task,
+                        'reason': pending.get('reason') or ('merge_conflict' if merge else 'verification_recipe_required'),
+                        'state': merge.get('state', 'observation_only'),
+                        'identity': merge.get('identity', data.get('pr_observed_identity')),
+                        'detail': pending.get('detail')})
     # Repository spelling may have changed case between old observations.
     observations = {}
+    merge_observations = {}
+    if 'pr_maintenance_observations' in tables:
+        merge_observations = {(row[0].casefold(), row[1]): row for row in db.execute(
+            'SELECT repo,number,head_sha,base_sha,base_ref,mergeable,merge_state,observed_at,'
+            + ('target_base_sha' if 'target_base_sha' in {r[1] for r in db.execute('PRAGMA table_info(pr_maintenance_observations)')} else 'NULL')
+            + ' FROM pr_maintenance_observations')}
     for row in db.execute('SELECT repo,number,head_sha,state,ci_state,maintainer_response,observed_at '
                           'FROM pr_observations ORDER BY observed_at'):
         observations[(row[0].casefold(), row[1])] = row
@@ -446,6 +478,12 @@ def maintenance_gaps(db):
             continue
         result['open_observed_prs'] += 1
         tasks = linked.get(key, [])
+        merge = merge_observations.get(key)
+        if merge and merge[2] == sha and (merge[5] == 'CONFLICTING' or merge[6] == 'DIRTY'):
+            if not any(x['repo'].casefold() == key[0] and x['number'] == number for x in result['pending_actions']):
+                result['pending_actions'].append({'repo': repo, 'number': number,
+                    'reason': 'merge_conflict', 'state': 'observed', 'linked_tasks': tasks,
+                    'head_sha': sha, 'base_sha': merge[8], 'metadata_base_sha': merge[3], 'observed_at': merge[7]})
         if any(task['state'] not in TERMINAL and task['stage'] not in TERMINAL for task in tasks):
             continue
         signals = []
@@ -460,7 +498,21 @@ def maintenance_gaps(db):
                               'linked_tasks': tasks, 'signals': signals,
                               'next_step': 'Verify ownership, current head/base and local patch identity before registering or restoring maintenance; inspect CI and feedback.'})
     result['gap_count'] = len(result['gaps'])
+    result['pending_action_count'] = len(result['pending_actions'])
     return result
+
+
+def observe_pr_identity(db, repo, pr):
+    """Persist metadata without claiming a fresh CI, discussion or approval read."""
+    if not any(key in pr for key in ('mergeable', 'mergeStateStatus', 'baseRefOid')):
+        return
+    with db:
+        db.execute('INSERT INTO pr_maintenance_observations '
+                   '(repo,number,head_sha,base_sha,base_ref,mergeable,merge_state,observed_at,target_base_sha) VALUES (?,?,?,?,?,?,?,?,?) '
+                   'ON CONFLICT(repo,number) DO UPDATE SET head_sha=excluded.head_sha,base_sha=excluded.base_sha,'
+                   'base_ref=excluded.base_ref,mergeable=excluded.mergeable,merge_state=excluded.merge_state,observed_at=excluded.observed_at,target_base_sha=excluded.target_base_sha',
+                   (repo, pr['number'], pr.get('headRefOid'), pr.get('baseRefOid'), pr.get('baseRefName'),
+                    pr.get('mergeable'), pr.get('mergeStateStatus'), utc(), pr.get('targetBaseOid')))
 
 
 def observe_pr(db, repo, pr):
@@ -473,6 +525,7 @@ def observe_pr(db, repo, pr):
                  and (c.get('user') or {}).get('login')
                  and not c['user']['login'].lower().endswith('[bot]')
                  and c.get('commit_id') and c['commit_id'] == pr.get('headRefOid')]
+    observe_pr_identity(db, repo, pr)
     with db:
         db.execute('INSERT INTO pr_observations VALUES (?,?,?,?,?,?,?) ON CONFLICT(repo,number) DO UPDATE SET '
                    'head_sha=excluded.head_sha,state=excluded.state,ci_state=excluded.ci_state,'

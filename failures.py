@@ -6,7 +6,9 @@ import re
 import subprocess
 
 TRANSIENT = {'network', 'rate_limit', 'certificate', 'service_unavailable', 'model_format', 'timeout'}
-MODEL_FORMAT = ('invalid reviewer verdict', 'model must return', 'invalid model', 'ambiguous model response',
+MODEL_FORMAT = ('invalid reviewer verdict', 'invalid local scope review', 'model must return', 'invalid model', 'ambiguous model response',
+                'resolved overlap requires a revised independent scope',
+                'resolved overlap revision must retain feature_key',
                 'missing executable verification spec', 'missing spec field', 'recipe fields must',
                 'empty test recipe', 'commands must be nonempty argv arrays', 'invalid planning decision',
                 'invalid feedback decision', 'invalid research decision', 'research needs a reason',
@@ -19,6 +21,8 @@ MODEL_FORMAT = ('invalid reviewer verdict', 'model must return', 'invalid model'
 
 def category(error):
     text = str(error).lower()
+    if type(error).__name__ == 'SetupError':
+        return 'setup_error'
     if type(error).__name__ == 'ContributionPaused':
         return 'policy'
     if isinstance(error, json.JSONDecodeError) or any(x in text for x in MODEL_FORMAT):
@@ -44,12 +48,76 @@ def category(error):
 
 
 def retry_ready(data, stage, at=None):
+    if data.get('setup_failure', {}).get('exhausted'):
+        return False
     record = data.get('infrastructure_failures', {}).get(stage, {})
     if record.get('exhausted'):
         return False
     if not record.get('retry_after'):
         return True
     return (at or dt.datetime.now(dt.timezone.utc)) >= dt.datetime.fromisoformat(record['retry_after'])
+
+
+def record_setup_failure(data, stage, error, options, at=None):
+    """Re-plan broken setup separately from patch quality, with a lifetime cap."""
+    if type(error).__name__ != 'SetupError':
+        return False
+    at = at or dt.datetime.now(dt.timezone.utc)
+    history = data.setdefault('setup_failure_history', [])
+    history.append({'at': at.isoformat(), 'stage': stage, 'error': str(error),
+                    'domain': error.domain, 'context': copy.deepcopy(error.context)})
+    limit = options.get('max_setup_attempts', options.get('max_stage_attempts', 3))
+    count = data.get('setup_failure', {}).get('count', 0) + 1
+    data['setup_failure'] = {'count': count, 'exhausted': count >= limit,
+                             'context': copy.deepcopy(error.context)}
+    data['failure_category'] = 'setup_error'
+    data['last_error'] = str(error)
+    data['stop_reason'] = 'setup_replan_exhausted' if count >= limit else 'setup_recipe_replan'
+    data['stage'] = 'PLAN'
+    return True
+
+
+def recover_setup_change(data, workspace, options, at=None):
+    """Bounded recovery only after recorded setup inputs materially change.
+
+    Old timeout records without an input receipt get a baseline, never a free
+    retry. Call again after correcting the recipe or repairing the toolchain.
+    A changed baseline still returns to PLAN for normal recipe review.
+    """
+    from recipe_runtime import setup_context, validate_setup, SetupError
+    spec = data.get('plan', {}).get('spec')
+    if not isinstance(spec, dict) or data.get('stage') not in ('PLAN', 'REPRODUCE'):
+        return None
+    legacy = data.get('infrastructure_failures', {}).get('REPRODUCE', {})
+    current_failure = data.get('setup_failure', {})
+    if not (current_failure.get('exhausted') or
+            (legacy.get('exhausted') and legacy.get('category') == 'timeout')):
+        return None
+    context = setup_context(spec, workspace)
+    prior = current_failure.get('context') or data.get('setup_recovery_baseline') or data.get('setup_context')
+    if not prior or not prior.get('fingerprint'):
+        data['setup_recovery_baseline'] = context
+        return 'baseline_recorded'
+    if context['fingerprint'] == prior['fingerprint']:
+        return None
+    history = data.get('setup_recoveries', [])
+    if len(history) >= options.get('max_setup_recoveries', 1):
+        return None
+    try:
+        validate_setup(spec, workspace)
+    except SetupError:
+        return None
+    at = at or dt.datetime.now(dt.timezone.utc)
+    data.setdefault('setup_recoveries', []).append({
+        'at': at.isoformat(), 'previous': copy.deepcopy(prior), 'current': context,
+        'failure': copy.deepcopy(current_failure or legacy), 'error': data.get('last_error'),
+        'reason': 'Changed setup recipe, dependency manifests or runtime files; normal planning review required'})
+    data.get('infrastructure_failures', {}).pop('REPRODUCE', None)
+    data['setup_failure'] = {'count': 0, 'exhausted': False, 'context': context}
+    data['setup_context'] = context
+    data['stage'] = 'PLAN'
+    data['stop_reason'] = 'setup_changed_replan'
+    return 'replan'
 
 
 def recover_dependency_setup(data, options, at=None):

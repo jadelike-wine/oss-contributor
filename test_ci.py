@@ -6,7 +6,9 @@ import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from contribute import ContributionPaused
 from verify_ci import verify, refresh
+import test_conversion_runtime as runtime_fixtures
 
 
 class RemoteVerificationTests(unittest.TestCase):
@@ -55,6 +57,26 @@ class RemoteVerificationTests(unittest.TestCase):
                 cmd.assert_not_called()
             self.assertEqual(self.receipt, json.loads(file.read_text()))
 
+    def test_refresh_controller_policy_pauses_before_git_or_dispatch(self):
+        self.pipeline.task.return_value['repo'] = 'anomalyco/opencode'
+        receipt = {**self.receipt, 'auto_refresh': True, 'workflow_path': '.github/workflows/verify-opencode.yml',
+                   'manifest_path': 'ci/patches/opencode-55694.json'}
+        for owner, private in [('owner', False), ('somebody-else', True)]:
+            with self.subTest(owner=owner, private=private), tempfile.TemporaryDirectory() as temp:
+                file = Path(temp) / 'receipt.json'
+                file.write_text(json.dumps(receipt))
+                replies = [{**self.run, 'conclusion': 'failure'},
+                           {'owner': {'login': owner}, 'private': private}, {'login': 'owner'}]
+                with patch('verify_ci.gh', side_effect=replies) as github, patch('verify_ci.command') as cmd:
+                    with self.assertRaisesRegex(ContributionPaused, 'private controller repository'):
+                        refresh(self.pipeline, 'task', file)
+                    cmd.assert_not_called()
+                    self.assertEqual([('api', 'repos/owner/controller/actions/runs/123'),
+                                      ('api', 'repos/owner/controller'), ('api', 'user')],
+                                     [call.args for call in github.call_args_list])
+                self.assertEqual(receipt, json.loads(file.read_text()))
+                self.assertFalse(file.with_name('pending-remote-verification.json').exists())
+
     def test_exact_success(self):
         self.assertEqual(self.call(), self.run['html_url'])
 
@@ -75,6 +97,38 @@ class RemoteVerificationTests(unittest.TestCase):
         self.manifest['base_sha'] = 'different base'
         with self.assertRaises(ValueError):
             self.call()
+
+
+class RemoteVerificationSchedulerTests(unittest.TestCase):
+    setUp = runtime_fixtures.RuntimeConversionTests.setUp
+    tearDown = runtime_fixtures.RuntimeConversionTests.tearDown
+    issue = runtime_fixtures.RuntimeConversionTests.issue
+
+    def test_controller_policy_preserves_stage_and_quality_attempts_across_ticks(self):
+        self.p.allow_external_writes = True
+        for number, (owner, private) in enumerate([('owner', False), ('somebody-else', True)], 1):
+            with self.subTest(owner=owner, private=private):
+                key = self.issue(number, 'PATCH_READY')
+                with self.p.db:
+                    self.p.db.execute("UPDATE tasks SET repo='anomalyco/opencode' WHERE id=?", (key,))
+                original = {'stage': 'PATCH_READY', 'attempts': {'PATCH_READY': 2, 'REPAIR': 1},
+                            'last_error': 'Retained prior verification history'}
+                self.engine.store(key, original)
+                receipt = {'repository': 'owner/controller', 'run_id': 123, 'head_sha': 'commit',
+                           'workflow_path': '.github/workflows/verify-opencode.yml',
+                           'manifest_path': 'ci/patches/opencode-55694.json', 'auto_refresh': True}
+                file = self.engine.packet_dir(key) / 'remote-verification.json'
+                file.write_text(json.dumps(receipt))
+                replies = [{'status': 'completed', 'conclusion': 'failure'},
+                           {'owner': {'login': owner}, 'private': private}, {'login': 'owner'}]
+                with patch('verify_ci.gh', side_effect=replies * 2), patch('verify_ci.command') as cmd, \
+                        patch.object(self.p, 'verify') as local_verify:
+                    for _ in range(2):
+                        self.assertEqual('PATCH_READY', self.engine.advance(key))
+                        self.assertEqual(original, self.engine.load(key))
+                        self.assertEqual('PATCH_READY', self.p.task(key)['state'])
+                    cmd.assert_not_called()
+                    local_verify.assert_not_called()
 
 
 if __name__ == '__main__':

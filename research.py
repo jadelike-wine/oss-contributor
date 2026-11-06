@@ -432,6 +432,15 @@ def run(engine, task_id, data):
     proactive = engine.proactive(task_id, data)
     before = p.fingerprint(task['workspace'])
     packet = collect(engine, task)
+    from research_scope import resolution_digest, scope_identity
+    resolved_digest = resolution_digest(data)
+    resolved_scope = data.get('scope_overlap_review') if resolved_digest else None
+    prior_matrix = engine.db.execute('SELECT matrix FROM research_candidates WHERE task=? ORDER BY updated_at DESC LIMIT 1',
+                                     (task_id,)).fetchone() if resolved_scope else None
+    resolved_feature_key = json.loads(prior_matrix['matrix']).get('feature_key') if prior_matrix else None
+    if resolved_scope:
+        packet = {**packet, 'scope_overlap_review': resolved_scope,
+                  'scope_overlap_history': data.get('scope_overlap_history', [])[-1:]}
     from feature_matrix import PROMPT, build, persist
     from telemetry import ACTIVE
     prompt = ('Research ONE valuable opportunity, or return none. Prefer explicit user demand, bounded scope, '
@@ -492,7 +501,21 @@ def run(engine, task_id, data):
         prompt += ('\nRevise the proposal to address this prior review. Treat it as feedback, not new source evidence. '
                    'When existing_issue is supplied, this proposal continues that discussion, never files a new issue. '
                    'Do not claim verified execution or maintainer approval.\n' + json.dumps(data['research_feedback']))
+    if resolved_scope:
+        prompt += ('\nRESOLVED LOCAL SCOPE: narrow this investigation to the independently reviewed remaining_scope '
+                   'and exclusions in scope_overlap_review. Shared source evidence in scope_overlap_history belongs '
+                   'to the prior work and must not be proposed again. This latest resolution constrains earlier '
+                   'research and feedback. Produce a revised complete opportunity and matrix with independent '
+                   'behavior, affected files, implementation and validation; retain this investigation feature_key. '
+                   'No prior research approval is inherited by the revised scope.\n' + json.dumps(resolved_scope))
     pending = data.get('research_pending') or data.get('research', {})
+    if pending and pending.get('scope_resolution_digest') != resolved_digest:
+        data.setdefault('research_scope_revision_history', []).append({
+            'at': now(), 'resolution_digest': resolved_digest, 'previous': pending})
+        data.pop('research_pending', None)
+        data.pop('research', None)
+        engine.store(task_id, data)
+        pending = {}
     if data.get('research'):
         data['research_pending'] = pending
         data.pop('research')
@@ -513,7 +536,11 @@ def run(engine, task_id, data):
         if parse_error is not None:
             raise parse_error
         validate(answer, task, packet)
+        if resolved_feature_key and answer.get('decision') == 'candidate' and answer.get('feature_matrix', {}).get('feature_key') != resolved_feature_key:
+            raise ValueError('Resolved overlap revision must retain feature_key: ' + resolved_feature_key)
         matrix = build(answer, task, packet) if packet.get('schema_version') == 2 and answer['decision'] == 'candidate' else None
+        if matrix and resolved_scope and scope_identity(task['repo'], matrix) == resolved_scope.get('scope'):
+            raise ValueError('Resolved overlap requires a revised independent scope, not the unchanged opportunity')
     except ValueError as error:
         if ACTIVE.get():
             ACTIVE.get().count('researched_candidates')
@@ -531,7 +558,11 @@ def run(engine, task_id, data):
         if p.fingerprint(task['workspace']) != before:
             raise ValueError('Read-only research correction changed the workspace')
         validate(answer, task, packet)
+        if resolved_feature_key and answer.get('decision') == 'candidate' and answer.get('feature_matrix', {}).get('feature_key') != resolved_feature_key:
+            raise ValueError('Resolved overlap revision must retain feature_key: ' + resolved_feature_key)
         matrix = build(answer, task, packet) if packet.get('schema_version') == 2 and answer['decision'] == 'candidate' else None
+        if matrix and resolved_scope and scope_identity(task['repo'], matrix) == resolved_scope.get('scope'):
+            raise ValueError('Resolved overlap requires a revised independent scope, not the unchanged opportunity')
     if matrix:
         persist(engine, task, answer, matrix)
     current = ACTIVE.get()
@@ -539,6 +570,8 @@ def run(engine, task_id, data):
         current.count('researched_candidates')
         current.count('candidate_' + answer.get('category', answer['decision']))
     result = {'base_sha': task['base_sha'], 'fingerprint': before, 'at': now(), 'opportunity': answer}
+    if resolved_digest:
+        result['scope_resolution_digest'] = resolved_digest
     if matrix:
         result['feature_id'] = matrix['feature_id']
     save(engine.packet_dir(task_id) / 'opportunity.json', result)
@@ -563,6 +596,9 @@ def run(engine, task_id, data):
         engine.move(task_id, data, 'SKIPPED')
         return result
     local_candidates = []
+    from research_scope import overlaps
+    scope_overlaps = [item for item in overlaps(engine.db, task, matrix)
+                      if item['prior_state'] not in ('SKIPPED', 'FAILED', 'CLOSED', 'MERGED')] if matrix else []
     for row in engine.db.execute('SELECT task,queue,matrix FROM research_candidates WHERE lower(repo)=lower(?) AND task!=? ORDER BY updated_at DESC LIMIT 20', (task['repo'], task_id)):
         prior = json.loads(row['matrix'])
         local_candidates.append({'task': row['task'], 'queue': row['queue'],
@@ -584,9 +620,25 @@ def run(engine, task_id, data):
                 'Compare supplied local_candidates by user need and implementation scope, not title alone. '
                 'If one already covers the same work, reject and return local_duplicate_task naming that supplied task. '
                 'Never infer semantic equivalence from keywords alone. '
+                'The supplied scope_overlaps contain exact shared source quotes and unique affected files. '
+                'Partial overlap is not full duplication: preserve unique work and return local_scope_overlap_task '
+                'with approved=false if the scope must be split or explicitly reviewed before installation/implementation. '
+                'When scope_overlap_review is resolved, assess the revised independent remainder against that resolution '
+                'and its exclusions; do not re-block the original broad scope from a stale research checkpoint. '
                 + (PRIORITY_GUIDANCE if proactive else ''),
         'opportunity': answer, 'context': packet, 'existing_issue': candidate.get('existing_issue'),
-        'local_candidates': local_candidates})
+        'scope_overlap_review': resolved_scope, 'scope_overlap_history': data.get('scope_overlap_history', [])[-1:],
+        'local_candidates': local_candidates, 'scope_overlaps': scope_overlaps})
+    if gate.get('local_scope_overlap_task'):
+        overlap_id = gate['local_scope_overlap_task']
+        if gate['approved'] or overlap_id not in {item['task'] for item in scope_overlaps}:
+            raise ValueError('Partial overlap must name supplied exact source evidence and require review')
+        from research_scope import hold_overlap
+        receipt = hold_overlap(engine.db, task_id, overlap_id, gate['reason'])
+        data['scope_overlap_review'] = receipt
+        engine.store(task_id, data)
+        save(engine.packet_dir(task_id) / 'local-scope-overlap.json', receipt)
+        return result
     if gate.get('local_duplicate_task'):
         duplicate_id = gate['local_duplicate_task']
         if gate['approved'] or duplicate_id not in {item['task'] for item in local_candidates}:

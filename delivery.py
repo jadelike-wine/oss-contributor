@@ -106,7 +106,9 @@ Any hook-induced content change invalidates approval, even if commit succeeded.
     if previous_tree and previous_tree != tree:
         raise RuntimeError('Publication intent refers to different content')
     head_tree = command(['git', 'rev-parse', 'HEAD^{tree}'], cwd=work).strip()
-    if head_tree == tree:
+    merge_path = Path(command(['git', 'rev-parse', '--git-path', 'MERGE_HEAD'], cwd=work).strip())
+    merge_path = merge_path if merge_path.is_absolute() else Path(work) / merge_path
+    if head_tree == tree and not merge_path.exists():
         if not previous_tree:
             raise RuntimeError('No approved patch commit or recoverable publication intent')
     else:
@@ -213,6 +215,7 @@ NODE_ENTRIES = {
     'npm': ('npm/bin/npm-cli.js',),
     'pnpm': ('pnpm/bin/pnpm.cjs', 'corepack/dist/pnpm.js'),
     'corepack': ('corepack/dist/corepack.js',),
+    'yarn': ('yarn/bin/yarn.js', 'corepack/dist/yarn.js'),
 }
 
 

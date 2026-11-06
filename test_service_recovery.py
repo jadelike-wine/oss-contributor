@@ -12,6 +12,9 @@ TASK = 'Tencent--tdesign-react--hunt-example'
 
 
 class ModelServiceRecoveryTests(unittest.TestCase):
+    channel = 'opencode'
+    client = 'OpenCode'
+
     def setUp(self):
         self.db = sqlite3.connect(':memory:')
         self.addCleanup(self.db.close)
@@ -25,7 +28,7 @@ class ModelServiceRecoveryTests(unittest.TestCase):
                   '2026-11-05T03:26:40+00:00', 'success')
         self.data = {
             'stage': 'PLAN', 'attempts': {'PLAN': 1, 'PATCH_READY': 2},
-            'last_error': 'OpenCode did not complete plan: Service temporarily unavailable',
+            'last_error': f'{self.client} did not complete plan: Service temporarily unavailable',
             'failure_category': 'service_unavailable',
             'stop_reason': 'infrastructure_retry_exhausted',
             'infrastructure_failures': {
@@ -36,9 +39,9 @@ class ModelServiceRecoveryTests(unittest.TestCase):
         }
 
     def call(self, call_id, task, started, ended, outcome, purpose='plan',
-             model='tokenking/devin/swe-2', channel='opencode'):
+             model='tokenking/devin/swe-2', channel=None):
         self.db.execute('INSERT INTO model_calls VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
-                        (call_id, 'run-' + call_id, task, purpose, model, channel,
+                        (call_id, 'run-' + call_id, task, purpose, model, channel or self.channel,
                          started, ended, outcome, 100, 20, 0.01))
 
     def recover(self, data=None, options=None):
@@ -98,9 +101,9 @@ class ModelServiceRecoveryTests(unittest.TestCase):
             ('stage', 'REPRODUCE'), ('stage', 'FAILED'), ('stage', 'AUTO_REVIEW'),
             ('last_error', 'git failed: Service temporarily unavailable'),
             ('last_error', 'Hermes did not complete plan: Service temporarily unavailable'),
-            ('last_error', 'OpenCode did not complete repair: Service temporarily unavailable'),
-            ('last_error', 'OpenCode did not complete plan: unknown certificate verification error'),
-            ('last_error', 'OpenCode did not complete plan: invalid model response'),
+            ('last_error', f'{self.client} did not complete repair: Service temporarily unavailable'),
+            ('last_error', f'{self.client} did not complete plan: unknown certificate verification error'),
+            ('last_error', f'{self.client} did not complete plan: invalid model response'),
             ('failure_category', 'patch_error'),
         ]
         for key, value in changes:
@@ -118,7 +121,8 @@ class ModelServiceRecoveryTests(unittest.TestCase):
         self.assert_unchanged()
 
     def test_missing_wrong_channel_model_or_purpose_success_cannot_recover(self):
-        for column, value in [('channel', 'hermes'), ('model', 'another-model'),
+        other_channel = 'dsh' if self.channel == 'opencode' else 'opencode'
+        for column, value in [('channel', 'hermes'), ('channel', other_channel), ('model', 'another-model'),
                               ('purpose', 'research-review'), ('outcome', 'failed'), ('ended', None)]:
             with self.subTest(column=column):
                 self.db.execute(f'UPDATE model_calls SET {column}=? WHERE call_id=?', (value, 'success'))
@@ -155,7 +159,9 @@ class ModelServiceRecoveryTests(unittest.TestCase):
         self.assert_unchanged()
 
     def test_failed_call_wrong_outcome_channel_or_missing_completion_is_rejected(self):
-        for column, value in [('outcome', 'model_format'), ('channel', 'hermes'), ('ended', None)]:
+        other_channel = 'dsh' if self.channel == 'opencode' else 'opencode'
+        for column, value in [('outcome', 'model_format'), ('channel', 'hermes'),
+                              ('channel', other_channel), ('ended', None)]:
             with self.subTest(column=column):
                 self.db.execute(f'UPDATE model_calls SET {column}=? WHERE call_id=?', (value, 'failure'))
                 self.assert_unchanged()
@@ -171,6 +177,63 @@ class ModelServiceRecoveryTests(unittest.TestCase):
         self.data['attempts']['PLAN'] = 1
         self.data['model_service_recoveries'] = [{'task': TASK, 'stage': 'PLAN'}]
         self.assert_unchanged()
+
+    def test_executor_prefix_must_match_failed_receipt_channel(self):
+        other_client = 'DSH' if self.client == 'OpenCode' else 'OpenCode'
+        self.data['last_error'] = self.data['last_error'].replace(self.client, other_client)
+        self.assert_unchanged()
+
+    def test_incomplete_executor_calls_keep_bounded_infrastructure_retries(self):
+        data = {'stage': 'PLAN', 'attempts': {'PLAN': 1}}
+        error = RuntimeError(f'{self.client} did not complete plan: missing terminal event')
+        for _ in range(3):
+            self.assertTrue(failures.record_failure(data, 'PLAN', error, {}, NOW))
+        self.assertEqual('service_unavailable', data['failure_category'])
+        self.assertEqual('infrastructure_retry_exhausted', data['stop_reason'])
+        self.assertEqual({'PLAN': 1}, data['attempts'])
+        self.assertFalse(failures.retry_ready(data, 'PLAN', NOW + dt.timedelta(days=1)))
+        for detail, expected in [('HTTP 429 rate limit', 'rate_limit'),
+                                 ('certificate verify failed', 'certificate'),
+                                 ('invalid model response', 'model_format')]:
+            with self.subTest(detail=detail):
+                error = RuntimeError(f'{self.client} did not complete plan: {detail}')
+                self.assertEqual(expected, failures.category(error))
+
+
+class DSHModelServiceRecoveryTests(ModelServiceRecoveryTests):
+    channel = 'dsh'
+    client = 'DSH'
+
+    def test_dsh_recovery_preserves_legacy_opencode_receipts(self):
+        self.call('legacy-opencode', 'legacy-task', '2026-11-01T01:00:00+00:00',
+                  '2026-11-01T01:02:00+00:00', 'success', channel='opencode')
+        calls = list(self.db.execute('SELECT * FROM model_calls ORDER BY call_id'))
+        self.assertTrue(self.recover())
+        self.assertEqual(calls, list(self.db.execute('SELECT * FROM model_calls ORDER BY call_id')))
+        receipt = self.data['model_service_recoveries'][0]
+        self.assertEqual('dsh', receipt['failed_call']['channel'])
+        self.assertEqual('dsh', receipt['success_call']['channel'])
+
+    def test_incomplete_or_malformed_stream_uses_format_budget_not_patch_attempts(self):
+        from dsh_adapter import DSHProtocolError, parse_result
+        for name, output in (
+                ('missing_final', json.dumps({'type': 'session', 'sessionId': 'fixture'})),
+                ('malformed_json', '{"type":"session"')):
+            with self.subTest(case=name):
+                with self.assertRaises(DSHProtocolError) as caught:
+                    parse_result(output, 0)
+                data = {'stage': 'PLAN', 'attempts': {'PLAN': 1}}
+                for _ in range(3):
+                    self.assertTrue(failures.record_failure(data, 'PLAN', caught.exception, {}, NOW))
+                self.assertEqual('model_format', data['failure_category'])
+                self.assertEqual({'PLAN': 1}, data['attempts'])
+                self.assertEqual(3, data['infrastructure_failures']['PLAN']['count'])
+                self.assertFalse(failures.retry_ready(data, 'PLAN', NOW + dt.timedelta(days=1)))
+                before = copy.deepcopy(data)
+                # Even with the matching DSH service-success receipts from
+                # setUp, protocol failures cannot reopen a service window.
+                self.assertFalse(self.recover(data))
+                self.assertEqual(before, data)
 
 
 if __name__ == '__main__':

@@ -25,13 +25,14 @@ def category(error):
         return 'setup_error'
     if type(error).__name__ == 'ContributionPaused':
         return 'policy'
-    if isinstance(error, json.JSONDecodeError) or any(x in text for x in MODEL_FORMAT):
+    if (type(error).__name__ == 'DSHProtocolError' or isinstance(error, json.JSONDecodeError)
+            or any(x in text for x in MODEL_FORMAT)):
         return 'model_format'
     if any(x in text for x in ('certificate', 'ssl_cert', 'unable to get local issuer', 'tls handshake')):
         return 'certificate'
     if any(x in text for x in ('rate limit', 'rate_limit', 'too many requests', 'http 429')):
         return 'rate_limit'
-    if any(x in text for x in ('stream closed', 'service unavailable', 'provider unavailable', 'bad gateway', 'http 502', 'http 503', 'http 504', 'overloaded', 'hermes did not complete', 'opencode did not complete')):
+    if any(x in text for x in ('stream closed', 'service unavailable', 'provider unavailable', 'bad gateway', 'http 502', 'http 503', 'http 504', 'overloaded', 'hermes did not complete', 'opencode did not complete', 'dsh did not complete')):
         return 'service_unavailable'
     if isinstance(error, subprocess.TimeoutExpired):
         return 'timeout'
@@ -161,8 +162,9 @@ def recover_model_service(db, data, task_id, options, at=None):
     error = data.get('last_error', '')
     history = data.get('model_service_recoveries', [])
     limit = options.get('max_infrastructure_attempts', 3)
-    if (not purpose or not isinstance(error, str)
-            or not error.startswith(f'OpenCode did not complete {purpose}:')
+    channel = next((channel for client, channel in (('OpenCode', 'opencode'), ('DSH', 'dsh'))
+                    if isinstance(error, str) and error.startswith(f'{client} did not complete {purpose}:')), None)
+    if (not purpose or channel is None
             or category(RuntimeError(error)) != 'service_unavailable'
             or data.get('failure_category') != 'service_unavailable'
             or record.get('category') != 'service_unavailable'
@@ -192,7 +194,7 @@ def recover_model_service(db, data, task_id, options, at=None):
         return False
     failed = one('SELECT * FROM model_calls WHERE task=? AND purpose=? '
                  'ORDER BY started DESC,call_id DESC LIMIT 1', (task_id, purpose))
-    if (not failed or failed['channel'] != 'opencode' or not failed['model']
+    if (not failed or failed['channel'] != channel or not failed['model']
             or failed['outcome'] != 'service_unavailable'):
         return False
     started, ended = timestamp(failed['started']), timestamp(failed['ended'])

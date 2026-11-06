@@ -2,7 +2,7 @@
 
 **Cross-Harness Feature Research & Autonomous OSS Engineering**
 
-面向 AI Coding Harness 与 Agent 基础设施的跨项目功能研究和开源贡献平台。Python 3.11+ 标准库实现，使用 Git、GitHub CLI、OpenCode 和 Hermes；研究发现、实现验证、公开发布具有独立的准入门槛。成功以可靠功能、可重复验证和上游真实接受衡量，不以运行时长或 PR 数量代替质量。
+面向 AI Coding Harness 与 Agent 基础设施的跨项目功能研究和开源贡献平台。Python 3.11+ 标准库实现，使用 Git、GitHub CLI、DeepSeek Harness CLI（兼容 OpenCode）和 Hermes；研究发现、实现验证、公开发布具有独立的准入门槛。成功以可靠功能、可重复验证和上游真实接受衡量，不以运行时长或 PR 数量代替质量。
 
 ## 工作流程
 
@@ -20,13 +20,13 @@
   → 精确 head SHA 的 CI 观察、维护者回应、合并或关闭
 ```
 
-默认实现模型与审查模型仍为 `tokenking/devin/swe-2`。当前研究通道显式配置为 Hermes，研究审查标识为 **`same_model_separate_invocation`**；OpenCode 实现与 Hermes 审查仍为 `same_model_separate_channel`，均不宣称两个独立模型。新功能必须获得维护者明确方向才进入实现；高风险候选在确认方向后仍暂停等待人工补丁审查，目前没有可绕过这一门槛的人工批准 CLI。
+当前研究初稿、纠正和目录分诊通过 Hermes 使用 `tokenking/deepseek-v4.1-flash`；方案、实现和反馈通过 DSH CLI 使用 `tokenking/devin/swe-2`，审查仍通过 Hermes 使用 SWE-2。研究与实现模型分别配置，新研究保存实际生成时的模型和通道；恢复旧研究不按新配置改写来源，无法确认的身份标为 `unknown`。DeepSeek 研究与 SWE-2 审查为 `different_model_same_channel`；SWE-2 实现与审查为 `same_model_separate_channel`，不宣称独立模型审查或维护者批准。新功能必须获得维护者明确方向才进入实现；高风险候选在确认方向后仍暂停等待人工补丁审查，目前没有可绕过这一门槛的人工批准 CLI。
 
 直接调用 `contribute.py` 默认禁止远端推送、创建 Issue/PR、修改 PR 和其他 GitHub 写操作。当前项目已于 2026-11-05 获得用户的持续调度发布授权，并启用 `automation.scheduled_external_writes=true`：`hermes_tick.py` 每轮读取此项，严格为布尔值 `true` 时传入全局参数 `--allow-external-writes`；缺省或 `false` 则关闭。`automation.enabled=true` 和仓库白名单本身不授予发布权限，仓库规则、复现、验证和审查门禁继续生效。无外写授权时仍可准备本地补丁与发布材料。恢复规则见 [贡献恢复说明](docs/conversion-recovery-2026-10-31.md)，此前验收进度见 [2026-10-31 工程记录](docs/conversion-progress-2026-10-31.md)。
 
 ## 快速使用
 
-需要已登录的 `gh`、Git，以及已配置可用模型的 OpenCode 和支持 `chat --query-file --format stream-json` 的 Hermes。凭据继续由各 CLI 管理。不要把密钥写入配置或研究资料。
+需要已登录的 `gh`、Git、DSH CLI（可使用 DeepSeek Harness 桌面客户端捆绑版），以及支持 `chat --query-file --format stream-json` 的 Hermes。旧配置仍可选择 OpenCode。DSH 使用项目内独立的 `state/dsh/`，不修改桌面客户端的配置或会话；模型凭据通过进程环境传递，可复用已有 OpenCode 服务商配置。不要把密钥写入项目配置或研究资料。
 
 ```powershell
 python -X utf8 -m unittest discover -v
@@ -227,7 +227,13 @@ Goose 的指定看板 `Ready`、`manual_issue_submission`、`human_pr_review_req
 | `automation.verification_max_age_seconds` | 缺省 86,400 秒；发布前验证收据超时须重跑红绿检查及审查 |
 | `scanning.repositories_per_tick` | 当前 12；每轮实际网络采集上限，保留完整目录和持久扫描游标 |
 | `scanning.cache_seconds` / `repository_checks.cache_seconds` | 当前扫描 21,600 秒、成功仓库健康检查 86,400 秒；发布前仍实时核验目标规则；旧配置缺省 0，设 0 禁用对应缓存 |
-| `research.model_channel` | `opencode` 或 `hermes`；缺省 OpenCode，当前配置 Hermes；不静默切换 |
+| `implementation_channel` | `opencode` 或 `dsh`；旧配置缺省 OpenCode，当前 DSH；故障不会静默退回其他执行器 |
+| `model` / `review_model` | 当前均为 `tokenking/devin/swe-2`；分别供方案实现和 Hermes 审查使用 |
+| `research.model` | 当前 `tokenking/deepseek-v4.1-flash`；研究初稿、纠正和目录分诊使用；缺省沿用 `model`，不影响审查 |
+| `research.model_channel` | `opencode`、`dsh` 或 `hermes`；缺省 OpenCode，当前配置 Hermes；不静默切换 |
+| `dsh.desktop_install_dir` / `dsh.provider_config_path` | 可选；自动寻找已安装的桌面捆绑 CLI，默认读取用户现有 OpenCode 服务商配置，仅传递本次指定模型的凭据 |
+| `dsh.base_url` / `dsh.api_key_env` | 可选的模型接口地址和环境变量名；密钥不写入项目文件 |
+| `dsh.context_window` / `dsh.max_tokens` | 当前 128,000 / 32,768；DSH 模型上下文及单步输出上限，项目单轮调用/时间预算仍独立执行 |
 | `research.candidates_per_run` | 缺省 3，当前 3，范围 1–10；缩小单轮研究批次，优先把已有候选交付；候选上限不是 Issue/PR 发布指标 |
 | `research.source_discovery_per_run` | 缺省 0，当前 2，范围 0–2；源码自发现占上述研究额度，使用已存在的固定版本源码，不额外扩大总额度 |
 | `research.reserve_model_calls` / `research.reserve_seconds` | 缺省预留 2 次调用和 600 秒给研究；从单轮既有总额度内分配，不增加总预算 |

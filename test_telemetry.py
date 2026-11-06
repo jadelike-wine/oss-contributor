@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 import sqlite3
@@ -9,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from contribute import Pipeline, execute
-from telemetry import ACTIVE, BudgetExhausted, metrics, migrate, run, stage
+from telemetry import ACTIVE, BudgetExhausted, metrics, migrate, record_usage, run, stage
 
 
 class TelemetryTests(unittest.TestCase):
@@ -34,6 +35,72 @@ class TelemetryTests(unittest.TestCase):
         self.assertGreater(report['runs'][0]['stages'][0]['elapsed'], 0)
         self.assertIsNone(report['runs'][0]['usage']['actual_cost_usd'])
         self.assertFalse(report['cost_caps_enforced'])
+
+    def test_large_unicode_stdin_with_output_capture_is_complete_and_not_an_argument(self):
+        prompt = '研究输入：DeepSeek 与 SWE-2；保留 Unicode。\n' * 8192
+        payload = prompt.encode('utf-8')
+        script = ('import hashlib,json,sys; data=sys.stdin.buffer.read(); '
+                  'print(json.dumps({"bytes":len(data),"sha256":hashlib.sha256(data).hexdigest()}))')
+        prefix = self.root / 'stdin-capture'
+        original = subprocess.Popen
+        with patch('contribute.subprocess.Popen', wraps=original) as launch:
+            result = execute([sys.executable, '-c', script], stdin_text=prompt,
+                             output_prefix=prefix, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout),
+                         {'bytes': len(payload), 'sha256': hashlib.sha256(payload).hexdigest()})
+        self.assertGreater(len(payload), 100_000)
+        self.assertEqual(Path(str(prefix) + '.jsonl').read_text(encoding='utf-8'), result.stdout)
+        self.assertEqual(Path(str(prefix) + '.stderr').read_text(encoding='utf-8'), '')
+        self.assertEqual(launch.call_args.args[0], [sys.executable, '-c', script])
+        self.assertNotIn(prompt, launch.call_args.args[0])
+
+    def test_dsh_native_step_usage_counts_cache_once_and_deduplicates_steps(self):
+        end = {'type': 'status', 'phase': 'step_end', 'turn': 1, 'step': 0,
+               'usage': {'inputTokens': 10, 'outputTokens': 5, 'cacheReadTokens': 20,
+                         'cacheWriteTokens': 2, 'reasoningTokens': 3, 'totalTokens': 37}}
+        events = [{'type': 'session', 'sessionId': 'isolated-session'},
+                  {'type': 'status', 'phase': 'step_start', 'turn': 1, 'step': 0}, end, end,
+                  {'type': 'status', 'phase': 'step_start', 'turn': 1, 'step': 1},
+                  {'type': 'status', 'phase': 'step_end', 'turn': 1, 'step': 1,
+                   'usage': {'inputTokens': 7, 'outputTokens': 3}},
+                  {'type': 'final', 'sessionId': 'isolated-session', 'reason': {'kind': 'completed'}}]
+        with run(self.p, 'usage') as current:
+            current.call_id = current.reserve_call('task', 'repair', 'test/model', 'dsh')
+            record_usage('\n'.join(json.dumps(event) for event in events), 'dsh')
+            self.assertEqual(current.counters['reported_provider_steps'], 2)
+        row = self.p.db.execute('SELECT * FROM model_calls').fetchone()
+        self.assertEqual(row['input_tokens'], 39)
+        self.assertEqual(row['output_tokens'], 8)
+        self.assertIsNone(row['actual_cost_usd'])
+
+    def test_dsh_incomplete_or_conflicting_usage_remains_unknown(self):
+        start = {'type': 'status', 'phase': 'step_start', 'turn': 0, 'step': 0}
+        end = {'type': 'status', 'phase': 'step_end', 'turn': 0, 'step': 0,
+               'usage': {'inputTokens': 10, 'outputTokens': 5}}
+        session = {'type': 'session', 'sessionId': 'isolated-session'}
+        final = {'type': 'final', 'sessionId': 'isolated-session'}
+        cases = {
+            'missing_usage': [session, start, {**end, 'usage': None}, final],
+            'missing_step_end': [session, start, final],
+            'missing_terminal': [session, start, end],
+            'partial_second_step': [session, start, end, {**start, 'step': 1}, final],
+            'missing_input': [session, start, {**end, 'usage': {'outputTokens': 5}}, final],
+            'invalid_input': [session, start, {**end, 'usage': {'inputTokens': True, 'outputTokens': 5}}, final],
+            'negative_cache': [session, start, {**end, 'usage': {**end['usage'], 'cacheReadTokens': -1}}, final],
+            'conflicting_duplicate': [session, start, end, {**end, 'usage': {'inputTokens': 20, 'outputTokens': 5}}, final],
+            'mixed_sessions': [session, start, end, {'type': 'session', 'sessionId': 'other'}, final],
+            'different_final_session': [session, start, end, {**final, 'sessionId': 'other'}],
+            'multiple_final_receipts': [session, start, end, final, final],
+        }
+        for name, events in cases.items():
+            with self.subTest(case=name), run(self.p, 'usage') as current:
+                current.call_id = current.reserve_call('task', name, 'test/model', 'dsh')
+                record_usage('\n'.join(json.dumps(event) for event in events), 'dsh')
+                row = self.p.db.execute('SELECT * FROM model_calls WHERE call_id=?', (current.call_id,)).fetchone()
+                self.assertIsNone(row['input_tokens'])
+                self.assertIsNone(row['output_tokens'])
+                self.assertNotIn('reported_provider_steps', current.counters)
 
     def test_hermes_research_uses_research_identity_budget_and_no_tools(self):
         from autonomous import Autonomous

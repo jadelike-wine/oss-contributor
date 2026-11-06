@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from contribute import command, execute, gh, now, save
+from model_selection import research_model
 from telemetry import BudgetExhausted, TaskBudgetExhausted
 
 
@@ -523,7 +524,18 @@ def run(engine, task_id, data):
     parse_error = None
     if pending.get('base_sha') == task['base_sha'] and pending.get('fingerprint') == before:
         answer = pending['opportunity']
+        model_identity = pending.get('model_identity')
+        if (not isinstance(model_identity, dict)
+                or not isinstance(model_identity.get('model'), str) or not model_identity['model'].strip()
+                or model_identity.get('channel') not in ('hermes', 'opencode', 'dsh')):
+            # The current configuration says nothing about who produced an old
+            # checkpoint. Missing generation provenance must remain unknown.
+            model_identity = {'model': None, 'channel': None}
+        else:
+            model_identity = dict(model_identity)
     else:
+        model_identity = {'model': research_model(p.config),
+                          'channel': p.config.get('research', {}).get('model_channel', 'opencode')}
         try:
             answer = research_answer(engine, task_id, 'research', prompt)
         except json.JSONDecodeError as error:
@@ -554,6 +566,8 @@ def run(engine, task_id, data):
                       '\nReturn a corrected COMPLETE JSON object. Recheck every field type and every exact quote. '
                       'Use unknown for unsupported peer capabilities; return none if no grounded candidate remains. '
                       'Do not add facts or claim new searches/tests. Previous response:\n' + json.dumps(previous, ensure_ascii=False))
+        model_identity = {'model': research_model(p.config),
+                          'channel': p.config.get('research', {}).get('model_channel', 'opencode')}
         answer = research_answer(engine, task_id, 'research-correction', correction)
         if p.fingerprint(task['workspace']) != before:
             raise ValueError('Read-only research correction changed the workspace')
@@ -569,7 +583,8 @@ def run(engine, task_id, data):
     if current:
         current.count('researched_candidates')
         current.count('candidate_' + answer.get('category', answer['decision']))
-    result = {'base_sha': task['base_sha'], 'fingerprint': before, 'at': now(), 'opportunity': answer}
+    result = {'base_sha': task['base_sha'], 'fingerprint': before, 'at': now(), 'opportunity': answer,
+              'model_identity': model_identity}
     if resolved_digest:
         result['scope_resolution_digest'] = resolved_digest
     if matrix:
@@ -696,8 +711,8 @@ def research_answer(engine, task_id, purpose, prompt):
     if len(prompt) > limits(engine.p)['context_characters'] + 12000:
         raise TaskBudgetExhausted('research_prompt_characters_exhausted')
     channel = engine.p.config.get('research', {}).get('model_channel', 'opencode')
-    if channel == 'opencode':
+    if channel in ('opencode', 'dsh'):
         return engine.model(task_id, purpose, prompt)
     if channel == 'hermes':
         return engine.hermes_research(task_id, purpose, prompt)
-    raise ValueError('research.model_channel must be opencode or hermes')
+    raise ValueError('research.model_channel must be opencode, dsh or hermes')

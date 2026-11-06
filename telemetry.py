@@ -304,13 +304,16 @@ def model_call(channel, review=None):
     def decorate(function):
         @functools.wraps(function)
         def wrapper(self, task_id, purpose, *args, **kwargs):
-            is_review = channel == 'hermes' if review is None else review
+            from model_selection import execution_channel, research_model, selected_model
+            actual_channel = execution_channel(self.p.config, purpose) if channel == 'implementation' else channel
+            is_review = actual_channel == 'hermes' if review is None else review
             with run(self.p, 'model'), stage('review' if is_review else 'model', task_id):
                 current = ACTIVE.get()
-                model = self.p.config.get('review_model') or self.p.config.get('model', 'tokenking/devin/swe-2')
-                if not is_review:
-                    model = self.p.config.get('model', 'tokenking/devin/swe-2')
-                identifier = current.reserve_call(task_id, purpose, model, channel)
+                # The non-review Hermes adapter is explicitly research, even
+                # for survey invocation IDs or another controller-owned name.
+                model = (research_model(self.p.config) if actual_channel == 'hermes' and review is False
+                         else selected_model(self.p.config, purpose, review=is_review))
+                identifier = current.reserve_call(task_id, purpose, model, actual_channel)
                 previous_call = current.call_id
                 current.call_id = identifier
                 outcome = 'success'
@@ -319,7 +322,7 @@ def model_call(channel, review=None):
                 except BaseException as error:
                     outcome = classify(error)
                     if outcome in ('network', 'rate_limit', 'certificate', 'service_unavailable', 'timeout'):
-                        current.channel_failures[channel] = current.channel_failures.get(channel, 0) + 1
+                        current.channel_failures[actual_channel] = current.channel_failures.get(actual_channel, 0) + 1
                     raise
                 finally:
                     with self.db:
@@ -329,37 +332,88 @@ def model_call(channel, review=None):
     return decorate
 
 
+def _dsh_usage_records(stream):
+    """Native DSH step receipts; incomplete calls retain unknown totals."""
+    try:
+        events = [json.loads(line) for line in stream.splitlines() if line.strip()]
+    except ValueError:
+        return []
+    if not events or any(not isinstance(event, dict) for event in events):
+        return []
+    session_id, started, records, finals = None, set(), {}, 0
+    for event in events:
+        if event.get('type') == 'session':
+            identifier = event.get('sessionId')
+            if (not isinstance(identifier, str) or not identifier
+                    or session_id is not None and session_id != identifier):
+                return []
+            session_id = identifier
+        elif event.get('type') == 'status' and event.get('phase') in ('step_start', 'step_end'):
+            turn, step = event.get('turn'), event.get('step')
+            if (session_id is None or type(turn) is not int or turn < 0
+                    or type(step) is not int or step < 0):
+                return []
+            identity = (session_id, turn, step)
+            if event['phase'] == 'step_start':
+                started.add(identity)
+                continue
+            usage = event.get('usage')
+            if identity not in started or not isinstance(usage, dict):
+                return []
+            # DSH maps pi-ai input (uncached tokens) separately from cache
+            # reads/writes. Its step receipt already includes provider retries.
+            record = (usage.get('inputTokens'), usage.get('outputTokens'),
+                      usage.get('cacheReadTokens', 0), usage.get('cacheWriteTokens', 0))
+            if (any(type(value) is not int or value < 0 for value in record)
+                    or identity in records and records[identity] != record):
+                return []
+            records[identity] = record
+        elif event.get('type') == 'final':
+            finals += 1
+            if event.get('sessionId') != session_id:
+                return []
+    if (session_id is None or events[-1].get('type') != 'final'
+            or finals != 1 or started != set(records)):
+        return []
+    return list(records.values())
+
+
 def record_usage(stream, channel):
     """Read native token counters only. Provider price estimates/zero placeholders are not bills."""
     current = ACTIVE.get()
     if not current or not current.call_id:
         return
     records, seen = [], set()
-    for line in stream.splitlines():
-        try:
-            event = json.loads(line)
-        except ValueError:
-            continue
-        if channel == 'opencode' and event.get('type') == 'step_finish':
-            part = event.get('part', {})
-            identity = part.get('id')
-            if identity and identity in seen:
+    if channel == 'dsh':
+        records = _dsh_usage_records(stream)
+    else:
+        for line in stream.splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
                 continue
-            if identity:
-                seen.add(identity)
-            tokens = part.get('tokens')
-            if isinstance(tokens, dict):
-                cache = tokens.get('cache') or {}
-                records.append((tokens.get('input'), tokens.get('output'), cache.get('read', 0), cache.get('write', 0)))
-        elif channel == 'hermes' and event.get('type') == 'result':
-            tokens = event.get('tokens')
-            if isinstance(tokens, dict):
-                records = [(tokens.get('input'), tokens.get('output'), tokens.get('cache_read', 0), tokens.get('cache_write', 0))]
+            if not isinstance(event, dict):
+                continue
+            if channel == 'opencode' and event.get('type') == 'step_finish':
+                part = event.get('part', {})
+                identity = part.get('id')
+                if identity and identity in seen:
+                    continue
+                if identity:
+                    seen.add(identity)
+                tokens = part.get('tokens')
+                if isinstance(tokens, dict):
+                    cache = tokens.get('cache') or {}
+                    records.append((tokens.get('input'), tokens.get('output'), cache.get('read', 0), cache.get('write', 0)))
+            elif channel == 'hermes' and event.get('type') == 'result':
+                tokens = event.get('tokens')
+                if isinstance(tokens, dict):
+                    records = [(tokens.get('input'), tokens.get('output'), tokens.get('cache_read', 0), tokens.get('cache_write', 0))]
     if records and all(type(value) is int and value >= 0 for record in records for value in record):
         with current.db:
             current.db.execute('UPDATE model_calls SET input_tokens=?,output_tokens=? WHERE call_id=?',
                                (sum(r[0] + r[2] + r[3] for r in records), sum(r[1] for r in records), current.call_id))
-        if channel == 'opencode':
+        if channel in ('opencode', 'dsh'):
             current.count('reported_provider_steps', len(records))
 
 

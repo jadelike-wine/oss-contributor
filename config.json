@@ -101,7 +101,14 @@
     "xtool-org/xtool",
     "debpalash/VoiceStudio",
     "DuarteSantos8/openGym",
-    "NVIDIA/OpenShell"
+    "NVIDIA/OpenShell",
+    "MoonshotAI/kimi-code",
+    "stepfun-ai/Step-Code",
+    "MiniMax-AI/minimax-code",
+    "MiniMax-AI/OpenAgentCore",
+    "InternLM/lmdeploy",
+    "InternLM/xtuner",
+    "PaddlePaddle/ERNIE"
   ],
   "repository_checks": {
     "max_inactive_days": 180,
@@ -113,6 +120,10 @@
       "SWE-agent/SWE-agent": {
         "reason": "Official README: development moved to mini-swe-agent, which supersedes SWE-agent",
         "evidence": "https://github.com/SWE-agent/SWE-agent#readme"
+      },
+      "MoonshotAI/kimi-cli": {
+        "reason": "Repository archived; official README says Python Kimi CLI replaced by MoonshotAI/kimi-code",
+        "evidence": "https://github.com/MoonshotAI/kimi-cli#readme"
       }
     },
     "policies": {

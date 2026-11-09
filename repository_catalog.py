@@ -53,6 +53,9 @@ triggerdotdev/trigger.dev inngest/inngest n8n-io/n8n activepieces/activepieces''
     'applications_and_tools': '''iib0011/omni-tools opengeos/GeoLibre HeyPuter/puter
 floatpane/matcha xtool-org/xtool debpalash/VoiceStudio DuarteSantos8/openGym
 pbakaus/impeccable NVIDIA/OpenShell'''.split(),
+    'chinese_llm': '''MoonshotAI/kimi-code stepfun-ai/Step-Code
+MiniMax-AI/minimax-code MiniMax-AI/OpenAgentCore InternLM/lmdeploy InternLM/xtuner
+PaddlePaddle/ERNIE'''.split(),
 }
 CANDIDATES = list(dict.fromkeys([*LEGACY_CANDIDATES,
                                *(repo for repos in CANDIDATE_GROUPS.values() for repo in repos)]))

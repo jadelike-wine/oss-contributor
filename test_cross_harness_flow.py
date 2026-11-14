@@ -34,17 +34,15 @@ class CrossHarnessFlowTests(unittest.TestCase):
         answer['evidence'].append({'repo': peers[0], 'path': 'feature.py', 'quote': 'VALUE = 2'})
         return packet, answer
 
-    def test_feature_matrix_to_confirmation_then_real_local_red_green_and_mock_pr(self):
+    def test_feature_matrix_to_implementation_then_real_local_red_green_and_mock_pr(self):
         packet, answer = self.packet()
         with self.research_mocks(answer, packet):
-            self.assertEqual(self.engine.advance(self.key), 'WAITING_MAINTAINER')
-            self.assertFalse((self.work / 'test_value.py').exists())
-            self.assertEqual(self.p.db.execute('SELECT queue FROM research_candidates').fetchone()[0], 'NEEDS_MAINTAINER_CONFIRMATION')
-            self.comments = [{'id': 103, 'user': {'type': 'User', 'login': 'maintainer'},
-                              'author_association': 'MEMBER', 'body': 'Please implement.'}]
+            # PR-First: a feature with clean policy goes straight to
+            # implementation; no maintainer-confirmation wait.
             self.assertEqual(self.engine.advance(self.key), 'PR_OPEN')
+            self.assertTrue((self.work / 'test_value.py').exists())
+            self.assertEqual(self.p.db.execute('SELECT queue FROM research_candidates').fetchone()[0], 'READY_TO_IMPLEMENT')
         self.assertEqual(len(self.created_prs), 1)
-        self.assertEqual(self.p.db.execute('SELECT queue FROM research_candidates').fetchone()[0], 'READY_TO_IMPLEMENT')
         verification = json.loads((self.engine.packet_dir(self.key) / 'verification.json').read_text())
         self.assertTrue(verification['passed'])
         outcomes = metrics(self.root / 'state/tasks.db')['quality_all_time']
@@ -93,10 +91,10 @@ class CrossHarnessFlowTests(unittest.TestCase):
         self.assertIn('research_pending', data)
         self.assertEqual(data['stage'], 'PLAN')
         self.assertEqual(data['attempts'], {})
-        with self.research_mocks(answer, packet), patch.object(self.engine, 'model') as model:
-            self.assertEqual(self.engine.advance(self.key), 'WAITING_MAINTAINER')
-        model.assert_not_called()
-        self.assertEqual(self.created_prs, [])
+        with self.research_mocks(answer, packet), patch.object(self.engine, 'model', wraps=self.model) as model:
+            self.assertEqual(self.engine.advance(self.key), 'PR_OPEN')
+        model.assert_called()  # planning ran; no maintainer wait under PR-First
+        self.assertEqual(len(self.created_prs), 1)
 
     def test_policy_paused_matrix_never_creates_public_proposal(self):
         packet, answer = self.packet()
@@ -108,17 +106,24 @@ class CrossHarnessFlowTests(unittest.TestCase):
         self.assertEqual(self.created_issues, [])
         self.assertEqual(self.created_prs, [])
 
-    def test_automated_pr_ban_still_posts_discussion_issue(self):
+    def test_automated_pr_soft_flag_still_implements(self):
         packet, answer = self.packet()
         answer['policy']['automated_pr'] = False
         with self.research_mocks(answer, packet):
+            # automated_pr=false without an explicit ban is a soft risk: the
+            # pipeline still implements and publishes under PR-First.
+            self.assertEqual(self.engine.advance(self.key), 'PR_OPEN')
+        self.assertEqual(len(self.created_issues), 1)
+        self.assertEqual(len(self.created_prs), 1)
+
+    def test_explicit_automation_ban_pauses_before_publication(self):
+        packet, answer = self.packet()
+        answer['policy']['automation'] = 'forbidden'
+        with self.research_mocks(answer, packet):
             self.engine.advance(self.key)
         self.assertEqual(self.p.db.execute('SELECT queue FROM research_candidates').fetchone()[0],
-                         'NEEDS_MAINTAINER_CONFIRMATION')
-        self.assertEqual(len(self.created_issues), 1)
-        self.assertIn('Maintainer direction requested', self.created_issues[0]['body'])
+                         'PAUSED_POLICY')
         self.assertEqual(self.created_prs, [])
-        self.assertEqual(self.p.task(self.key)['state'], 'WAITING_MAINTAINER')
 
     def test_reviewer_model_is_configurable_and_identity_is_truthful(self):
         self.p.config['model'] = 'tokenking/devin/swe-2'

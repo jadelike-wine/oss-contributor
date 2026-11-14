@@ -11,6 +11,7 @@ import re
 
 from repository_policy import (contribution_constraints, has_scope_approval,
                                human_maintainer_comments, issue_policy_reason)
+from policy_intelligence import SOFT_PENALTIES, assess as policy_assess
 
 
 _TYPE = r'(?:feature(?:[ -]request)?|enhancement|new[ -]feature)'
@@ -147,10 +148,10 @@ def linked_pr_review_key(snapshot, own_competition=False):
 
 
 def _linked_review(snapshot, approval_data, own_competition):
-    reasons, unknown, pending = [], [], []
+    reasons, unknown, pending, penalties = [], [], [], []
     linked = snapshot.get('linked_prs')
     if not isinstance(linked, list):
-        return [], ['Linked PR records are unknown'], []
+        return [], ['Linked PR records are unknown'], [], []
     receipt = (approval_data or {}).get('feature_linked_pr_review') or {}
     if not isinstance(receipt, dict):
         receipt = {}
@@ -175,6 +176,8 @@ def _linked_review(snapshot, approval_data, own_competition):
             continue
         if not current:
             pending.append('Linked PR scope needs review: ' + identity['url'])
+            penalties.append({'rule': 'linked_pr_pending', 'severity': 'soft', 'penalty': 10,
+                              'reason': 'Linked PR scope needs review: ' + identity['url']})
             continue
         matches = [x for x in decisions if isinstance(x, dict) and x.get('url') == identity['url']
                    and x.get('head_sha') == identity['head_sha']] if isinstance(decisions, list) else []
@@ -210,19 +213,29 @@ def _linked_review(snapshot, approval_data, own_competition):
         elif relation == 'competing':
             if not same_repo or state != 'open' or merged:
                 unknown.append('Invalid competing PR classification: ' + identity['url'])
-            elif not own_competition:
-                reasons.append('Existing open linked PR implements this scope: ' + identity['url'])
+            else:
+                # PR-First: an open competing PR is a soft signal; our own
+                # better implementation may still be worth submitting.
+                penalties.append({'rule': 'competing_open_pr', 'severity': 'soft',
+                                  'penalty': SOFT_PENALTIES['competing_open_pr'],
+                                  'reason': 'Existing open linked PR implements this scope: ' + identity['url'],
+                                  'url': identity['url']})
         elif relation == 'downstream':
             if same_repo:
                 unknown.append('Target-repository PR cannot be downstream: ' + identity['url'])
         elif relation == 'partial':
             if not isinstance(decision.get('uncovered_scope'), str) or not decision['uncovered_scope'].strip():
                 unknown.append('Partial PR coverage lacks the remaining scope: ' + identity['url'])
+            else:
+                # Partial coverage leaves room for our complementary/better PR.
+                penalties.append({'rule': 'competing_open_pr', 'severity': 'soft',
+                                  'penalty': 5,
+                                  'reason': 'Linked PR only partially covers scope: ' + identity['url']})
         elif relation != 'unrelated':
             unknown.append('Linked PR scope remains unknown: ' + identity['url'])
     if current and receipt.get('approved') is not True:
         reasons.append('Linked PR scope review rejected: ' + str(receipt.get('reason', 'No affirmative review')))
-    return reasons, unknown, pending
+    return reasons, unknown, pending, penalties
 
 
 def _claims(comments):
@@ -274,7 +287,7 @@ def evaluate(snapshot, policy=None, *, actor, now, max_age_seconds=900,
     if stage not in ('plan', 'repair', 'publish'):
         raise ValueError('Unknown feature admission stage')
     actor = actor.casefold()
-    reasons, unknown = [], []
+    reasons, unknown, penalties = [], [], []
     complete = snapshot.get('complete', {})
     for name in ('issue', 'comments', 'linked_prs', 'policy'):
         if not isinstance(complete, dict) or complete.get(name) is not True:
@@ -307,8 +320,7 @@ def evaluate(snapshot, policy=None, *, actor, now, max_age_seconds=900,
         unknown.append('Assignment status is unknown')
     else:
         assigned = {x['login'].casefold() for x in assignees}
-        if assigned - {actor}:
-            reasons.append('Issue is assigned to another contributor')
+        # PR-First: foreign assignment is a soft penalty, not a hard block.
     comments = snapshot.get('comments')
     valid_comments = (isinstance(comments, list) and all(isinstance(x, dict) and type(x.get('id')) is int
         and isinstance(x.get('body'), str) and isinstance(x.get('user'), dict)
@@ -318,25 +330,18 @@ def evaluate(snapshot, policy=None, *, actor, now, max_age_seconds=900,
         unknown.append('Discussion records are malformed')
         comments = []
     claims = _claims(comments)
-    def reviewed_competitor_claim(claim):
-        if not own_competition or claim['kind'] != 'pr_submission':
-            return False
-        return any(linked_pr_identity(pr) and linked_pr_identity(pr)['repo'] == str(repo).casefold()
-                   and str(pr.get('state', '')).casefold() == 'open'
-                   and str((pr.get('user') or {}).get('login', '')).casefold() == claim['author'].casefold()
-                   for pr in (snapshot.get('linked_prs') or []) if isinstance(pr, dict))
-    if any(x['author'].casefold() != actor and not reviewed_competitor_claim(x) for x in claims):
-        reasons.append('Another contributor has an unresolved claim or implementation interest')
+    # PR-First: foreign claims/interest are soft penalties, not hard blocks.
+    # Only a verified maintainer rejection (still a reason elsewhere) can stop us.
     own_claim = actor in assigned or any(x['author'].casefold() == actor for x in claims)
     labels = issue.get('labels')
     if not isinstance(labels, list) or any(not isinstance(x, dict) or not isinstance(x.get('name'), str) for x in labels):
         unknown.append('Issue labels are unknown')
         labels = []
-    if any(x['name'].strip().casefold() in ('in progress', 'in-progress', 'status: in progress', 'claimed', 'wip') for x in labels) and not own_claim:
-        reasons.append('Issue is marked as claimed or in progress')
-    linked_reasons, linked_unknown, linked_pending = _linked_review(snapshot, approval_data, own_competition)
+    # 'in progress'/claimed labels are collected into the soft assessment below.
+    linked_reasons, linked_unknown, linked_pending, linked_penalties = _linked_review(snapshot, approval_data, own_competition)
     reasons.extend(linked_reasons)
     unknown.extend(linked_unknown)
+    penalties.extend(linked_penalties)
     current_approval = (not unknown and has_scope_approval(approval_data or {})
                         and (approval_data or {})['maintainer_approval']['digest'] == _digest(human_maintainer_comments(comments))
                         and (approval_data or {}).get('feature_request_scope_digest') == scope_digest(snapshot))
@@ -348,27 +353,49 @@ def evaluate(snapshot, policy=None, *, actor, now, max_age_seconds=900,
     if reason := issue_policy_reason(issue, effective):
         reasons.append(reason)
     if effective.get('ready_project') and snapshot.get('ready_project_verified') is not True:
-        reasons.append('Required project Ready status has not been verified')
-    scope_required = any(effective.get(x) is True for x in ('feature_approval_required', 'maintainer_required', 'discussion_required'))
-    scope_required |= effective.get('automation') == 'requires_explicit_maintainer_instructions'
-    scope_required |= effective.get('pr_submission') == 'maintainer_authorization_required'
-    if scope_required and not current_approval:
-        reasons.append('Upstream requires current human maintainer approval of this scope')
+        penalties.append({'rule': 'ready_project', 'severity': 'soft',
+                          'penalty': SOFT_PENALTIES['ready_project'],
+                          'reason': 'Required project Ready status has not been verified'})
+    # PR-First: maintainer-approval conventions are soft, not a hard block.
+    # Verified approval still clears them via current_approval.
+    if not current_approval:
+        for name in ('feature_approval_required', 'maintainer_required', 'discussion_required'):
+            if effective.get(name) is True:
+                penalties.append({'rule': name, 'severity': 'soft',
+                                  'penalty': SOFT_PENALTIES[name],
+                                  'reason': 'Upstream convention requests ' + name.replace('_', ' ')})
     if effective.get('assignment_required') and actor not in assigned:
-        reasons.append('Upstream requires assignment to the current contributor')
+        penalties.append({'rule': 'assignment_required', 'severity': 'soft',
+                          'penalty': SOFT_PENALTIES['assignment_required'],
+                          'reason': 'Upstream requests assignment to the current contributor'})
     if effective.get('claim_required') and not own_claim:
-        reasons.append('Upstream requires a prior claim; none is verified')
-    if effective.get('automated_pr') is False or effective.get('automation') in ('forbidden', 'disallowed'):
-        reasons.append('Upstream forbids this automated contribution')
-    if effective.get('manual_pr_submission'):
-        reasons.append('Upstream requires personal PR submission; automatic feature delivery is disabled')
+        penalties.append({'rule': 'claim_required', 'severity': 'soft',
+                          'penalty': SOFT_PENALTIES['claim_required'],
+                          'reason': 'Upstream requests a prior claim; none is verified'})
+    assessment = policy_assess(effective, issue=issue, actor=actor, claims=claims, stage=stage)
+    hard_reasons = [b['reason'] for b in assessment['hard_blocks']]
+    reasons.extend(hard_reasons)
+    # claim/assignment satisfaction is evaluated locally above; the generic
+    # assessment lacks that context, so dedupe on those rules.
+    skip = {'claim_required', 'assignment_required'}
+    for extra in assessment['soft_penalties']:
+        if extra['rule'] not in skip and extra['rule'] not in {p['rule'] for p in penalties}:
+            penalties.append(extra)
     # manual_issue_submission forbids creating new issues, not implementing an
     # already existing numbered request. This module never creates an issue.
-    if stage == 'publish' and effective.get('human_pr_review_required'):
-        reasons.append('Upstream requires personal code review before publication')
-    status = 'blocked' if reasons else 'unknown' if unknown or linked_pending else 'eligible'
+    status = ('blocked' if reasons else
+              'unknown' if unknown or linked_pending else
+              'eligible' if assessment['verdict'] == 'proceed' or
+                  (assessment['verdict'] == 'proceed_degraded' and
+                   assessment['acceptance_score'] >= assessment['threshold']) else
+              'blocked')
+    if not reasons and assessment['verdict'] == 'blocked' and assessment['hard_blocks']:
+        reasons.extend(b['reason'] for b in assessment['hard_blocks'] if b['reason'] not in reasons)
+        status = 'blocked'
     return {'status': status, 'eligible': status == 'eligible', 'reasons': reasons + unknown + linked_pending,
             'linked_pr_review_pending': linked_pending,
-            'unknown_reasons': unknown, 'claims': claims, 'scope_approval_current': bool(current_approval),
+            'unknown_reasons': unknown, 'claims': claims,
+            'acceptance': assessment, 'soft_penalties': penalties,
+            'scope_approval_current': bool(current_approval),
             'observed_at': snapshot.get('observed_at'), 'evidence_digest': _digest(snapshot),
             'scope_digest': scope_digest(snapshot), 'policy': effective, 'permits_publication': False}

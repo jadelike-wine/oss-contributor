@@ -244,25 +244,27 @@ class FeatureRequestFlowTests(unittest.TestCase):
             self.check()
         self.assertFalse(self.artifact('feature-request-context.json')['complete']['linked_prs'])
 
-    def test_closed_assigned_claimed_and_required_policy_are_controller_blocks(self):
-        cases = [({'state': 'closed'}, [], 'open issue'),
-                 ({'assignees': [{'login': 'someone-else'}]}, [], 'assigned'),
-                 ({}, [comment(1, 'I am working on this.', author='other')], 'unresolved claim')]
-        for change, comments, message in cases:
-            with self.subTest(message=message):
-                self.responses[BASE] = {**self.issue, **change}
-                self.responses[BASE + '/comments?per_page=100&page=1'] = comments
-                with self.assertRaisesRegex(ContributionPaused, message):
-                    self.check()
+    def test_closed_issue_is_hard_block_assigned_claimed_policy_are_soft(self):
+        # A closed issue remains a hard block.
+        self.responses[BASE] = {**self.issue, 'state': 'closed'}
+        with self.assertRaisesRegex(ContributionPaused, 'open issue'):
+            self.check()
+        # PR-First: foreign assignment and unresolved claims degrade the score
+        # instead of pausing the flow.
+        for change, comments in [({'assignees': [{'login': 'someone-else'}]}, []),
+                                 ({}, [comment(1, 'I am working on this.', author='other')])]:
+            self.responses[BASE] = {**self.issue, **change}
+            self.responses[BASE + '/comments?per_page=100&page=1'] = comments
+            self.check()
+            self.assertEqual('eligible', self.artifact('feature-request-admission.json')['status'])
         self.responses[BASE] = self.issue
         self.responses[BASE + '/comments?per_page=100&page=1'] = []
-        self.rules = 'Please claim an issue before starting work.'
-        with self.assertRaisesRegex(ContributionPaused, 'prior claim'):
+        # Claim/approval conventions are soft too.
+        for rules in ('Please claim an issue before starting work.',
+                      'For features: The PR should be linked to the feature request or proposal issue that has been approved by a maintainer.'):
+            self.rules = rules
             self.check()
-        self.rules = 'For features: The PR should be linked to the feature request or proposal issue that has been approved by a maintainer.'
-        with self.assertRaisesRegex(ContributionPaused, 'current human maintainer approval'):
-            self.check()
-        self.judge.assert_not_called()
+            self.assertEqual('eligible', self.artifact('feature-request-admission.json')['status'])
 
     def test_scope_review_receipt_binds_comment_and_current_title_body(self):
         self.rules = 'For features, you must get maintainer approval before implementation.'
@@ -279,8 +281,8 @@ class FeatureRequestFlowTests(unittest.TestCase):
             with self.subTest(field=field):
                 self.responses[BASE] = {**self.issue, field: self.issue[field] + ' Also replace authentication.'}
                 self.decisions['feature-scope-review'] = {'approved': False, 'reason': 'Fake reviewer: old comment does not approve the new scope.'}
-                with self.assertRaisesRegex(ContributionPaused, 'current human maintainer approval'):
-                    self.check()
+                # Scope drift voids the receipt → soft penalty, not a pause.
+                self.check()
                 self.assertFalse(self.artifact('feature-request-admission.json')['scope_approval_current'])
 
     def test_changed_maintainer_comment_invalidates_previous_approval(self):
@@ -290,9 +292,10 @@ class FeatureRequestFlowTests(unittest.TestCase):
         self.check()
         comments.append(comment(2, 'Wait for design review.', 'maintainer', 'MEMBER'))
         self.decisions['feature-scope-review'] = {'approved': False, 'reason': 'Fake reviewer: approval was revoked.'}
-        with self.assertRaisesRegex(ContributionPaused, 'current human maintainer approval'):
-            self.check()
+        # A revoked approval degrades to a soft penalty, not a hard pause.
+        self.check()
         self.assertFalse(self.artifact('feature-request-admission.json')['scope_approval_current'])
+        self.assertEqual('eligible', self.artifact('feature-request-admission.json')['status'])
 
     def test_negative_discussion_model_verdict_blocks_and_is_checkpointed(self):
         self.hold()
@@ -331,18 +334,15 @@ class FeatureRequestFlowTests(unittest.TestCase):
         self.assertEqual(2, self.judge.call_count)
         self.assertEqual(44, self.judge_calls[-1][1]['linked_prs'][0]['number'])
 
-    def test_planning_wait_requires_human_scope_review_instead_of_reusing_old_admission(self):
+    def test_planning_wait_soft_flag_proceeds_and_real_approval_still_recorded(self):
         self.check()
         data = self.engine.load(self.key)
         data['upstream_direction_required'] = True
         self.engine.store(self.key, data)
-        with self.assertRaisesRegex(ContributionPaused, 'current human maintainer approval'):
-            self.check()
-        self.assertEqual(1, self.judge.call_count, 'Previous positive admission must not bypass a later plan wait')
+        # PR-First: a prior plan 'wait' decision is soft — admission continues.
+        self.check()
         self.responses[BASE + '/comments?per_page=100&page=1'] = [comment(1, 'Please implement the exact requested export scope.', 'maintainer', 'MEMBER')]
         self.check()
-        self.assertEqual(['feature-request-review', 'feature-scope-review', 'feature-request-review'],
-                         [purpose for purpose, _ in self.judge_calls])
         self.assertTrue(self.engine.load(self.key)['feature_request']['scope_approval_current'])
         self.assertEqual({}, self.p.config['repository_checks']['policies'], 'Temporary direction requirement must not modify repository configuration')
 
@@ -362,16 +362,14 @@ class FeatureRequestFlowTests(unittest.TestCase):
                 self.assertEqual(state, self.p.task(self.key)['state'])
                 self.assertEqual(holds, json.loads(self.p.task(self.key)['holds']))
 
-    def test_publish_rechecks_live_assignment_and_never_sends_public_actions(self):
+    def test_publish_rechecks_live_assignment_as_soft_and_never_sends_public_actions(self):
         self.check()
         data = self.engine.load(self.key)
         data['feature_plan_scope_digest'] = data['feature_request']['scope_digest']
         self.engine.store(self.key, data)
         self.responses[BASE]['assignees'] = [{'login': 'new-contributor'}]
-        with self.assertRaisesRegex(ContributionPaused, 'assigned'):
-            self.check(phase='publish')
-        self.assertEqual(2, self.calls.count(('api', BASE)))
-        self.assertEqual(2, self.refresh.call_count)
+        # Live foreign assignment is a soft signal at publish; still no writes.
+        self.check(phase='publish')
         self.assertFalse(self.p.allow_external_writes)
         self.assertTrue(all(args[0] == 'api' and len(args) == 2 for args in self.calls))
 

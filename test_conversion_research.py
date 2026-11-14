@@ -71,9 +71,11 @@ class CompactResearchEvidenceTests(unittest.TestCase):
         feature = {**bug, 'category': 'feature'}
         approved = {'reviewed': True, 'duplicate_clear': True}
         self.assertEqual('READY_TO_IMPLEMENT', route(bug, None, **approved)[0])
-        self.assertEqual('NEEDS_MAINTAINER_CONFIRMATION', route(feature, None, **approved)[0])
-        self.assertGreater(route(bug, None, **approved)[1], route(feature, None, **approved)[1])
-        self.assertEqual(route(bug, None, **approved)[1], route(feature, None, maintainer=True, **approved)[1])
+        # PR-First: clean-policy features implement too; soft policy degrades.
+        self.assertEqual('READY_TO_IMPLEMENT', route(feature, None, **approved)[0])
+        soft = {**feature, 'policy': {**feature['policy'], 'maintainer_required': True}}
+        self.assertGreater(route(bug, None, **approved)[1], route(soft, None, **approved)[1])
+        self.assertEqual(route(bug, None, **approved)[1], route(soft, None, maintainer=True, **approved)[1])
         self.assertEqual(0, route(feature, None)[1])
 
 

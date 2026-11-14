@@ -205,7 +205,8 @@ class MatrixTests(unittest.TestCase):
         task, packet, answer = self.fixture()
         matrix = build(answer, task, packet)
         queue, duplicate = persist(self.engine, task, answer, matrix, reviewed=True, duplicate_clear=True)
-        self.assertEqual(queue, 'NEEDS_MAINTAINER_CONFIRMATION')
+        # PR-First: clean policy routes straight to implementation.
+        self.assertEqual(queue, 'READY_TO_IMPLEMENT')
         self.assertFalse(duplicate)
         saved = json.loads((self.engine.packet_dir(self.key) / 'feature-matrix.json').read_text())
         self.assertEqual(len(saved['peer_repositories']), 3)
@@ -273,13 +274,19 @@ class MatrixTests(unittest.TestCase):
         matrix = build(answer, task, packet)
         gates = {'reviewed': True, 'duplicate_clear': True, 'maintainer': True}
         self.assertEqual(route(answer, matrix, **gates)[0], 'READY_TO_IMPLEMENT')
-        for policy in ({'human_pr_review_required': True}, {'manual_issue_submission': True}):
+        # Hard bans still pause regardless of maintainer approval.
+        for policy in ({'human_pr_review_required': True}, {'manual_issue_submission': True},
+                       {'manual_pr_submission': True}, {'automation': 'forbidden'}):
             self.assertEqual(route(answer, matrix, policy=policy, **gates)[0], 'PAUSED_POLICY')
         matrix['feature_status'][task['repo']]['status'] = 'unknown'
         self.assertEqual(route(answer, matrix, **gates)[0], 'RESEARCH_ONLY')
-        # automated_pr=false routes through maintainer discussion, not a dead end.
+        # PR-First: automated_pr=false without an explicit ban is a soft risk,
+        # not a dead end — degraded implementation, not discussion purgatory.
+        matrix['feature_status'][task['repo']]['status'] = 'not_found'
         answer['policy']['automated_pr'] = False
-        self.assertEqual(route(answer, matrix, **gates)[0], 'RESEARCH_ONLY')
+        queue, priority, reason = route(answer, matrix, **gates)
+        self.assertEqual(queue, 'READY_TO_IMPLEMENT')
+        self.assertIn('proceed_degraded', reason)
         answer['policy']['automated_issue'] = False
         self.assertEqual(route(answer, matrix, **gates)[0], 'PAUSED_POLICY')
 
@@ -288,9 +295,14 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual(route(bug, None, reviewed=True, duplicate_clear=True)[0], 'READY_TO_IMPLEMENT')
         feature = {**bug, 'category': 'feature'}
         self.assertEqual(route(feature, None)[1], 0)
-        self.assertLess(route(feature, None, reviewed=True, duplicate_clear=True)[1], route(bug, None, reviewed=True, duplicate_clear=True)[1])
-        self.assertEqual(route(feature, None, reviewed=True, duplicate_clear=True, maintainer=True)[1],
-                         route(bug, None, reviewed=True, duplicate_clear=True)[1])
+        # PR-First: features with clean policy also reach implementation.
+        self.assertEqual(route(feature, None, reviewed=True, duplicate_clear=True)[0], 'READY_TO_IMPLEMENT')
+        # Soft policy conventions still degrade priority vs a clean bug.
+        soft = {**bug, 'policy': {**bug['policy'], 'maintainer_required': True}}
+        self.assertLess(route(soft, None, reviewed=True, duplicate_clear=True)[1],
+                        route(bug, None, reviewed=True, duplicate_clear=True)[1])
+        self.assertEqual(route(soft, None, reviewed=True, duplicate_clear=True, maintainer=True)[0],
+                         'READY_TO_IMPLEMENT')
 
     def test_collect_limits_peers_and_recovers_completed_snapshots(self):
         task = self.p.task(self.key)

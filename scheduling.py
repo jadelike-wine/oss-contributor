@@ -68,6 +68,8 @@ def priority_key(task, data, queue=None):
         return 4
     if task.get('number') and stage in {'PLAN', 'DISCOVERED'}:
         return 5
+    # PR-First: a timed-out maintainer wait is only a soft-parked task; keep it
+    # from permanently outranking work that can ship a PR.
     if stage in MAINTENANCE or queue == 'NEEDS_MAINTAINER_CONFIRMATION':
         return 6
     return 7

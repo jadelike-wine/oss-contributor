@@ -113,16 +113,22 @@ class ContributionStrategyTests(unittest.TestCase):
         self.assertEqual('PLAN', data['stage'])
         self.assertFalse(data.get('maintainer_approved'))
 
-    def test_explicit_policy_and_high_risk_still_wait(self):
+    def test_hard_gates_still_wait_soft_gates_do_not(self):
         answer = research_fixture.opportunity()
         answer['category'] = 'feature'
         gates = {'reviewed': True, 'duplicate_clear': True, 'proactive': True}
         self.assertFalse(needs_discussion(answer, proactive=True))
+        # PR-First: soft conventions never force a maintainer wait.
         for key, value in [('maintainer_required', True), ('automated_pr', False)]:
             blocked = copy.deepcopy(answer)
             blocked['policy'][key] = value
+            self.assertFalse(needs_discussion(blocked, proactive=True))
+            self.assertEqual('READY_TO_IMPLEMENT', route(blocked, None, **gates)[0])
+        # Hard gates still block.
+        for hard in ({'automation': 'forbidden'}, {'manual_pr_submission': True}):
+            blocked = copy.deepcopy(answer)
+            blocked['policy'].update(hard)
             self.assertTrue(needs_discussion(blocked, proactive=True))
-            self.assertEqual('NEEDS_MAINTAINER_CONFIRMATION', route(blocked, None, **gates)[0])
         answer['risk'] = 'high'
         self.assertTrue(needs_discussion(answer, proactive=True))
         for policy in ({'human_pr_review_required': True}, {'manual_issue_submission': True}):

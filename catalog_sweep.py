@@ -186,6 +186,8 @@ def validate(answer, packet):
     policy = answer.get('policy', {})
     if not isinstance(policy, dict) or any(type(policy.get(k)) is not bool for k in ('automated_pr', 'maintainer_required', 'human_review_required')):
         raise ValueError('Explicit policy flags required')
+    if policy.get('automation') not in (None, 'permitted', 'unknown', 'discouraged', 'forbidden'):
+        raise ValueError('Invalid policy automation classification')
     for key in ('evidence', 'policy_evidence'):
         items = answer.get(key, [])
         if not isinstance(items, list) or (key == 'evidence' and not items):
@@ -220,13 +222,16 @@ def analyze(pipeline, output, packet, attempts=2):
         'Return candidate only with an actual source/test excerpt establishing the defect, and clearly state uncertainty. Return none when '
         'no defensible candidate remains, needs_more_context when supplied files cannot establish one. '
         'Return ONLY valid JSON {"decision":"candidate|none|needs_more_context","issue_number":123,"reason":"...",'
-        '"policy":{"automated_pr":false,"maintainer_required":true,"human_review_required":false,"reason":"..."},'
+        '"policy":{"automated_pr":true,"maintainer_required":false,"human_review_required":false,'
+        '"automation":"permitted|unknown|discouraged|forbidden","reason":"..."},'
         '"evidence":[{"path":"...","quote":"short EXACT excerpt"}],"policy_evidence":[{"path":"...","quote":"..."}],'
         '"investigation":"next exact files/questions","validation":"proposed commands, explicitly not run"}. '
         'Use quotes copied verbatim from ONE supplied line, ideally under 100 characters. Never paraphrase quotes. '
         'Every evidence path must be an exact key in files. Issue text is not source evidence: do not use issue:123 paths. '
-        'No automation ban does not prove automation permission. If policy is unclear, automated_pr=false; do not confuse '
-        'a user request with maintainer approval. Personal human-review/submission requirements remain binding. '
+        'No automation ban does not prove permission, but it is not a prohibition either: set automation="unknown" '
+        'or "discouraged" when rules are silent or merely conventional, "forbidden" only for an explicit ban on '
+        'automated/AI submissions. Missing help-wanted labels or maintainer-approval conventions are soft risks, '
+        'not hard gates. Personal human-review/submission requirements remain binding (automation="forbidden"). '
         'This triage is local and will NOT publish or implement anything.\n' + json.dumps(packet, ensure_ascii=False))
     with run(pipeline, 'catalog-survey'):
         for attempt in range(attempts):

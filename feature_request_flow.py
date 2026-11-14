@@ -191,9 +191,12 @@ def check(engine, task_id, data, phase='plan'):
                                                    'title', 'body', 'head')} for pr in snapshot['linked_prs']],
         'acceptance_plan': data.get('plan') if phase != 'plan' else None,
         'rules': snapshot['policy_rules'], 'policy': configured}, sort_keys=True).encode()).hexdigest()
-    approval_reason = 'Upstream requires current human maintainer approval of this scope'
-    if (blockers(verdict) == [approval_reason] and humans
-            and data.get('feature_scope_review_key') != review_key):
+    # PR-First: approval-family soft penalties still earn a real scope review
+    # whenever verified maintainer comments exist — approval clears them.
+    approval_family = {'feature_approval_required', 'maintainer_required', 'discussion_required'}
+    needs_scope_review = (humans and data.get('feature_scope_review_key') != review_key
+        and any(p['rule'] in approval_family for p in verdict.get('soft_penalties', [])))
+    if needs_scope_review:
         decision = engine.judge(task_id, 'feature-scope-review', {
             'gate': 'Do these verified human maintainer comments explicitly approve implementing the exact current '
                     'feature request? Reject mere interest, labels, silence, approval of another scope, rejection '
@@ -221,7 +224,8 @@ def check(engine, task_id, data, phase='plan'):
                     'review, upstream rules, acceptance tests and exact-patch review remain required. '
                     'Set approved true only when this classification is evidence-backed and sufficiently complete. '
                     + (PRIORITY_GUIDANCE if own_competition else
-                       'This is another contributor\'s issue: a same-scope open competing PR still blocks implementation.'),
+                       'This is another contributor\'s issue: a same-scope open competing PR is a soft signal, '
+                       'not an automatic block — our materially better implementation may still be submitted.'),
             'issue': snapshot['issue'], 'linked_prs': snapshot['linked_prs'],
             'rules': snapshot['policy_rules'], 'own_competition': own_competition})
         # A missing structured answer is a retryable reviewer-format failure,

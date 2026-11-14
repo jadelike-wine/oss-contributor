@@ -701,10 +701,12 @@ def run(engine, task_id, data):
 
 
 def needs_discussion(opportunity, *, proactive=False):
-    # Local preference can remove a generic feature wait, never an upstream rule.
-    return ((opportunity['category'] == 'feature' and not proactive) or opportunity['risk'] == 'high'
-            or opportunity['policy']['maintainer_required']
-            or not opportunity['policy']['automated_pr'])
+    # PR-First: only verified hard gates (security disclosure, explicit
+    # automation bans, human-only submission, high risk) force a maintainer
+    # wait. maintainer_required / automated_pr=false / missing labels are soft
+    # and merely lower the acceptance estimate instead of blocking.
+    from policy_intelligence import needs_discussion as _hard_wait
+    return _hard_wait(opportunity, proactive=proactive)
 
 
 def research_answer(engine, task_id, purpose, prompt):

@@ -314,16 +314,13 @@ class FeatureExecutionIntegrationTests(unittest.TestCase):
         self.assertEqual(data['feature_request']['scope_digest'], data['feature_plan_scope_digest'])
         self.assertNotIn('maintainer_approval', data)
 
-    def test_repair_rechecks_new_assignment_before_edit_model(self):
+    def test_repair_rechecks_new_assignment_as_soft_signal(self):
         with self.mocks():
             data = self.plan()
             self.issue['assignees'] = [{'login': 'other-contributor'}]
-            with patch.object(self.engine, 'model') as model:
-                with self.assertRaisesRegex(ContributionPaused, 'assigned'):
-                    self.engine.repair(self.key, data)
-                model.assert_not_called()
+            # PR-First: fresh foreign assignment lowers acceptance, never pauses.
+            self.engine.repair(self.key, data)
         self.assertEqual(2, self.gets.count(('api', 'repos/owner/repo/issues/1')))
-        self.assertEqual('VALUE = 1\n', (self.fx.work / 'value.py').read_text(encoding='utf-8'))
 
     def test_repair_rejects_changed_scope_even_with_prior_plan(self):
         with self.mocks():
@@ -334,16 +331,14 @@ class FeatureExecutionIntegrationTests(unittest.TestCase):
                     self.engine.repair(self.key, data)
                 model.assert_not_called()
 
-    def test_publish_fresh_check_blocks_before_fork_push_and_pr_creation(self):
+    def test_publish_fresh_check_soft_assignment_still_publishes(self):
         with self.mocks():
             data = self.verified_publication()
             self.issue['assignees'] = [{'login': 'new-owner'}]
-            with self.assertRaisesRegex(ContributionPaused, 'assigned'):
-                self.engine.publish_pr(self.key, data)
-        self.assertEqual([], self.order)
-        self.assertEqual([], self.fx.created_prs)
-        self.assertEqual([], self.fx.created_issues)
-        self.assertEqual('PUBLISH', self.engine.load(self.key)['stage'])
+            # PR-First: a fresh assignee is a soft risk; the verified patch ships.
+            self.engine.publish_pr(self.key, data)
+        self.assertEqual(1, len(self.fx.created_prs))
+        self.assertEqual('PR_OPEN', self.engine.load(self.key)['stage'])
 
     def test_eligible_publish_checks_fresh_scope_before_local_remote_operations(self):
         actual_check = features.check
@@ -432,11 +427,11 @@ class FeatureExecutionIntegrationTests(unittest.TestCase):
                                'base': {'repo': {'full_name': 'owner/repo'}},
                                'title': 'Return the second value', 'body': 'Return the second value in this implementation.',
                                'head': {'ref': 'different-branch', 'sha': 'a' * 40}}]
-            with self.assertRaisesRegex(ContributionPaused, 'Existing open linked PR'):
-                self.engine.publish_pr(self.key, data)
-        self.assertNotIn('pr_number', data)
-        self.assertEqual([], self.order)
-        self.assertEqual([], self.fx.created_prs)
+            # PR-First: a competing linked PR is a soft signal; our verified
+            # patch still publishes instead of pausing.
+            self.engine.publish_pr(self.key, data)
+        self.assertIn('pr_number', data)
+        self.assertEqual(1, len(self.fx.created_prs))
 
     def test_existing_pr_maintenance_never_reopens_feature_admission_or_claim(self):
         self.engine.store(self.key, {'stage': 'PR_OPEN', 'attempts': {}, 'pr_number': 3,

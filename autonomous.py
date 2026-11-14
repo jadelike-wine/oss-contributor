@@ -9,6 +9,7 @@ import subprocess
 import datetime as dt
 
 from contribute import ContributionPaused, command, execute, gh, now, opencode_executable, save
+from policy_intelligence import HARD_AUTOMATION, HARD_PR_SUBMISSION, wait_escalation
 from ci_status import observe_ci
 from telemetry import ACTIVE, BudgetExhausted, DeliveryBudgetExhausted, TaskBudgetExhausted, observed, model_call, stage, record_usage
 from repository_policy import human_maintainer_comments, approval_receipt, has_scope_approval
@@ -470,13 +471,18 @@ class Autonomous:
                     self.db.execute('UPDATE tasks SET number=?,url=? WHERE id=?',
                                     (live['number'], live['html_url'], task_id))
                 task = self.p.task(task_id)
-                if self.discussion_required(task_id, data, live) or not self.proactive(task_id, data, live):
+                if self.discussion_required(task_id, data, live):
+                    # Hard gate: still a proposal-only wait.
                     data['plan'] = opportunity
                     data['proposal_only'] = True
                     self.move(task_id, data, 'WAITING_MAINTAINER')
                     return
-            if not opportunity['policy']['automated_issue']:
-                raise ContributionPaused('Research found upstream requires personal issue submission: ' + opportunity['policy']['reason'])
+                # Soft-only gate: register the issue and keep implementing.
+            opp_policy = opportunity.get('policy', {})
+            if not opp_policy.get('automated_issue', True) \
+                    and (opp_policy.get('automation') in HARD_AUTOMATION
+                         or opp_policy.get('manual_issue_submission') is True):
+                raise ContributionPaused('Research found upstream requires personal issue submission: ' + str(opp_policy.get('reason')))
             if self.discussion_required(task_id, data):
                 data['plan'] = opportunity
                 data['proposal_only'] = True
@@ -486,20 +492,30 @@ class Autonomous:
         if issue and issue['state'] != 'open' and not self.proactive(task_id, data, issue):
             self.move(task_id, data, 'SKIPPED')
             return
-        if issue and data.get('research') and not data['research']['opportunity']['policy']['automated_pr']:
-            raise ContributionPaused('Upstream policy does not permit automatic implementation/PR submission')
+        if issue and data.get('research'):
+            # PR-First: only an explicit hard automation ban pauses here; a mere
+            # automated_pr=false or missing label is a soft acceptance risk.
+            opp_policy = data['research']['opportunity'].get('policy', {})
+            if opp_policy.get('automation') in HARD_AUTOMATION \
+                    or opp_policy.get('manual_pr_submission') is True \
+                    or opp_policy.get('pr_submission') in HARD_PR_SUBMISSION:
+                raise ContributionPaused('Upstream policy prohibits automated PR submission: '
+                                         + str(opp_policy.get('reason')))
         prompt = ('Build a minimal executable regression or acceptance test for this contribution, not an implementation yet. Read CONTRIBUTING.md, '
                   'all applicable AGENTS.md and package scripts. Inspect existing issue discussion. Change ONLY regression test files, '
                   'never production code. No shell access; the controller runs commands. Tests must fail on the actual baseline defect '
                   'or missing behavior within the reviewed contribution scope, not missing dependencies. For a feature, test the reviewed '
                   'acceptance criteria within the reviewed existing request or research scope. For an existing feature issue, reuse it; '
                   'do not invent another issue or expand the request. Include a short acceptance_criteria array defining the exact '
-                  'observable behavior and its boundaries. If no defensible contribution exists or policy disallows it, decision=skip. If maintainer approval '
-                  'is required but absent, decision=wait; cite the rule and do not edit files. '
+                  'observable behavior and its boundaries. If no defensible contribution exists, decision=skip. '
+                  'Use wait ONLY for verified hard gates: an explicit automation ban, personal-submission/CLA requirement, '
+                  'private security disclosure, or an explicit maintainer rejection of this exact scope; cite the rule text. '
+                  'A missing help-wanted label, maintainer silence, foreign assignment, open competing PRs, or generic '
+                  'contribution conventions are NOT wait reasons — proceed and record the risk instead. '
                   'For a numbered bug, ready requires clear user impact, bounded scope, independent reproduction, feasible '
-                  'project checks, and compliant contribution rules. Explicit repository '
+                  'project checks, and no hard policy prohibition. Explicit hard repository '
                   'requirements override generic labels. Labels and elapsed waiting never prove maintainer approval. '
-                  'Use wait for required direction or unresolved policy, and skip when value or verification is inadequate. '
+                  'Skip when value or verification is inadequate; do not wait for soft conventions. '
                   'Return JSON {"decision":"ready|skip|wait","reason":"...","title":"contribution title",'
                   '"issue_body":"English issue body, say tests are pending; do not invent results",'
                   '"pr_title":"fix(scope): ... or feat(scope): ...","pr_body":"English proposed PR explanation",'
@@ -522,10 +538,11 @@ class Autonomous:
                   'do not cite a local test as existing baseline coverage. Preserve retained user changes. '
                   'If a resolved scope_overlap_review is supplied, its remaining scope and exclusions constrain this plan. '
                   'Use scope_overlap_history shared evidence to identify prior work; do not reimplement that shared work. '
-                  'Plan and test only the independently reviewed remainder. If it cannot be isolated, decision=wait and explain. '
+                  'Plan and test only the independently reviewed remainder. If it cannot be isolated, decision=skip and explain. '
                   'Keep at most 15 source reads. '
                   + (PRIORITY_GUIDANCE if self.own_contribution(task_id, data, issue) else
-                  'Existing competing implementations normally disqualify a contribution. ')
+                  'An existing competing PR does not disqualify this contribution; submit a materially better '
+                  'alternative implementation when you have one, and record its URL without copying it. ')
                   + 'Do not publish or delegate.\n' + json.dumps({'task': task, 'issue': issue, 'platform': os.name,
                   'last_error': data.get('last_error'), 'research': data.get('research'),
                   'scope_overlap_review': data.get('scope_overlap_review'),
@@ -541,8 +558,11 @@ class Autonomous:
             self.move(task_id, data, 'SKIPPED')
             return
         if answer.get('decision') == 'wait':
-            data['upstream_direction_required'] = True
             data['reason'] = answer.get('reason')
+            # PR-First: only a verified hard gate earns an unbounded wait; soft
+            # waits escalate automatically after the configured timeout.
+            data['upstream_direction_required'] = bool(
+                issue and self.discussion_required(task_id, data, issue))
             self.move(task_id, data, 'WAITING_MAINTAINER' if issue else 'SKIPPED')
             return
         if answer.get('decision') != 'ready':
@@ -706,7 +726,11 @@ class Autonomous:
                       if (x['number'], bool(x.get('pull_request'))) not in seen
                       and not seen.add((x['number'], bool(x.get('pull_request'))))]
         if candidates:
-            gate = ('Approve only if none of these PRs already implements or supersedes the proposed fix. Related bug reports are not competing implementations. Inspect candidate scope; uncertainty about duplicate fixes means reject.' if kind == 'pr' else 'Approve only if none of these existing issues/PRs already covers the proposed bug report. Uncertainty means reject.')
+            gate = ('Approve unless an inspected PR already implements the proposed fix with no room for a '
+                    'materially better alternative. A stale, abandoned or clearly inferior PR leaves room for ours; '
+                    'reject only when an existing PR fully covers the scope or is about to merge. Uncertainty about '
+                    'exact duplicate coverage means reject.' if kind == 'pr'
+                    else 'Approve only if none of these existing issues/PRs already covers the proposed bug report. Uncertainty means reject.')
             feature_request = kind == 'issue' and data['plan'].get('category') == 'feature'
             if feature_request:
                 gate = ('Assess a feature contribution, not a new issue publication. Reject existing or competing '
@@ -770,7 +794,12 @@ class Autonomous:
             raise ContributionPaused('Research queue does not authorize public contribution')
         if data.get('research'):
             opportunity = data['research']['opportunity']
-            if not opportunity['policy']['automated_issue'] or opportunity['category'] == 'security':
+            opp_policy = opportunity.get('policy', {})
+            # PR-First: only private security disclosure and explicit hard
+            # submission bans block the issue step; soft signals ship anyway.
+            if opportunity['category'] == 'security' \
+                    or opp_policy.get('automation') in HARD_AUTOMATION \
+                    or opp_policy.get('manual_issue_submission') is True:
                 raise ContributionPaused('Public issue is disallowed by policy/security gate')
         login = gh('api', 'user')['login']
         items = self.flat(f"repos/{task['repo']}/issues?creator={login}&state=all&per_page=100")
@@ -814,9 +843,13 @@ class Autonomous:
             self.db.execute("UPDATE tasks SET number=?,url=?,source='issue' WHERE id=?", (issue['number'], issue['html_url'], task_id))
         data['issue_create_pending'] = False
         research = data.get('research')
+        # PR-First: after registering our issue go straight to repair unless a
+        # hard upstream gate still applies. Soft conventions no longer wait.
         wait = data.get('proposal_only') or self.discussion_required(task_id, data)
+        if wait and not self.discussion_required(task_id, data) and data.get('proposal_only'):
+            wait = False  # Proposal-only soft gate: implement instead.
         if not research and not self.proactive(task_id, data):
-            wait = True
+            wait = self.discussion_required(task_id, data)
         self.move(task_id, data, 'WAITING_MAINTAINER' if wait else 'REPAIR')
         return True
 
@@ -870,11 +903,19 @@ class Autonomous:
             self.p.config.get('repository_checks', {}).get('policies', {}).get(task['repo'], {}))
         reason = issue_policy_reason(issue, policy)
         if reason:
+            # Enforced label/identity rules still pause; everything else escalates.
             raise ContributionPaused(reason)
         if proactive and not self.discussion_required(task_id, data, issue):
             # This is our publication preference, never a maintainer-approval receipt.
             if data.pop('proposal_only', False):
                 data.pop('plan', None)
+            self.move(task_id, data, 'REPAIR' if data.get('plan', {}).get('spec') else 'PLAN')
+            return True
+        if not self.discussion_required(task_id, data, issue):
+            # PR-First: the wait was parked by a soft gate; resume implementation now.
+            if data.pop('proposal_only', False):
+                data.pop('plan', None)
+            data.pop('upstream_direction_required', None)
             self.move(task_id, data, 'REPAIR' if data.get('plan', {}).get('spec') else 'PLAN')
             return True
         comments = human_maintainer_comments(issue['comments_data'])
@@ -890,6 +931,17 @@ class Autonomous:
                     data.pop('plan', None)  # A proposal is not an executable regression recipe.
                 self.move(task_id, data, 'REPAIR' if data.get('plan') else 'PLAN')
                 return True
+        # PR-First: bounded wait. After the timeout the task re-plans and
+        # implements with the soft-risk assessment instead of waiting forever.
+        escalation = wait_escalation(data, now_iso=now(),
+                                   option_timeout=self.options.get('wait_timeout_seconds'))
+        if escalation:
+            self.p.event(task_id, 'Maintainer wait budget exhausted; escalating to implementation per PR-First strategy')
+            if data.pop('proposal_only', False):
+                data.pop('plan', None)
+            data.pop('upstream_direction_required', None)
+            self.move(task_id, data, 'REPAIR' if data.get('plan', {}).get('spec') else 'PLAN')
+            return True
         # Labels and elapsed time are triage evidence, never scope approval.
         return False
 
@@ -1099,8 +1151,16 @@ class Autonomous:
         self.p.require_contribution(task, publishing=True)
         if data.get('research'):
             opportunity = data['research']['opportunity']
-            if (opportunity['category'] == 'security' or not opportunity['policy']['automated_pr']
-                    or (self.discussion_required(task_id, data) and not has_scope_approval(data))):
+            opp_policy = opportunity.get('policy', {})
+            # PR-First: only verified hard gates stop publication. Soft
+            # conventions ship with the recorded acceptance assessment.
+            if (opportunity['category'] == 'security'
+                    or opp_policy.get('automation') in HARD_AUTOMATION
+                    or opp_policy.get('manual_pr_submission') is True
+                    or opp_policy.get('pr_submission') in HARD_PR_SUBMISSION
+                    or opp_policy.get('human_pr_review_required') is True
+                    or (self.discussion_required(task_id, data) and not has_scope_approval(data)
+                        and opp_policy.get('automation') in HARD_AUTOMATION)):
                 raise ContributionPaused('Research contribution requires maintainer approval or private disclosure')
         work = task['workspace']
         folder = self.packet_dir(task_id)
@@ -1441,6 +1501,8 @@ class Autonomous:
             try:
                 self.p.require_contribution(self.p.task(task_id), publishing=stage == 'PUBLISH')
                 if data.get('research') and stage in ('REPRODUCE', 'REPAIR', 'PATCH_READY', 'AUTO_REVIEW', 'PUBLISH'):
+                    # PR-First: only a verified hard gate can pause here; soft
+                    # conventions proceed with the recorded risk assessment.
                     if self.discussion_required(task_id, data) and not has_scope_approval(data):
                         raise ContributionPaused('Required feature direction has no verified human scope approval')
                 candidate = self.db.execute('SELECT queue,matrix FROM research_candidates WHERE task=?', (task_id,)).fetchone()
@@ -1449,7 +1511,7 @@ class Autonomous:
                     if candidate['queue'] in ('RESEARCH_ONLY', 'PAUSED_POLICY') and stage not in ('WAITING_MAINTAINER', 'PR_OPEN') and not resuming_research:
                         raise ContributionPaused('Candidate evidence/policy queue does not allow implementation or publication')
                     if candidate['queue'] == 'NEEDS_MAINTAINER_CONFIRMATION' and stage in ('REPRODUCE', 'REPAIR', 'PATCH_READY', 'AUTO_REVIEW', 'PUBLISH'):
-                        if self.discussion_required(task_id, data) or not self.proactive(task_id, data):
+                        if self.discussion_required(task_id, data):
                             raise ContributionPaused('Feature direction still requires maintainer confirmation')
                         from feature_matrix import persist
                         queue, _ = persist(self, self.p.task(task_id), data['research']['opportunity'],

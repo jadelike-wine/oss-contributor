@@ -212,14 +212,28 @@ def route(answer, matrix, *, reviewed=False, duplicate_clear=False, maintainer=F
             if len(peers) < 3 or target not in ('not_found', 'partial') or not any(p['status'] == 'implemented' for p in peers):
                 return 'RESEARCH_ONLY', 0, 'insufficient_gap_or_peer_evidence'
     # Model value prose is retained for review; model numerical scores never determine admission.
+    # PR-First: a unified policy assessment decides. Hard blocks pause; soft
+    # conventions only lower priority and never stop a bounded repair. Verified
+    # maintainer approval clears only the approval-family penalties, never
+    # automation/policy uncertainty.
+    from policy_intelligence import assess
+    effective = {**allowed, **policy}
+    verdict = assess(effective, stage='plan')
     priority = 60 + (10 if answer['risk'] == 'low' else 0)
-    discussion = ((answer['category'] == 'feature' or answer['risk'] != 'low') and not proactive
-                  or answer['risk'] == 'high'
-                  or allowed.get('maintainer_required') or not allowed.get('automated_pr'))
-    if discussion and not maintainer:
-        return 'NEEDS_MAINTAINER_CONFIRMATION', priority - 40, 'design_direction_requires_maintainer'
+    if verdict['verdict'] == 'blocked':
+        hard = [b['reason'] for b in verdict['hard_blocks']]
+        return 'PAUSED_POLICY', 0, '; '.join(hard) or 'acceptance_threshold'
     if answer['risk'] == 'high':
         return 'PAUSED_POLICY', 0, 'high_risk_requires_human_patch_review'
+    approval_family = {'maintainer_required', 'feature_approval_required', 'discussion_required',
+                       'ready_project', 'assignment_required', 'claim_required', 'required_issue_labels'}
+    penalties = verdict['soft_penalties']
+    if maintainer:
+        penalties = [p for p in penalties if p['rule'] not in approval_family]
+    penalty = sum(int(p.get('penalty', 0)) for p in penalties)
+    if penalties:
+        return 'READY_TO_IMPLEMENT', max(0, priority - penalty), \
+            'proceed_degraded: ' + '; '.join(p['reason'] for p in penalties)
     return 'READY_TO_IMPLEMENT', priority, 'evidence_policy_review_and_duplicate_gates_passed'
 
 

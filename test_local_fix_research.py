@@ -58,7 +58,8 @@ class LocalFixResearchTests(unittest.TestCase):
         status.update(status='implemented', checked_paths=['src/reader.py'],
                       evidence=[{'repo': 'peer/one', 'path': 'src/reader.py', 'quote': 'pass'}])
         matrix = build(answer, task, packet)
-        self.assertEqual('NEEDS_MAINTAINER_CONFIRMATION', self.route(answer, matrix)[0])
+        # PR-First: a qualified feature routes to implementation, no wait.
+        self.assertEqual('READY_TO_IMPLEMENT', self.route(answer, matrix)[0])
         self.assertEqual('READY_TO_IMPLEMENT', self.route(answer, matrix, maintainer=True)[0])
         matrix['feature_status'][task['repo']]['status'] = 'implemented'
         self.assertEqual('RESEARCH_ONLY', self.route(answer, matrix, maintainer=True)[0])
@@ -106,7 +107,9 @@ class LocalFixResearchTests(unittest.TestCase):
         for flag in ('automated_issue', 'automated_pr', 'maintainer_required'):
             blocked = copy.deepcopy(answer)
             blocked['policy'][flag] = flag == 'maintainer_required'
-            expected = 'PAUSED_POLICY' if flag == 'automated_issue' else 'NEEDS_MAINTAINER_CONFIRMATION'
+            # PR-First: automated_issue=false pauses issue creation; the other
+            # soft flags degrade priority but still implement.
+            expected = 'PAUSED_POLICY' if flag == 'automated_issue' else 'READY_TO_IMPLEMENT'
             self.assertEqual(expected, self.route(blocked, matrix)[0])
         self.assertEqual('PAUSED_POLICY', self.route({**answer, 'risk': 'high'}, matrix,
                                                    maintainer=True, proactive=True)[0])

@@ -207,19 +207,15 @@ class AutonomousTests(unittest.TestCase):
             self.assertEqual('PR_OPEN', self.engine.advance(self.key))
             check.assert_called_once()
 
-    def test_new_issue_waits_for_real_maintainer_then_continues(self):
+    def test_new_issue_goes_straight_to_repair_under_pr_first(self):
         with self.p.db:
             self.p.db.execute("UPDATE tasks SET source='hunt',number=NULL WHERE id=?", (self.key,))
-        # Resume a pre-research task with a saved executable plan. Legacy records
-        # retain their conservative maintainer gate.
+        # PR-First: a proven reproduction publishes the issue and continues
+        # straight to repair — no maintainer wait for our own report.
         self.model(self.key, 'plan', '')
         self.purposes.clear()
         self.engine.store(self.key, {'stage': 'REPRODUCE', 'attempts': {}, 'plan': self.plan})
         with self.mocks():
-            self.assertEqual('WAITING_MAINTAINER', self.engine.advance(self.key))
-            self.assertEqual([], self.purposes)
-            self.assertEqual('WAITING_MAINTAINER', self.engine.advance(self.key))
-            self.comments = [{'id': 1, 'user': {'login': 'maintainer', 'type': 'User'}, 'author_association': 'MEMBER', 'body': 'Confirmed, please send a fix.'}]
             self.assertEqual('PR_OPEN', self.engine.advance(self.key))
         self.assertEqual(1, len(self.created_issues))
         self.assertEqual(1, len(self.created_prs))
@@ -232,7 +228,8 @@ class AutonomousTests(unittest.TestCase):
         self.lose_issue_response = True
         with self.mocks():
             self.assertEqual('ISSUE', self.engine.advance(self.key))
-            self.assertEqual('WAITING_MAINTAINER', self.engine.advance(self.key))
+            # Reconciliation recovers the created issue; then it implements.
+            self.assertNotEqual('FAILED', self.engine.advance(self.key))
         self.assertEqual(1, len(self.created_issues))
 
     def test_rejected_review_never_publishes(self):

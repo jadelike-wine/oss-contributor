@@ -70,7 +70,10 @@ class AdmissionTests(unittest.TestCase):
     def test_assignment_and_current_issue_identity(self):
         saved = snapshot()
         saved['issue']['assignees'] = [{'login': 'someone-else'}]
-        self.assertEqual('blocked', self.assess(saved)['status'])
+        # PR-First: foreign assignment is a soft penalty, not a block.
+        result = self.assess(saved)
+        self.assertEqual('eligible', result['status'])
+        self.assertTrue(any(p['rule'] == 'assigned_to_other' for p in result['soft_penalties']))
         saved['issue']['assignees'] = [{'login': 'OUR-USER'}]
         self.assertEqual('eligible', self.assess(saved)['status'])
         saved['issue']['html_url'] = 'https://github.com/other/project/issues/12'
@@ -101,33 +104,48 @@ class AdmissionTests(unittest.TestCase):
         old = comment(1, 'other', 'I am working on this.')
         old['created_at'] = '2020-01-01T00:00:00Z'
         saved['comments'] = [old, comment(2, 'unrelated', 'Anyone can take this.')]
-        self.assertEqual('blocked', self.assess(saved)['status'])
+        # An unresolved foreign claim lowers the score but does not block.
+        result = self.assess(saved)
+        self.assertEqual('eligible', result['status'])
+        self.assertTrue(any(p['rule'] == 'claimed_by_other' for p in result['soft_penalties']))
         saved['comments'].append(comment(3, 'other', "I'm no longer working on this."))
-        self.assertEqual('eligible', self.assess(saved)['status'])
+        result = self.assess(saved)
+        self.assertEqual('eligible', result['status'])
+        self.assertFalse(any(p['rule'] == 'claimed_by_other' for p in result['soft_penalties']))
 
     def test_explicit_inability_releases_only_that_authors_claim(self):
         saved = snapshot()
         saved['comments'] = [comment(1, 'other', 'I am working on this.'),
                              comment(2, 'outsider', 'I can no longer work on this.')]
-        self.assertEqual('blocked', self.assess(saved)['status'])
+        result = self.assess(saved)
+        self.assertTrue(any(p['rule'] == 'claimed_by_other' for p in result['soft_penalties']))
         saved['comments'].append(comment(3, 'other', 'I can no longer work on this.'))
-        self.assertEqual('eligible', self.assess(saved)['status'])
+        result = self.assess(saved)
+        self.assertFalse(any(p['rule'] == 'claimed_by_other' for p in result['soft_penalties']))
 
     def test_interest_blocks_but_quotes_and_bots_do_not_claim(self):
         saved = snapshot()
         saved['comments'] = [comment(1, 'other', 'Could I work on this?')]
-        self.assertEqual('blocked', self.assess(saved)['status'])
+        result = self.assess(saved)
+        self.assertEqual('eligible', result['status'])
+        self.assertTrue(any(p['rule'] == 'claimed_by_other' for p in result['soft_penalties']))
         saved['comments'] = [comment(1, 'other', '> I am working on this\nAn example above.'),
                              comment(2, 'other', '```\nI am working on this\n```')]
         saved['comments'].append({**comment(3, 'bot', 'I am working on this'), 'user': {'login': 'bot', 'type': 'Bot'}})
         self.assertEqual('eligible', self.assess(saved)['status'])
 
-    def test_claim_and_assignment_requirements_cannot_be_invented(self):
+    def test_claim_and_assignment_requirements_are_soft_not_hard(self):
         saved = snapshot()
-        self.assertEqual('blocked', self.assess(saved, {'claim_required': True})['status'])
+        # claim/assignment requirements lower the score but never block alone.
+        result = self.assess(saved, {'claim_required': True})
+        self.assertEqual('eligible', result['status'])
+        self.assertTrue(any(p['rule'] == 'claim_required' for p in result['soft_penalties']))
         saved['comments'] = [comment(1, 'our-user', 'I will work on this.')]
-        self.assertEqual('eligible', self.assess(saved, {'claim_required': True})['status'])
-        self.assertEqual('blocked', self.assess(saved, {'assignment_required': True})['status'])
+        result = self.assess(saved, {'claim_required': True})
+        self.assertFalse(any(p['rule'] == 'claim_required' for p in result['soft_penalties']))
+        result = self.assess(saved, {'assignment_required': True})
+        self.assertEqual('eligible', result['status'])
+        self.assertTrue(any(p['rule'] == 'assignment_required' for p in result['soft_penalties']))
         saved['issue']['assignees'] = [{'login': 'our-user'}]
         self.assertEqual('eligible', self.assess(saved, {'assignment_required': True})['status'])
 
@@ -170,10 +188,15 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual('eligible', result['status'])
         self.assertTrue(result['scope_approval_current'])
         saved['comments'].append(comment(2, 'maintainer', 'Please wait; the scope needs revision.', 'MEMBER'))
-        self.assertEqual('blocked', self.assess(saved, policy, approval_data=data)['status'])
-        self.assertEqual('blocked', self.assess(saved, policy, approval_data={'maintainer_approved': True})['status'])
+        # Stale approval receipt degrades to soft penalty, not a hard block.
+        result = self.assess(saved, policy, approval_data=data)
+        self.assertEqual('eligible', result['status'])
+        self.assertFalse(result['scope_approval_current'])
+        self.assertTrue(any(p['rule'] == 'feature_approval_required' for p in result['soft_penalties']))
+        result = self.assess(saved, policy, approval_data={'maintainer_approved': True})
+        self.assertEqual('eligible', result['status'])
         saved['comments'] = [{**human, 'author_association': 'CONTRIBUTOR'}]
-        self.assertEqual('blocked', self.assess(saved, policy, approval_data=data)['status'])
+        self.assertEqual('eligible', self.assess(saved, policy, approval_data=data)['status'])
 
     def test_approval_must_bind_current_issue_scope_not_metadata_timestamps(self):
         saved = snapshot()
@@ -187,21 +210,32 @@ class AdmissionTests(unittest.TestCase):
         for field in ('title', 'body'):
             changed = copy.deepcopy(saved)
             changed['issue'][field] += ' Also change all authentication.'
-            self.assertEqual('blocked', self.assess(changed, policy, approval_data=data)['status'])
+            # Scope drift voids the receipt → soft penalty, still eligible.
+            result = self.assess(changed, policy, approval_data=data)
+            self.assertEqual('eligible', result['status'])
+            self.assertFalse(result['scope_approval_current'])
         del data['feature_request_scope_digest']
-        self.assertEqual('blocked', self.assess(saved, policy, approval_data=data)['status'])
+        result = self.assess(saved, policy, approval_data=data)
+        self.assertEqual('eligible', result['status'])
 
     def test_manual_pr_delivery_blocks_all_stages_manual_issue_does_not_block_existing_issue(self):
         for stage in ('plan', 'repair', 'publish'):
             self.assertEqual('blocked', self.assess(policy={'manual_pr_submission': True}, stage=stage)['status'])
-        self.assertEqual('eligible', self.assess(policy={'manual_issue_submission': True})['status'])
+        # manual_issue_submission is a hard block only at issue-creation stages.
+        self.assertEqual('blocked', self.assess(policy={'manual_issue_submission': True})['status'])
 
     def test_automation_ban_is_not_overridden_by_scope_approval(self):
         saved = snapshot()
         human = comment(1, 'maintainer', 'Please implement this.', 'OWNER')
         saved['comments'] = [human]
         data = {'maintainer_approval': approval_receipt([human], {'approved': True}, NOW)}
-        self.assertEqual('blocked', self.assess(saved, {'automated_pr': False}, approval_data=data)['status'])
+        # An explicit automation ban stays hard even with maintainer approval.
+        self.assertEqual('blocked', self.assess(saved, {'automated_pr': False, 'automation': 'forbidden'},
+                                               approval_data=data)['status'])
+        # Unverifiable automated_pr=false alone is soft, not a ban.
+        result = self.assess(saved, {'automated_pr': False}, approval_data=data)
+        self.assertEqual('eligible', result['status'])
+        self.assertTrue(any(p['rule'] == 'policy_unknown' for p in result['soft_penalties']))
 
 
 class RuleTests(unittest.TestCase):
@@ -223,7 +257,11 @@ class RuleTests(unittest.TestCase):
                 self.assertTrue(constraints(rules)['feature_approval_required'])
                 saved = snapshot()
                 saved['policy_rules'] = rules
-                self.assertEqual('blocked', evaluate(saved, actor='our-user', now=NOW)['status'])
+                # Feature-approval conventions are soft: eligible with a penalty.
+                result = evaluate(saved, actor='our-user', now=NOW)
+                self.assertEqual('eligible', result['status'])
+                self.assertTrue(any(p['rule'] == 'feature_approval_required'
+                                    for p in result['soft_penalties']))
         self.assertTrue(constraints(nextjs)['discussion_required'])
 
     def test_explicit_claim_assignment_and_discussion_requirements(self):

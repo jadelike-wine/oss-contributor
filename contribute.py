@@ -410,6 +410,31 @@ class Pipeline:
                 self.event(task['id'], 'Contribution paused: ' + reason)
             raise ContributionPaused('Contribution paused: ' + reason)
 
+    def merged_repositories(self):
+        """Repositories where an owned PR was observed MERGED. A merged PR is the
+        strongest available signal that this repository accepts our contributions,
+        so scanning and dispatch should look there first."""
+        merged = set()
+        path = self.root / 'state/prs.json'
+        try:
+            prs = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+        except (ValueError, TypeError, AttributeError):
+            prs = {}
+        if isinstance(prs, dict):
+            for key, pr in prs.items():
+                if isinstance(key, str) and '#' in key and isinstance(pr, dict) and pr.get('state') == 'MERGED':
+                    merged.add(key.rsplit('#', 1)[0].casefold())
+        if self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='tasks'").fetchone():
+            merged.update(row[0].casefold() for row in self.db.execute("SELECT DISTINCT repo FROM tasks WHERE state='MERGED'"))
+        return merged
+
+    def prioritize_merged(self, repos):
+        """Stable reorder: merged repositories first, keeping their relative order."""
+        merged = self.merged_repositories()
+        if not merged:
+            return repos
+        return sorted(repos, key=lambda repo: repo.casefold() not in merged)
+
     def fair_candidates(self, rows, repositories=None, cursor_name='research'):
         """Round-robin eligible repositories, retaining the supplied order within each."""
         repos = list(repositories) if repositories is not None else self.effective_repositories(contribution=True)
@@ -417,6 +442,8 @@ class Pipeline:
         if cursor and cursor['last_repo'] in repos:
             start = repos.index(cursor['last_repo']) + 1
             repos = repos[start:] + repos[:start]
+        # A merged PR proves this repository accepts our work; look there first.
+        repos = self.prioritize_merged(repos)
         buckets = {repo: [] for repo in repos}
         for row in rows:
             if row['repo'] in buckets:
@@ -561,6 +588,10 @@ class Pipeline:
                 promoted = {record['repo']: index for index, record in enumerate(due_probes[:probe_limit])}
                 summary['repositories'].sort(key=lambda record: (0, promoted[record['repo']])
                     if record['repo'] in promoted else (1, 0))
+            # A merged PR proves this repository accepts our work; scan it first.
+            merged = self.merged_repositories()
+            if merged:
+                summary['repositories'].sort(key=lambda record: record['repo'].casefold() not in merged)
             save(summary_path, summary)
             print(f'scan scope: {scope} ({len(repos)} repositories)', file=sys.stderr)
             try:

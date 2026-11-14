@@ -57,8 +57,11 @@ class LinkedPrEvidenceTests(unittest.TestCase):
         self.assertEqual('blocked', result['status'])
         self.assertIn('implements the requested scope', result['reasons'][0])
 
-    def test_real_competitor_is_allowed_only_with_own_alternative_preference(self):
-        self.assertEqual('blocked', self.assess('competing')['status'])
+    def test_real_competitor_is_soft_for_any_alternative_under_pr_first(self):
+        # PR-First: an open competing PR never hard-blocks; it lowers the score.
+        result = self.assess('competing')
+        self.assertEqual('eligible', result['status'])
+        self.assertTrue(any(p['rule'] == 'competing_open_pr' for p in result['soft_penalties']))
         self.assertEqual('eligible', self.assess('competing', own=True)['status'])
 
     def test_partial_coverage_must_name_the_remaining_scope(self):
@@ -162,36 +165,35 @@ class LinkedPrFlowTests(unittest.TestCase):
         self.assertEqual(['feature-linked-pr-review', 'feature-request-review'], [x[0] for x in self.review_calls])
         self.assertTrue(self.review_calls[0][1]['own_competition'])
 
-    def test_preference_does_not_apply_to_someone_elses_issue(self):
+    def test_competition_on_someone_elses_issue_is_soft_not_blocked(self):
         self.own_issue()
         self.fx.issue['user']['login'] = 'someone-else'
         self.competitor(claim=False)
-        with self.assertRaisesRegex(ContributionPaused, 'Existing open linked PR'):
-            self.fx.check()
-        self.assertEqual(['feature-linked-pr-review'], [x[0] for x in self.review_calls])
+        # PR-First: a competing PR on a foreign issue lowers the score but the
+        # flow continues to the normal feature-request review.
+        self.fx.check()
+        self.assertEqual(['feature-linked-pr-review', 'feature-request-review'],
+                         [x[0] for x in self.review_calls])
         self.assertFalse(self.review_calls[0][1]['own_competition'])
 
-    def test_own_competition_never_overrides_assignee_or_required_claim(self):
+    def test_assignee_and_required_claim_are_soft_signals(self):
         self.own_issue()
         self.competitor()
         self.fx.issue['assignees'] = [{'login': 'other'}]
-        with self.assertRaisesRegex(ContributionPaused, 'assigned'):
-            self.fx.check()
+        self.fx.check()  # foreign assignment no longer pauses
         self.fx.issue['assignees'] = []
         self.fx.rules = 'Please claim an issue before starting work.'
-        with self.assertRaisesRegex(ContributionPaused, 'prior claim'):
-            self.fx.check()
-        self.assertEqual([], self.review_calls)
+        self.fx.check()  # claim convention is soft too
+        self.assertTrue(len(self.review_calls) >= 2)
 
-    def test_unverified_or_active_work_claim_is_not_a_competitor_exception(self):
+    def test_active_work_claim_is_soft_evidence_not_a_block(self):
         self.own_issue()
         self.competitor()
         for body in ('I am working on this.', 'I have opened a PR for this.'):
             self.fx.responses[flow_fixture.BASE + '/comments?per_page=100&page=1'] = [
                 flow_fixture.comment(1, body, 'another-author')]
-            with self.assertRaisesRegex(ContributionPaused, 'unresolved claim'):
-                self.fx.check()
-        self.assertEqual([], self.review_calls)
+            self.fx.check()  # unresolved claims degrade the score, never block
+        self.assertTrue(len(self.review_calls) >= 2)
 
     def test_missing_per_pr_decision_cannot_be_general_approval(self):
         self.bad_decisions = []

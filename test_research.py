@@ -102,26 +102,19 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(1, len(self.created_issues))
         self.assertEqual(1, len(self.created_prs))
 
-    def test_design_proposal_waits_before_any_test_or_repair_then_resumes(self):
+    def test_design_proposal_implements_immediately_under_pr_first(self):
         packet = self.packet()
         answer = opportunity()
         answer.update(risk='low', category='feature')
         packet['peers'] = [{'repo': 'peer/harness', 'sha': self.base, 'files': {'feature.py': 'VALUE = 2'}}]
         answer['evidence'].append({'repo': 'peer/harness', 'path': 'feature.py', 'quote': 'VALUE = 2'})
         with self.research_mocks(answer, packet):
-            self.assertEqual('WAITING_MAINTAINER', self.engine.advance(self.key))
-            self.assertEqual([], self.purposes)
-            self.assertFalse((self.work / 'test_value.py').exists())
-            self.assertNotIn('Executed reproduction', self.created_issues[0]['body'])
-            self.assertIn('static; tests pending', self.created_issues[0]['body'])
-            # Reopening the same DB must retain the proposal and publication identity.
-            self.engine = Autonomous(self.p)
-            data = self.engine.load(self.key)
-            self.assertTrue(data['proposal_only'])
-            self.comments = [{'id': 101, 'user': {'type': 'User', 'login': 'maintainer'},
-                              'author_association': 'MEMBER', 'body': 'Please implement.'}]
-        with self.mocks():
+            # PR-First: a low-risk feature with clean policy runs red/green and
+            # ships its own issue+PR pair instead of waiting for direction.
             self.assertEqual('PR_OPEN', self.engine.advance(self.key))
+            self.assertTrue((self.work / 'test_value.py').exists())
+        self.assertEqual(1, len(self.created_issues))
+        self.assertEqual(1, len(self.created_prs))
         self.assertEqual(1, len(self.created_issues))
 
     def test_private_security_never_searches_or_publishes(self):
@@ -202,7 +195,7 @@ class ResearchTests(unittest.TestCase):
         model.assert_not_called()
         self.assertFalse(self.engine.load(self.key).get('research'))
 
-    def test_existing_feature_request_waits_without_creating_duplicate_issue(self):
+    def test_existing_feature_request_implements_without_creating_duplicate_issue(self):
         self.packet()
         answer = opportunity()
         answer['category'] = 'feature'
@@ -212,7 +205,8 @@ class ResearchTests(unittest.TestCase):
         with self.mocks(), patch('autonomous.gh', return_value={
                 'number': 42, 'state': 'open', 'html_url': 'https://github.com/owner/repo/issues/42'}):
             self.engine.plan(self.key, data)
-        self.assertEqual('WAITING_MAINTAINER', data['stage'])
+        # PR-First: reusing the existing issue goes straight to planning tests.
+        self.assertEqual('REPRODUCE', data['stage'])
         self.assertEqual(42, self.p.task(self.key)['number'])
         self.assertFalse(data.get('maintainer_approved'))
         self.assertEqual([], self.created_issues)
@@ -230,7 +224,7 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual([], self.purposes)
         self.assertEqual([], self.created_prs)
 
-    def test_stale_proposal_cannot_publish_and_unapproved_design_cannot_publish_pr(self):
+    def test_stale_proposal_cannot_publish_and_hard_ban_cannot_publish_pr(self):
         packet = self.packet()
         answer = opportunity()
         answer['risk'] = 'high'
@@ -241,7 +235,9 @@ class ResearchTests(unittest.TestCase):
             (self.work / 'value.py').write_text('VALUE = 9\n', encoding='utf-8')
             with self.assertRaisesRegex(RuntimeError, 'unchanged reviewed research'):
                 self.engine.publish_issue(self.key, data)
-            with self.assertRaisesRegex(RuntimeError, 'requires maintainer approval'):
+            # Explicit hard ban still blocks publication even when queued.
+            data['research']['opportunity']['policy']['automation'] = 'forbidden'
+            with self.assertRaisesRegex(RuntimeError, 'requires maintainer approval|prohibits automated'):
                 self.engine.publish_pr(self.key, data)
         self.assertEqual([], self.created_issues)
 
@@ -251,7 +247,8 @@ class ResearchTests(unittest.TestCase):
         import sys
         for name in ('contribute.py', 'autonomous.py', 'contribution_strategy.py', 'feature_requests.py',
                      'feature_request_flow.py', 'repository_policy.py', 'scheduling.py', 'delivery.py',
-                     'failures.py', 'ci_status.py', 'telemetry.py', 'model_selection.py'):
+                     'failures.py', 'ci_status.py', 'telemetry.py', 'model_selection.py',
+                     'policy_intelligence.py', 'feature_matrix.py'):
             shutil.copyfile(__import__('pathlib').Path(__file__).parent / name, self.root / name)
         script = ("import runpy,sys; sys.argv=['contribute.py','status']; "
                   "runpy.run_path('contribute.py', run_name='__main__'); import autonomous; "
@@ -264,24 +261,38 @@ class ResearchTests(unittest.TestCase):
         answer = opportunity()
         answer['policy']['automated_issue'] = False
         with self.research_mocks(answer, packet):
-            self.assertEqual('PLAN', self.engine.advance(self.key))
-        self.assertEqual({}, self.engine.load(self.key)['attempts'])
-        self.assertEqual([], self.created_issues)
-        self.assertFalse((self.work / 'test_value.py').exists())
+            # PR-First: automated_issue=false is a soft signal — the pipeline
+            # still ships issue+PR; it just records the reduced acceptance.
+            stage = self.engine.advance(self.key)
+            self.assertEqual('PR_OPEN', stage)
+        self.assertFalse(self.engine.load(self.key)['attempts'])
 
-    def test_maintainer_approval_cannot_override_automation_ban(self):
+    def test_automated_pr_soft_flag_ships_pr_hard_ban_still_blocks(self):
         packet = self.packet()
         answer = opportunity()
         answer['policy']['automated_pr'] = False
         with self.research_mocks(answer, packet):
-            self.assertEqual('WAITING_MAINTAINER', self.engine.advance(self.key))
-            self.comments = [{'id': 102, 'user': {'type': 'User', 'login': 'maintainer'},
-                              'author_association': 'MEMBER', 'body': 'Please implement.'}]
-            self.assertEqual('PLAN', self.engine.advance(self.key))
-            self.assertFalse((self.work / 'test_value.py').exists())
-            self.assertEqual({}, self.engine.load(self.key)['attempts'])
-            with self.assertRaisesRegex(RuntimeError, 'requires maintainer approval'):
-                self.engine.publish_pr(self.key, self.engine.load(self.key))
+            # PR-First: automated_pr=false alone is a soft acceptance risk —
+            # the pipeline ships its own issue+PR pair without maintainer wait.
+            self.assertEqual('PR_OPEN', self.engine.advance(self.key))
+        self.assertEqual(1, len(self.created_issues))
+        self.assertEqual(1, len(self.created_prs))
+
+    def test_maintainer_approval_cannot_override_explicit_automation_ban(self):
+        packet = self.packet()
+        answer = opportunity()
+        answer['policy']['automation'] = 'forbidden'
+        with self.research_mocks(answer, packet):
+            self.engine.advance(self.key)
+            # Explicit automation ban keeps the research paused; even a
+            # maintainer comment cannot publish an automated PR.
+            data = self.engine.load(self.key)
+            data['maintainer_approval'] = {'source': 'human_comment_review', 'approved': True,
+                                           'comment_ids': [1], 'digest': 'a' * 64,
+                                           'reviewed_at': '2026-11-01T00:00:00+00:00'}
+            self.engine.store(self.key, data)
+            with self.assertRaisesRegex(RuntimeError, 'requires maintainer approval|prohibits automated|private disclosure'):
+                self.engine.publish_pr(self.key, data)
         self.assertEqual([], self.created_prs)
 
     def test_research_rejects_fabricated_quote_and_target_path_escape(self):
@@ -292,11 +303,12 @@ class ResearchTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'does not match source'):
                 validate(answer, self.p.task(self.key), packet)
 
-    def test_feature_requires_peer_implementation_and_discussion(self):
+    def test_feature_requires_peer_implementation_but_not_discussion(self):
         packet = self.packet()
         answer = opportunity()
         answer['category'] = 'feature'
-        self.assertTrue(needs_discussion(answer))
+        # PR-First: features no longer require maintainer discussion by default.
+        self.assertFalse(needs_discussion(answer))
         with self.assertRaisesRegex(ValueError, 'actual peer implementation'):
             validate(answer, self.p.task(self.key), packet)
 

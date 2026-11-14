@@ -473,13 +473,84 @@ def metrics(path, limit=10):
         issue_refreshes = ([dict(row) for row in db.execute(
             'SELECT status,count(*) count FROM issue_refresh_queue GROUP BY status')]
                            if 'issue_refresh_queue' in tables else [])
+        pr_metrics = pr_production_metrics(db, tables)
         return {'runs': runs, 'stage_outcomes_all_time': stages, 'candidate_queues': queues,
-                'task_states': tasks, 'quality_all_time': quality, 'pr_maintenance': maintenance_gaps(db),
+                'task_states': tasks, 'quality_all_time': quality, 'pr_production': pr_metrics,
+                'pr_maintenance': maintenance_gaps(db),
                 'scope_overlap_reviews': scope_reviews, 'issue_refresh_queue': issue_refreshes,
                 'cost_status': 'unavailable: adapters do not report reliable billable usage',
                 'cost_caps_enforced': False, 'note': 'Running records without ended are incomplete, never assumed successful. Stage attempts are not unique contributions.'}
     finally:
         db.close()
+
+
+def pr_production_metrics(db, tables):
+    """PR-First output metrics required by the contribution strategy."""
+    result = {'discovered_issues': 0, 'own_issues_submitted': 0, 'external_issues_selected': 0,
+              'existing_prs_analyzed': 0, 'prs_submitted': 0, 'prs_merged': 0, 'prs_closed': 0,
+              'pr_acceptance_rate': None, 'external_issue_merged': 0, 'alternative_pr_merged': 0,
+              'blocked_by_policy': 0, 'average_pr_submission_seconds': None,
+              'merged_prs_per_hour': None}
+    if 'tasks' not in tables:
+        return result
+    result['discovered_issues'] = db.execute(
+        "SELECT count(*) FROM tasks WHERE number IS NOT NULL").fetchone()[0]
+    if 'automation' in tables:
+        rows = db.execute(
+            "SELECT tasks.id,tasks.state,tasks.source,tasks.number,automation.data "
+            "FROM tasks JOIN automation ON automation.task=tasks.id").fetchall()
+        submission_seconds, merged_count, closed_count = [], 0, 0
+        own_issues, external_issues, alt_merged, ext_merged, blocked = 0, 0, 0, 0, 0
+        run_seconds = 0.0
+        first_seen, last_seen = {}, {}
+        for r in db.execute('SELECT task,min(started) first,max(started) last FROM stages GROUP BY task'):
+            first_seen[r['task']], last_seen[r['task']] = r['first'], r['last']
+        for task_id, state, source, number, raw in rows:
+            data = json.loads(raw)
+            if data.get('pr_number'):
+                result['prs_submitted'] += 1
+                if state == 'MERGED':
+                    merged_count += 1
+                elif state in ('CLOSED', 'SKIPPED', 'FAILED'):
+                    closed_count += 1
+                if source == 'hunt' or (data.get('contribution_origin') or {}).get('kind') == 'local_discovery':
+                    own_issues += 1
+                elif number:
+                    external_issues += 1
+                    if state == 'MERGED':
+                        ext_merged += 1
+                if data.get('competing_prs') and state == 'MERGED':
+                    alt_merged += 1
+                if task_id in first_seen:
+                    from datetime import datetime, timezone
+                    try:
+                        start = datetime.fromisoformat(str(first_seen[task_id]).replace('Z', '+00:00'))
+                        end = datetime.fromisoformat(str(last_seen[task_id]).replace('Z', '+00:00'))
+                        seconds = max(0.0, (end - start).total_seconds())
+                        submission_seconds.append(seconds)
+                        run_seconds += seconds
+                    except (TypeError, ValueError):
+                        pass
+            if data.get('stage') == 'PAUSED_POLICY' or state == 'PAUSED_POLICY':
+                blocked += 1
+        result['own_issues_submitted'] = own_issues
+        result['external_issues_selected'] = external_issues
+        result['prs_merged'] = merged_count
+        result['prs_closed'] = closed_count
+        result['external_issue_merged'] = ext_merged
+        result['alternative_pr_merged'] = alt_merged
+        result['blocked_by_policy'] = blocked
+        submitted = result['prs_submitted']
+        result['pr_acceptance_rate'] = round(merged_count / submitted, 4) if submitted else None
+        if submission_seconds:
+            result['average_pr_submission_seconds'] = round(
+                sum(submission_seconds) / len(submission_seconds), 1)
+        if run_seconds > 0:
+            result['merged_prs_per_hour'] = round(merged_count / (run_seconds / 3600), 4)
+    if 'pr_observations' in tables:
+        result['existing_prs_analyzed'] = db.execute(
+            'SELECT count(*) FROM pr_observations').fetchone()[0]
+    return result
 
 
 def maintenance_gaps(db):

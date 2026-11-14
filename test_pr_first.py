@@ -123,15 +123,57 @@ class Issue29864RegressionTests(unittest.TestCase):
             self.assertEqual('PR_OPEN', self.engine.advance(self.key))
         self.assertEqual(1, len(self.created_prs))
 
-    def test_waiting_task_escalates_after_timeout(self):
-        """A WAITING_MAINTAINER task must not wait forever."""
+    def test_soft_parked_task_resumes_immediately(self):
+        """A task parked by a soft gate resumes implementation on the next tick."""
         data = {'stage': 'WAITING_MAINTAINER', 'attempts': {}, 'proposal_only': True,
                 'waiting_since': '2026-01-01T00:00:00+00:00',
                 'plan': self.plan}
         self.engine.store(self.key, data, 'WAITING_MAINTAINER')
-        with self.mocks(), patch('autonomous.now', return_value='2026-11-14T00:00:00+00:00'):
+        with self.mocks():
             stage = self.engine.advance(self.key)
-        self.assertNotEqual('WAITING_MAINTAINER', stage)
+        # Soft gate: no clock wait at all — straight back to implementation.
+        self.assertEqual('PR_OPEN', stage)
+
+    def test_own_issue_never_maintainer_waits(self):
+        """Core rule: our own issue always goes straight to its PR."""
+        self.p.config['contribution_strategy'] = {'submit_issue_and_pr_together': True}
+        issue = {'state': 'open', 'number': 1, 'title': 'x',
+                 'user': {'login': 'bot'}, 'comments_data': [],
+                 'html_url': 'https://github.com/owner/repo/issues/1'}
+        self.model(self.key, 'plan', '')  # writes the regression test file
+        data = {'stage': 'WAITING_MAINTAINER', 'attempts': {}, 'plan': self.plan,
+                'waiting_since': '2026-01-01T00:00:00+00:00'}
+        self.engine.store(self.key, data, 'WAITING_MAINTAINER')
+        with self.mocks(), patch.object(self.engine, 'live_issue', return_value=issue):
+            self.assertEqual('PR_OPEN', self.engine.advance(self.key))
+        self.assertEqual(1, len(self.created_prs))
+
+    def test_own_issue_deferral_cycles_are_bounded(self):
+        """A planner that keeps answering 'wait' cannot loop forever."""
+        self.p.config['contribution_strategy'] = {'submit_issue_and_pr_together': True}
+        issue = {'state': 'open', 'number': 1, 'title': 'x',
+                 'user': {'login': 'bot'}, 'comments_data': [],
+                 'html_url': 'https://github.com/owner/repo/issues/1'}
+        data = {'stage': 'WAITING_MAINTAINER', 'attempts': {}, 'plan': self.plan,
+                'wait_cycles': 3}
+        self.engine.store(self.key, data, 'WAITING_MAINTAINER')
+        with self.mocks(), patch.object(self.engine, 'live_issue', return_value=issue):
+            self.assertEqual('SKIPPED', self.engine.advance(self.key))
+        self.assertEqual([], self.created_prs)
+
+    def test_hard_gated_wait_terminates_after_timeout(self):
+        """A hard-gated WAITING_MAINTAINER closes instead of auto-implementing."""
+        data = {'stage': 'WAITING_MAINTAINER', 'attempts': {}, 'proposal_only': True,
+                'waiting_since': '2026-01-01T00:00:00+00:00',
+                'research': {'approved': True, 'opportunity': {
+                    **opportunity(),
+                    'policy': {'automation': 'forbidden', 'reason': 'no bots'}}},
+                'plan': self.plan}
+        self.engine.store(self.key, data, 'WAITING_MAINTAINER')
+        with self.mocks():
+            stage = self.engine.advance(self.key)
+        self.assertEqual('SKIPPED', stage)
+        self.assertEqual([], self.created_prs)
 
     def test_hard_ban_still_pauses_publication(self):
         data = {'stage': 'PUBLISH', 'attempts': {},

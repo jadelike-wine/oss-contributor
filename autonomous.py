@@ -471,19 +471,19 @@ class Autonomous:
                     self.db.execute('UPDATE tasks SET number=?,url=? WHERE id=?',
                                     (live['number'], live['html_url'], task_id))
                 task = self.p.task(task_id)
-                if self.discussion_required(task_id, data, live):
-                    # Hard gate: still a proposal-only wait.
+                if not self.proactive(task_id, data, live) and self.discussion_required(task_id, data, live):
+                    # Hard gate on a foreign issue: proposal-only wait.
                     data['plan'] = opportunity
                     data['proposal_only'] = True
                     self.move(task_id, data, 'WAITING_MAINTAINER')
                     return
-                # Soft-only gate: register the issue and keep implementing.
+                # Own contribution never parks; soft gates proceed too.
             opp_policy = opportunity.get('policy', {})
             if not opp_policy.get('automated_issue', True) \
                     and (opp_policy.get('automation') in HARD_AUTOMATION
                          or opp_policy.get('manual_issue_submission') is True):
                 raise ContributionPaused('Research found upstream requires personal issue submission: ' + str(opp_policy.get('reason')))
-            if self.discussion_required(task_id, data):
+            if not self.proactive(task_id, data) and self.discussion_required(task_id, data):
                 data['plan'] = opportunity
                 data['proposal_only'] = True
                 self.move(task_id, data, 'ISSUE')
@@ -842,14 +842,9 @@ class Autonomous:
         with self.db:
             self.db.execute("UPDATE tasks SET number=?,url=?,source='issue' WHERE id=?", (issue['number'], issue['html_url'], task_id))
         data['issue_create_pending'] = False
-        research = data.get('research')
-        # PR-First: after registering our issue go straight to repair unless a
-        # hard upstream gate still applies. Soft conventions no longer wait.
-        wait = data.get('proposal_only') or self.discussion_required(task_id, data)
-        if wait and not self.discussion_required(task_id, data) and data.get('proposal_only'):
-            wait = False  # Proposal-only soft gate: implement instead.
-        if not research and not self.proactive(task_id, data):
-            wait = self.discussion_required(task_id, data)
+        # Own contribution: issue in hand goes straight to repair — never wait.
+        wait = (data.get('proposal_only') or self.discussion_required(task_id, data)) \
+            and not self.proactive(task_id, data)
         self.move(task_id, data, 'WAITING_MAINTAINER' if wait else 'REPAIR')
         return True
 
@@ -905,10 +900,19 @@ class Autonomous:
         if reason:
             # Enforced label/identity rules still pause; everything else escalates.
             raise ContributionPaused(reason)
-        if proactive and not self.discussion_required(task_id, data, issue):
-            # This is our publication preference, never a maintainer-approval receipt.
+        if proactive:
+            # Own contribution: our issue always goes straight to implementation
+            # and its own PR — no maintainer wait, ever. Bounded re-plan cycles
+            # stop a planner that keeps deferring.
+            cycles = data.get('wait_cycles', 0) + 1
+            data['wait_cycles'] = cycles
+            if cycles > int(self.options.get('max_wait_cycles', 3)):
+                data['reason'] = 'Planner kept deferring this own contribution'
+                self.move(task_id, data, 'SKIPPED')
+                return True
             if data.pop('proposal_only', False):
                 data.pop('plan', None)
+            data.pop('upstream_direction_required', None)
             self.move(task_id, data, 'REPAIR' if data.get('plan', {}).get('spec') else 'PLAN')
             return True
         if not self.discussion_required(task_id, data, issue):
@@ -931,16 +935,15 @@ class Autonomous:
                     data.pop('plan', None)  # A proposal is not an executable regression recipe.
                 self.move(task_id, data, 'REPAIR' if data.get('plan') else 'PLAN')
                 return True
-        # PR-First: bounded wait. After the timeout the task re-plans and
-        # implements with the soft-risk assessment instead of waiting forever.
+        # PR-First: soft waits already resumed above; reaching here means a
+        # verified hard gate. After the wait budget expires the task terminates
+        # — a banned/disclosure-gated contribution must never auto-implement.
         escalation = wait_escalation(data, now_iso=now(),
                                    option_timeout=self.options.get('wait_timeout_seconds'))
         if escalation:
-            self.p.event(task_id, 'Maintainer wait budget exhausted; escalating to implementation per PR-First strategy')
-            if data.pop('proposal_only', False):
-                data.pop('plan', None)
-            data.pop('upstream_direction_required', None)
-            self.move(task_id, data, 'REPAIR' if data.get('plan', {}).get('spec') else 'PLAN')
+            data['reason'] = 'Unresolved hard upstream gate exceeded wait_timeout_seconds'
+            self.p.event(task_id, 'Maintainer wait budget exhausted on a hard policy gate; closing task')
+            self.move(task_id, data, 'SKIPPED')
             return True
         # Labels and elapsed time are triage evidence, never scope approval.
         return False

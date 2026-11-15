@@ -59,7 +59,7 @@ class FeatureScanTests(unittest.TestCase):
         self.issue['labels'].extend([{'name': 'security'}, {'name': 'need-information'}])
         still_held = self.scan()
         self.assertEqual('HOLD', still_held['state'])
-        self.assertEqual({'assigned', 'security', 'need-information'}, set(json.loads(still_held['holds'])))
+        self.assertEqual({'security'}, set(json.loads(still_held['holds'])))
 
     def test_scan_missing_or_non_boolean_enable_stays_conservative(self):
         for value in (False, 'true', 1):
@@ -91,7 +91,7 @@ class FeatureScanTests(unittest.TestCase):
                      'body': 'Fixes #12', 'closingIssuesReferences': [{'number': 12}]}]
         task = self.scan()
         self.assertEqual('HOLD', task['state'])
-        self.assertEqual({'assigned', 'security'}, set(json.loads(task['holds'])))
+        self.assertEqual({'security'}, set(json.loads(task['holds'])))
 
     def test_manual_pr_gate_allows_local_work_but_blocks_configured_publication(self):
         task = self.scan()

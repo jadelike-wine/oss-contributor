@@ -267,9 +267,9 @@ def pinned_scope(pipeline, task):
 
 
 def register_scopes(engine, limit):
-    """Return up to two pending/new scopes for the existing research quota."""
-    if type(limit) is not int or not 0 <= limit <= 2:
-        raise ValueError('Source discovery limit must be 0..2')
+    """Return up to `limit` pending/new scopes for the existing research quota."""
+    if type(limit) is not int or not 0 <= limit <= 4:
+        raise ValueError('Source discovery limit must be 0..4')
     if limit == 0:
         return []
     from repository_catalog import research_pool

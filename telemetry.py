@@ -490,29 +490,37 @@ def pr_production_metrics(db, tables):
               'existing_prs_analyzed': 0, 'prs_submitted': 0, 'prs_merged': 0, 'prs_closed': 0,
               'pr_acceptance_rate': None, 'external_issue_merged': 0, 'alternative_pr_merged': 0,
               'blocked_by_policy': 0, 'average_pr_submission_seconds': None,
-              'merged_prs_per_hour': None}
+              'merged_prs_per_hour': None, 'per_repo': {}}
     if 'tasks' not in tables:
         return result
     result['discovered_issues'] = db.execute(
         "SELECT count(*) FROM tasks WHERE number IS NOT NULL").fetchone()[0]
     if 'automation' in tables:
         rows = db.execute(
-            "SELECT tasks.id,tasks.state,tasks.source,tasks.number,automation.data "
+            "SELECT tasks.id,tasks.repo,tasks.state,tasks.source,tasks.number,automation.data "
             "FROM tasks JOIN automation ON automation.task=tasks.id").fetchall()
         submission_seconds, merged_count, closed_count = [], 0, 0
         own_issues, external_issues, alt_merged, ext_merged, blocked = 0, 0, 0, 0, 0
         run_seconds = 0.0
         first_seen, last_seen = {}, {}
+        per_repo = result['per_repo']
+        def repo_stats(repo):
+            return per_repo.setdefault(repo, {'prs_submitted': 0, 'prs_merged': 0, 'prs_closed': 0,
+                                              'pr_acceptance_rate': None, 'blocked_by_policy': 0})
         for r in db.execute('SELECT task,min(started) first,max(started) last FROM stages GROUP BY task'):
             first_seen[r['task']], last_seen[r['task']] = r['first'], r['last']
-        for task_id, state, source, number, raw in rows:
+        for task_id, repo, state, source, number, raw in rows:
             data = json.loads(raw)
+            stats = repo_stats(repo)
             if data.get('pr_number'):
                 result['prs_submitted'] += 1
+                stats['prs_submitted'] += 1
                 if state == 'MERGED':
                     merged_count += 1
+                    stats['prs_merged'] += 1
                 elif state in ('CLOSED', 'SKIPPED', 'FAILED'):
                     closed_count += 1
+                    stats['prs_closed'] += 1
                 if source == 'hunt' or (data.get('contribution_origin') or {}).get('kind') == 'local_discovery':
                     own_issues += 1
                 elif number:
@@ -533,6 +541,10 @@ def pr_production_metrics(db, tables):
                         pass
             if data.get('stage') == 'PAUSED_POLICY' or state == 'PAUSED_POLICY':
                 blocked += 1
+                stats['blocked_by_policy'] += 1
+        for stats in per_repo.values():
+            if stats['prs_submitted']:
+                stats['pr_acceptance_rate'] = round(stats['prs_merged'] / stats['prs_submitted'], 4)
         result['own_issues_submitted'] = own_issues
         result['external_issues_selected'] = external_issues
         result['prs_merged'] = merged_count

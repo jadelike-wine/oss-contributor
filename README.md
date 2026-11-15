@@ -234,8 +234,8 @@ Goose 的指定看板 `Ready`、`manual_issue_submission`、`human_pr_review_req
 | `dsh.desktop_install_dir` / `dsh.provider_config_path` | 可选；自动寻找已安装的桌面捆绑 CLI，默认读取用户现有 OpenCode 服务商配置，仅传递本次指定模型的凭据 |
 | `dsh.base_url` / `dsh.api_key_env` | 可选的模型接口地址和环境变量名；密钥不写入项目文件 |
 | `dsh.context_window` / `dsh.max_tokens` | 当前 128,000 / 32,768；DSH 模型上下文及单步输出上限，项目单轮调用/时间预算仍独立执行 |
-| `research.candidates_per_run` | 缺省 3，当前 3，范围 1–10；缩小单轮研究批次，优先把已有候选交付；候选上限不是 Issue/PR 发布指标 |
-| `research.source_discovery_per_run` | 缺省 0，当前 2，范围 0–2；源码自发现占上述研究额度，使用已存在的固定版本源码，不额外扩大总额度 |
+| `research.candidates_per_run` | 缺省 3，当前 6，范围 1–10；单轮研究批次数；候选上限不是 Issue/PR 发布指标 |
+| `research.source_discovery_per_run` | 缺省 0，当前 3，范围 0–4；源码自发现占上述研究额度，使用已存在的固定版本源码，不额外扩大总额度 |
 | `research.reserve_model_calls` / `research.reserve_seconds` | 缺省预留 2 次调用和 600 秒给研究；从单轮既有总额度内分配，不增加总预算 |
 | `research.peers_per_candidate` | 3，范围 3–5 |
 | `research.files_per_peer` | 4，范围 2–6 |

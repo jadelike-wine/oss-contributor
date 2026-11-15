@@ -54,8 +54,14 @@ def task_lane(task, data, queue=None):
 
 
 def priority_key(task, data, queue=None):
-    """Fair rotation is applied within these lanes by the caller."""
+    """Fair rotation is applied within these lanes by the caller.
+
+    Conversion evidence beats speculation: at the same stage, a task attached
+    to a real upstream issue (source='issue') always outranks a self-discovered
+    hunt lead, whose defect exists only as static analysis until reproduction.
+    """
     stage = data.get('stage', task.get('state', 'PLAN'))
+    hunt = task.get('source') == 'hunt'
     if data.get('pr_number') and stage in IMPLEMENTATION:
         return 0  # Actual feedback already moved a published PR to a code stage.
     if stage == 'PR_OPEN':
@@ -67,12 +73,13 @@ def priority_key(task, data, queue=None):
     if queue == 'READY_TO_IMPLEMENT':
         return 4
     if task.get('number') and stage in {'PLAN', 'DISCOVERED'}:
-        return 5
+        # P0: an upstream issue with no linked PR leads a hunt-discovered lead.
+        return 5.5 if hunt else 5
     # PR-First: a timed-out maintainer wait is only a soft-parked task; keep it
     # from permanently outranking work that can ship a PR.
     if stage in MAINTENANCE or queue == 'NEEDS_MAINTAINER_CONFIRMATION':
         return 6
-    return 7
+    return 7.5 if hunt else 7
 
 
 class RunTaskBudget:

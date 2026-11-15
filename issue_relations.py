@@ -2,11 +2,24 @@
 
 A reference is not proof of implementation coverage. Hints admit normal scope
 and duplicate review; they never authorize a contribution or publication.
+
+Besides ``relation``, ``classify_pr`` reports ``competition``:
+
+- ``'none'``   — no open PR is trying to close this issue.
+- ``'stale'``  — an open PR references the issue but shows no recent activity
+  (and is not approved): an opportunity for a better alternative PR.
+- ``'active'`` — a fresh or approved competing PR: collision is likely.
+
+The competition hint feeds soft score adjustments; it never produces a hold.
 """
+import datetime as dt
 import re
 from urllib.parse import urlsplit
 
 from scheduling import canonical_repo
+
+STALE_AFTER_DAYS = 45
+_APPROVED = 'APPROVED'
 
 
 def github_identity(url, kind='issues'):
@@ -45,7 +58,20 @@ def issue_references(body, repo):
             for identity, start, end in sorted(references, key=lambda x: x[1])]
 
 
-def classify_pr(issue, pr, repo):
+def _pr_age_days(updated_at, *, now=None):
+    if not isinstance(updated_at, str):
+        return None
+    try:
+        moment = dt.datetime.fromisoformat(updated_at.replace('Z', '+00:00'))
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=dt.timezone.utc)
+    current = now or dt.datetime.now(dt.timezone.utc)
+    return (current - moment).total_seconds() / 86400
+
+
+def classify_pr(issue, pr, repo, *, now=None, stale_after_days=STALE_AFTER_DAYS):
     """Return no relation, a review hint, or exact same-repository competition."""
     if (type(issue.get('number')) is not int or issue['number'] <= 0
             or type(pr.get('number')) is not int or pr['number'] <= 0):
@@ -78,7 +104,14 @@ def classify_pr(issue, pr, repo):
     inactive = str(pr.get('state', 'open')).casefold() in ('closed', 'merged')
     definitive = bool(closing or any(ref['closing'] for ref in references))
     relation = 'inactive' if inactive else 'competing' if definitive and not limited_scope else 'scope_review'
+    competition = 'none'
+    if relation == 'competing':
+        updated = _pr_age_days(pr.get('updatedAt'), now=now)
+        review = str(pr.get('reviewDecision') or '').upper()
+        competition = 'active' if review == _APPROVED or updated is None or updated <= stale_after_days else 'stale'
     return {'url': pr.get('url') or pr.get('html_url'), 'number': pr['number'], 'relation': relation,
+            'competition': competition, 'review_decision': str(pr.get('reviewDecision') or ''),
+            'updated_at': pr.get('updatedAt'),
             'reason': ('Closed/merged PR requires baseline and scope review' if inactive else
                        'Explicit partial or test-only scope needs review' if limited_scope else
                        'Exact same-repository closing reference' if definitive else

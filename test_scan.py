@@ -325,10 +325,10 @@ class ScanTests(unittest.TestCase):
         repo = REPOSITORIES[0]
         self.issues[repo].append({**self.issues[repo][0], 'number': 13, 'title': 'bad processing'})
 
-        def failing_rank(issue, allow_features=False):
+        def failing_rank(issue, allow_features=False, **kwargs):
             if issue['title'] == 'bad processing':
                 raise ValueError('late invalid issue')
-            return rank(issue, allow_features=allow_features)
+            return rank(issue, allow_features=allow_features, **kwargs)
 
         with patch('contribute.rank', side_effect=failing_rank):
             self.assertEqual(self.scan(), len(REPOSITORIES) - 1)
@@ -355,14 +355,31 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(self.p.task(key)['title'], 'Updated report')
         self.assertEqual(self.p.task(key)['state'], 'PATCH_READY')
 
-    def test_competing_pr_holds_issue_for_every_repository(self):
+    def test_competing_pr_penalizes_but_does_not_hold_issue(self):
         for repo in REPOSITORIES:
             self.prs[repo] = [{'number': 20, 'url': f'https://github.com/{repo}/pull/20',
-                              'body': 'Fixes #12', 'closingIssuesReferences': [{'number': 12}]}]
+                               'body': 'Fixes #12', 'closingIssuesReferences': [{'number': 12}]}]
         self.assertEqual(self.scan(), len(REPOSITORIES))
         for task in self.p.db.execute('SELECT * FROM tasks'):
-            self.assertEqual(task['state'], 'HOLD')
-            self.assertIn(f"https://github.com/{task['repo']}/pull/20", task['holds'])
+            self.assertEqual(task['state'], 'DISCOVERED')
+            self.assertEqual(json.loads(task['holds']), [])
+            relations = json.loads(task['payload'])['_scan_relations']['prs']
+            self.assertEqual('competing', relations[0]['relation'])
+            self.assertEqual('active', relations[0]['competition'])
+            # An active competitor lowers the score below the no-competition value.
+            self.assertLess(task['score'], rank(self.issues[task['repo']][0], relations=[{'competition': 'none'}])[0])
+
+    def test_stale_competing_pr_scores_above_active_and_no_pr(self):
+        repo = REPOSITORIES[0]
+        self.prs[repo] = [{'number': 20, 'url': f'https://github.com/{repo}/pull/20',
+                           'body': 'Fixes #12', 'closingIssuesReferences': [{'number': 12}],
+                           'updatedAt': '2020-01-01T00:00:00Z'}]
+        self.assertEqual(self.scan(), len(REPOSITORIES))
+        stale_task = self.p.task(repo.replace('/', '--') + '--12')
+        relations = json.loads(stale_task['payload'])['_scan_relations']['prs']
+        self.assertEqual('stale', relations[0]['competition'])
+        baseline = rank(self.issues[repo][0])[0]
+        self.assertGreater(stale_task['score'], baseline)
 
 
 if __name__ == '__main__':

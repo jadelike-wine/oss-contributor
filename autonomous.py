@@ -504,7 +504,13 @@ class Autonomous:
         prompt = ('Build a minimal executable regression or acceptance test for this contribution, not an implementation yet. Read CONTRIBUTING.md, '
                   'all applicable AGENTS.md and package scripts. Inspect existing issue discussion. Change ONLY regression test files, '
                   'never production code. No shell access; the controller runs commands. Tests must fail on the actual baseline defect '
-                  'or missing behavior within the reviewed contribution scope, not missing dependencies. For a feature, test the reviewed '
+                  'or missing behavior within the reviewed contribution scope, not missing dependencies. '
+                  'MANDATORY REPRODUCE-FIRST ORDER: the controller executes your regression spec against the UNCHANGED '
+                  'baseline before any production edit and requires it to FAIL matching baseline_failure_pattern; only '
+                  'after that observed red may production code change, and the identical regression must then PASS on '
+                  'the patch. A statically plausible but never-executed bug claim is not acceptable: static analysis '
+                  'only proposes the oracle, execution establishes the defect. If you cannot define an executable '
+                  'oracle that demonstrably fails on the real baseline, decision=skip. For a feature, test the reviewed '
                   'acceptance criteria within the reviewed existing request or research scope. For an existing feature issue, reuse it; '
                   'do not invent another issue or expand the request. Include a short acceptance_criteria array defining the exact '
                   'observable behavior and its boundaries. If no defensible contribution exists, decision=skip. '
@@ -951,6 +957,20 @@ class Autonomous:
     @observed('implementation', task=True)
     def repair(self, task_id, data):
         from pr_maintenance import prepare_merge, finish_merge_resolution
+        task = self.p.task(task_id)
+        if task['source'] == 'hunt' and not data.get('pr_number'):
+            # Conversion gate: a self-discovered bug is static speculation until
+            # the controller has executed a failing baseline reproduction on the
+            # CURRENT base. Reroute rather than implement a speculative defect.
+            file = self.packet_dir(task_id) / 'reproduction.json'
+            try:
+                evidence = json.loads(file.read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                evidence = {}
+            if evidence.get('base_sha') != task['base_sha'] or not evidence.get('logs'):
+                self.p.event(task_id, 'Hunt task lacks executed baseline reproduction on the current base; reproducing before implementation')
+                self.move(task_id, data, 'REPRODUCE' if data.get('plan', {}).get('spec') else 'PLAN')
+                return
         prepare_merge(self, task_id, data)
         task = self.p.task(task_id)
         if (task['source'] == 'issue' and task['number'] and not data.get('pr_number')
@@ -965,6 +985,12 @@ class Autonomous:
                 failure_logs[file.name] = file.read_text(encoding='utf-8')[-5000:]
         prompt = ('Implement the proven fix or reviewed feature scope with a small focused patch. Read current CONTRIBUTING.md and applicable AGENTS.md. '
                   'Do not commit, publish, invoke shell or delegate. Do not change credentials, dependencies, workflows or unrelated files. '
+                  'REPRODUCE-FIRST CONTRACT: the regression test in plan.spec has ALREADY been executed against the '
+                  'unchanged baseline and FAILED with the expected pattern — this defect is observed, not speculative. '
+                  'Your patch must make exactly that executed regression pass; the controller re-runs it on your patch '
+                  'and rejects any change that does not flip red to green. Do not weaken, rewrite or delete the '
+                  'regression test to mask the defect; adjust it only when the real failing behavior differs from the '
+                  'recorded oracle, and explain that in the summary. '
                   'Keep the regression test meaningful; handle downstream callers and upstream review requirements. '
                   'If this task already has a PR, limit edits to outstanding reviewer requests or demonstrated CI failures; '
                   'preserve the published PR scope rather than implementing other parts of the original issue. '
@@ -1743,8 +1769,8 @@ class Autonomous:
                     self.p.hunt(repo, 'Prioritize valuable features across multiple harnesses using official code, tests, designs and user feedback. Research features first, then performance, security, UX and reliability; verify implementation, project scope and duplicates. Research batch ' + week)
             if self.p.config.get('research', {}).get('batch_on_auto', False):
                 discovery_limit = self.p.config.get('research', {}).get('source_discovery_per_run', 0)
-                if type(discovery_limit) is not int or not 0 <= discovery_limit <= 2:
-                    raise ValueError('research.source_discovery_per_run must be 0..2')
+                if type(discovery_limit) is not int or not 0 <= discovery_limit <= 4:
+                    raise ValueError('research.source_discovery_per_run must be 0..4')
                 preferred = []
                 if discovery_limit:
                     from source_discovery import register_scopes
@@ -1777,8 +1803,8 @@ class Autonomous:
         if type(count) is not int or not 1 <= count <= 10:
             raise ValueError('research.candidates_per_run must be 1..10')
         source_limit = self.p.config.get('research', {}).get('source_discovery_per_run', 0)
-        if type(source_limit) is not int or not 0 <= source_limit <= 2:
-            raise ValueError('research.source_discovery_per_run must be 0..2')
+        if type(source_limit) is not int or not 0 <= source_limit <= 4:
+            raise ValueError('research.source_discovery_per_run must be 0..4')
         rows = self.db.execute("SELECT id,repo,payload FROM tasks WHERE source='hunt' AND state IN ('DISCOVERED','PLAN') ORDER BY score DESC,id").fetchall()
         completed = []
         source_attempts = 0
@@ -1788,8 +1814,9 @@ class Autonomous:
         included = {r['id'] for r in ordered}
         ordered += [r for r in rows if r['id'] not in included and r['repo'] in pool]
         # Source discovery shares this batch's total candidate quota. Only
-        # already eligible queued tasks can be promoted, at most two per run.
-        preferred = set(list(dict.fromkeys(preferred_task_ids))[:2])
+        # already eligible queued tasks can be promoted, capped by the
+        # configured source_discovery_per_run limit.
+        preferred = set(list(dict.fromkeys(preferred_task_ids))[:source_limit])
         ordered.sort(key=lambda row: row['id'] not in preferred)
         for row in ordered:
             if ACTIVE.get() and row['id'] in ACTIVE.get().paused_tasks:
@@ -1881,4 +1908,4 @@ class Autonomous:
         rotation_repos = list(dict.fromkeys([*repos, *(row['repo'] for row in rows if row['id'] in pending)]))
         return [row for priority in sorted(groups) for row in self.p.fair_candidates(groups[priority],
                 repositories=rotation_repos,
-                cursor_name='research' if priority == 7 else 'feature-requests' if priority == 4.5 else 'delivery')]
+                cursor_name='research' if 7 <= priority < 8 else 'feature-requests' if priority == 4.5 else 'delivery')]

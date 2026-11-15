@@ -50,9 +50,9 @@ class PipelineTests(unittest.TestCase):
                         self.fail('Conflicting operation entered its critical section')
             self.assertEqual(0, self.p.db.execute('SELECT count(*) FROM locks').fetchone()[0])
 
-    def test_human_and_security_tasks_held(self):
+    def test_security_label_holds_but_soft_signals_do_not(self):
         _, holds = rank({"title": "bug", "labels": [{"name": "status/ready-for-human"}, {"name": "category/security"}], "assignees": [{"login": "someone"}]})
-        self.assertEqual(3, len(holds))
+        self.assertEqual(['category/security'], holds)
 
     def test_scan_duplicate_pr_and_resume_state(self):
         issue = {"number": 12, "title": "Timeout bug", "body": "Steps to reproduce", "labels": [{"name": "type/bug"}], "url": "https://github.com/owner/repo/issues/12"}
@@ -67,7 +67,10 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(0, self.p.scan())
             prs[0]["body"] = "Fixes #12"
             self.p.scan()
-            self.assertEqual("HOLD", self.p.task("owner--repo--12")["state"])
+            task = self.p.task("owner--repo--12")
+            self.assertEqual("DISCOVERED", task["state"])
+            relations = json.loads(task['payload'])['_scan_relations']['prs']
+            self.assertEqual('competing', relations[0]['relation'])
             with self.p.db:
                 self.p.db.execute("UPDATE tasks SET state='NEEDS_REPRODUCTION'")
             self.p.scan()

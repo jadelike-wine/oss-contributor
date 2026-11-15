@@ -110,15 +110,17 @@ class ReassessmentTests(unittest.TestCase):
 
     def test_single_fresh_reassessment_preserves_history_and_scope_hint(self):
         self.scan()
-        self.assertEqual('HOLD', self.task()['state'])
+        # PR-First: a competing open PR is a score signal, not a hold.
+        self.assertEqual('DISCOVERED', self.task()['state'])
         self.prs = [pr('Test-only. Adds regression coverage for #12.')]
         self.scan(issue_numbers=[12])
         self.assertEqual('DISCOVERED', self.task()['state'])
         payload = json.loads(self.task()['payload'])
         self.assertTrue(payload['_scan_relations']['scope_review_required'])
-        event = self.pipeline.db.execute('SELECT event FROM events WHERE task=?', (self.task()['id'],)).fetchone()[0]
-        self.assertIn('existing PR:', event)
-        self.assertIn('scope_review', event)
+        event = self.pipeline.db.execute('SELECT event FROM events WHERE task=?', (self.task()['id'],)).fetchone()
+        self.assertIsNotNone(event, 'expected a Scan hold reassessment event')
+        self.assertIn('pull/20', event[0])
+        self.assertIn('scope_review', event[0])
         with self.pipeline.db:
             self.pipeline.db.execute("UPDATE tasks SET state='SKIPPED'")
         self.scan(issue_numbers=[12])
@@ -144,9 +146,12 @@ class ReassessmentTests(unittest.TestCase):
         self.assertEqual('HOLD', self.task()['state'])
         self.assertFalse(any(call[:2] == ('pr', 'view') for call in self.calls))
 
-    def test_stale_hold_outside_recent_window_is_refreshed_with_bounded_reads(self):
-        self.issues = [issue(12, assignees=[{'login': 'other'}])]
-        self.prs = []
+    def test_stale_relation_record_outside_recent_window_is_refreshed_with_bounded_reads(self):
+        # An open competing PR is no longer a hold, but a DISCOVERED task that
+        # carries a recorded PR relation is still re-verified once it falls
+        # outside the recent-issue window.
+        self.issues = [issue(12)]
+        self.prs = [pr('Test-only. Adds coverage for #12')]
         self.scan()
         with self.pipeline.db:
             self.pipeline.db.execute("UPDATE tasks SET updated='2000-01-01T00:00:00+00:00'")
@@ -165,7 +170,9 @@ class ReassessmentTests(unittest.TestCase):
         self.issues = [issue(99)]
         self.details[12] = RuntimeError('network unavailable')
         self.scan()
-        self.assertEqual('HOLD', self.task()['state'])
+        # PR-First: competing PRs are soft signals; a failed refresh no longer
+        # blocks DISCOVERED — the recorded stale relation just stays on file.
+        self.assertEqual('DISCOVERED', self.task()['state'])
         self.assertEqual('DISCOVERED', self.pipeline.task('owner--repo--99')['state'])
         evidence = json.loads((self.root / 'runs/snapshots/owner--repo/issue-refresh.json').read_text())
         self.assertEqual('unknown', evidence['errors'][0]['status'])
@@ -209,7 +216,9 @@ class ReassessmentTests(unittest.TestCase):
         self.scan()
         row = self.pipeline.db.execute('SELECT * FROM issue_refresh_queue').fetchone()
         self.assertEqual('unknown', row['status'])
-        self.assertEqual('HOLD', self.task()['state'])
+        # PR-First: a stale competing-PR record degrades to a score signal;
+        # the task is re-scanned on next tick but never held for it.
+        self.assertEqual('DISCOVERED', self.task()['state'])
         self.assertGreater(row['retry_after'], now())
         attempts = len([call for call in self.calls if call[:2] == ('issue', 'view')])
         self.scan()

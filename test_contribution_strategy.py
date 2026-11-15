@@ -219,9 +219,10 @@ class OwnIssueScanTests(unittest.TestCase):
     fake_gh = scan_fixture.ScanTests.fake_gh
     scan = scan_fixture.ScanTests.scan
 
-    def test_scan_competing_pr_holds_others_but_keeps_our_report_eligible(self):
+    def test_scan_competing_pr_penalizes_others_but_not_our_own_report(self):
         repos = self.config['repositories'][:2]
         self.p.config['repositories'] = repos
+        self.p.config['contribution_strategy'] = {'prefer_own_pr_on_competition': True}
         for repo in repos:
             self.prs[repo] = [{'number': 99, 'body': 'Fixes #12', 'url': f'https://github.com/{repo}/pull/99'}]
         self.issues[repos[0]][0]['author'] = {'login': 'bot'}
@@ -229,8 +230,12 @@ class OwnIssueScanTests(unittest.TestCase):
         def gh(*args):
             return {'login': 'bot'} if args == ('api', 'user') else self.fake_gh(*args)
         self.scan(gh=gh)
-        self.assertEqual('DISCOVERED', self.p.task(repos[0].replace('/', '--') + '--12')['state'])
-        self.assertEqual('HOLD', self.p.task(repos[1].replace('/', '--') + '--12')['state'])
+        own = self.p.task(repos[0].replace('/', '--') + '--12')
+        theirs = self.p.task(repos[1].replace('/', '--') + '--12')
+        self.assertEqual('DISCOVERED', own['state'])
+        self.assertEqual('DISCOVERED', theirs['state'])
+        # Own report keeps baseline score; foreign report is penalized by the active competitor.
+        self.assertGreater(own['score'], theirs['score'])
 
 
 if __name__ == '__main__':

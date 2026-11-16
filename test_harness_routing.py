@@ -1,4 +1,4 @@
-"""Exercise executor selection at the controller and service-circuit boundaries."""
+﻿"""Exercise executor selection at the controller and service-circuit boundaries."""
 import json
 import copy
 from pathlib import Path
@@ -92,7 +92,7 @@ class HarnessRoutingTests(unittest.TestCase):
             argv = call.args[0]
             self.assertEqual('tokenking', argv[argv.index('--provider') + 1])
             self.assertEqual(expected, argv[argv.index('--model') + 1])
-            self.assertEqual('none', argv[argv.index('-t') + 1])
+            self.assertEqual('catalog', argv[argv.index('-t') + 1])
         self.assertEqual('same_model_separate_channel', review['review_identity']['independence'])
         self.assertEqual([(row['purpose'], row['channel'], row['model']) for row in self.calls()],
                          [('research', 'hermes', RESEARCH_MODEL), ('auto-review', 'hermes', IMPLEMENTATION_MODEL)])

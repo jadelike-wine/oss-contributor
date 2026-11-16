@@ -1,4 +1,4 @@
-import copy
+﻿import copy
 import hashlib
 import json
 from pathlib import Path
@@ -27,7 +27,7 @@ class ResearchJsonRecoveryTests(unittest.TestCase):
     def test_one_missing_root_closer_preserves_nested_values_and_receipt(self):
         answer = {'decision': 'candidate', 'reason': 'Quoted "{[}]" and \\ remain literal.',
                   'feature_matrix': {'feature_status': {'owner/repo': {'evidence': [
-                      {'quote': 'Unicode 路径 with braces { and }'}]}}}}
+                      {'quote': 'Unicode 璺緞 with braces { and }'}]}}}}
         raw = ' \n' + json.dumps(answer, ensure_ascii=False)[:-1] + '\n '
         recovered, receipt = recover_research_json(stream(raw), 'research', 0)
         self.assertEqual(recovered, answer)
@@ -129,7 +129,7 @@ class HermesResearchRecoveryIntegrationTests(unittest.TestCase):
             answer = self.engine.hermes_research(self.key, 'research', 'Find one grounded candidate')
         self.assertEqual(answer, {'decision': 'none', 'reason': 'no grounded candidate'})
         execute.assert_called_once()
-        self.assertEqual(execute.call_args.args[0][execute.call_args.args[0].index('-t') + 1], 'none')
+        self.assertEqual(execute.call_args.args[0][execute.call_args.args[0].index('-t') + 1], 'catalog')
         folder = self.engine.packet_dir(self.key)
         receipt = json.loads((folder / 'research-format-normalization.json').read_text())
         self.assertEqual(Path(receipt['raw_response_file']).read_text(), raw)

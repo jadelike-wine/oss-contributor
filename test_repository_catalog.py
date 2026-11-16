@@ -83,9 +83,9 @@ class CatalogTests(unittest.TestCase):
         remote.assert_not_called()
 
     def test_requested_expansions_contain_all_distinct_candidates(self):
-        self.assertEqual([len(group) for group in CANDIDATE_GROUPS.values()], [20, 35, 20, 25, 9])
+        self.assertEqual([len(group) for group in CANDIDATE_GROUPS.values()], [20, 35, 20, 25, 9, 7])
         requested = [r.lower() for group in CANDIDATE_GROUPS.values() for r in group]
-        self.assertEqual(len(set(requested)), 109)
+        self.assertEqual(len(set(requested)), 116)
         self.assertTrue(set(requested).issubset({r.lower() for r in CANDIDATES}))
 
     def test_committed_catalog_contains_every_requested_repository_without_duplicates(self):

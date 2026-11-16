@@ -34,6 +34,14 @@ class RepairOutputTests(unittest.TestCase):
             self.p.db.execute('UPDATE tasks SET workspace=? WHERE id=?', (str(self.root), self.key))
         self.data = {'stage': 'REPAIR', 'attempts': {}, 'plan': {'pr_body': 'Fix reported behavior'}}
         self.engine.store(self.key, self.data, 'REPAIR')
+        # Hunt tasks must carry executed baseline reproduction evidence on the
+        # current base before repair; seed the packet so repair proceeds.
+        task = self.p.task(self.key)
+        evidence = {'base_sha': task['base_sha'], 'logs': [{'argv': ['test'], 'exit_code': 1,
+                    'output': 'EXPECTED_FAILURE'}], 'at': '2026-01-01T00:00:00+00:00'}
+        packet = self.engine.packet_dir(self.key)
+        packet.mkdir(parents=True, exist_ok=True)
+        (packet / 'reproduction.json').write_text(json.dumps(evidence), encoding='utf-8')
 
     def adapter(self, output, returncode=0, error=None):
         stack = contextlib.ExitStack()

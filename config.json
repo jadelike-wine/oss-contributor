@@ -1,248 +1,262 @@
 {
-  "repositories": [
-    "Tencent/tdesign-react",
-    "anomalyco/opencode",
-    "arco-design/arco-design",
-    "onlook-dev/onlook",
-    "Comfy-Org/ComfyUI",
-    "OpenBMB/ChatDev",
-    "mermaid-js/mermaid",
-    "xyflow/xyflow",
-    "invoke-ai/InvokeAI",
-    "clauderic/dnd-kit",
-    "QwenLM/qwen-code",
-    "google-gemini/gemini-cli",
-    "cline/cline",
-    "OpenHands/OpenHands",
-    "Kilo-Org/kilocode",
-    "SWE-agent/mini-swe-agent",
-    "567-labs/instructor",
-    "Aider-AI/aider",
-    "NousResearch/hermes-agent",
-    "ag2ai/ag2",
-    "browser-use/browser-use",
-    "cloudwego/eino",
-    "crewAIInc/crewAI",
-    "e2b-dev/code-interpreter",
-    "huggingface/smolagents",
-    "julep-ai/julep",
-    "langchain-ai/deepagents",
-    "langchain-ai/langgraph",
-    "langflow-ai/langflow",
-    "mcp-use/mcp-use",
-    "microsoft/semantic-kernel",
-    "microsoft/vscode",
-    "mistralai/mistral-vibe",
-    "modelcontextprotocol/python-sdk",
-    "openai/codex",
-    "openinterpreter/openinterpreter",
-    "pydantic/pydantic-ai",
-    "run-llama/llama_index",
-    "stanfordnlp/dspy",
-    "react/react",
-    "vuejs/core",
-    "sveltejs/svelte",
-    "angular/angular",
-    "solidjs/solid",
-    "preactjs/preact",
-    "vitejs/vite",
-    "vitest-dev/vitest",
-    "nuxt/nuxt",
-    "TanStack/query",
-    "TanStack/router",
-    "TanStack/table",
-    "pmndrs/zustand",
-    "pmndrs/jotai",
-    "reduxjs/redux-toolkit",
-    "react-hook-form/react-hook-form",
-    "colinhacks/zod",
-    "vueuse/vueuse",
-    "shadcn-ui/ui",
-    "radix-ui/primitives",
-    "mui/material-ui",
-    "ant-design/ant-design",
-    "mantinedev/mantine",
-    "chakra-ui/chakra-ui",
-    "heroui-inc/heroui",
-    "saadeghi/daisyui",
-    "tabler/tabler",
-    "element-plus/element-plus",
-    "primefaces/primereact",
-    "primefaces/primevue",
-    "tusen-ai/naive-ui",
-    "Tencent/tdesign-vue-next",
-    "recharts/recharts",
-    "apache/echarts",
-    "ueberdosis/tiptap",
-    "facebook/lexical",
-    "fullcalendar/fullcalendar",
-    "marmelab/react-admin",
-    "refinedev/refine",
-    "carbon-design-system/carbon",
-    "CopilotKit/CopilotKit",
-    "assistant-ui/assistant-ui",
-    "ag-ui-protocol/ag-ui",
-    "gradio-app/gradio",
-    "streamlit/streamlit",
-    "LibreChat-AI/LibreChat",
-    "Mintplex-Labs/anything-llm",
-    "huggingface/chat-ui",
-    "CherryHQ/cherry-studio",
-    "earendil-works/pi",
-    "ComposioHQ/composio",
-    "triggerdotdev/trigger.dev",
-    "iib0011/omni-tools",
-    "opengeos/GeoLibre",
-    "HeyPuter/puter",
-    "xtool-org/xtool",
-    "debpalash/VoiceStudio",
-    "DuarteSantos8/openGym",
-    "MoonshotAI/kimi-code",
-    "stepfun-ai/Step-Code",
-    "MiniMax-AI/minimax-code",
-    "MiniMax-AI/OpenAgentCore",
-    "InternLM/lmdeploy",
-    "InternLM/xtuner",
-    "PaddlePaddle/ERNIE",
-    "aaif-goose/goose",
-    "agno-agi/agno",
-    "NVIDIA/OpenShell",
-    "floatpane/matcha",
-    "vercel/next.js"
-  ],
-  "repository_checks": {
-    "max_inactive_days": 180,
-    "ordering_notes": {
-      "scope": "Telemetry feedback ordering: observed PR outcomes first (merged, then open submissions awaiting review), then unproven repositories, then policy-constrained repositories last. Per-repo pr_acceptance_rate and blocked_by_policy are tracked in telemetry pr_production.per_repo.",
-      "merged": ["Tencent/tdesign-react"],
-      "prs_open_awaiting_review": ["anomalyco/opencode", "arco-design/arco-design", "onlook-dev/onlook", "Comfy-Org/ComfyUI", "OpenBMB/ChatDev", "mermaid-js/mermaid", "xyflow/xyflow", "invoke-ai/InvokeAI", "clauderic/dnd-kit"],
-      "policy_constrained_last": {
-        "aaif-goose/goose": "manual_issue_submission + human_pr_review_required; ready-project gate",
-        "agno-agi/agno": "required_issue_labels: ready",
-        "NVIDIA/OpenShell": "required_issue_labels: state:accepted",
-        "floatpane/matcha": "manual_issue_submission",
-        "vercel/next.js": "manual_issue/pr/comment submission required"
-      }
-    },
-    "retired": {
-      "continuedev/continue": {
-        "reason": "Official README: no longer actively maintained; read-only for all users",
-        "evidence": "https://github.com/continuedev/continue#readme"
-      },
-      "SWE-agent/SWE-agent": {
-        "reason": "Official README: development moved to mini-swe-agent, which supersedes SWE-agent",
-        "evidence": "https://github.com/SWE-agent/SWE-agent#readme"
-      },
-      "MoonshotAI/kimi-cli": {
-        "reason": "Repository archived; official README says Python Kimi CLI replaced by MoonshotAI/kimi-code",
-        "evidence": "https://github.com/MoonshotAI/kimi-cli#readme"
-      }
-    },
-    "policies": {
-      "aaif-goose/goose": {
-        "ready_project": "https://github.com/orgs/aaif-goose/projects/1",
-        "manual_issue_submission": true,
-        "human_pr_review_required": true,
-        "evidence": "https://github.com/aaif-goose/goose/blob/main/CONTRIBUTING.md"
-      },
-      "agno-agi/agno": {
-        "required_issue_labels": [
-          "ready"
-        ],
-        "evidence": "https://github.com/agno-agi/agno/blob/main/CONTRIBUTING.md"
-      },
-      "floatpane/matcha": {
-        "manual_issue_submission": true,
-        "evidence": "https://github.com/floatpane/matcha/blob/8e9ba02326f5feb30b7e083f0827893bccd3623c/CONTRIBUTING.md"
-      },
-      "pbakaus/impeccable": {
-        "automation": "requires_explicit_maintainer_instructions",
-        "issue_submission": "maintainer_authorization_required",
-        "pr_submission": "maintainer_authorization_required",
-        "evidence": "https://github.com/pbakaus/impeccable/blob/2f97a85a4a87a80066a693bd3546b092bd300772/AGENTS.md"
-      },
-      "NVIDIA/OpenShell": {
-        "required_issue_labels": [
-          "state:accepted"
-        ],
-        "evidence": "https://github.com/NVIDIA/OpenShell/blob/42671c2dd2c02b744850e0bda72b99d5509969c1/AGENTS.md"
-      },
-      "vercel/next.js": {
-        "manual_pr_submission": true,
-        "manual_issue_submission": true,
-        "manual_comment_submission": true,
-        "evidence": "https://github.com/vercel/next.js/blob/6100e81e314f7aad0c94e189bbae87820d7efb37/AGENTS.md#L271-L334"
-      }
-    },
-    "cache_seconds": 86400
-  },
-  "model": "tokenking/devin/swe-2",
-  "implementation_channel": "dsh",
-  "dsh": {
-    "context_window": 128000,
-    "max_tokens": 32768
-  },
-  "timeout_seconds": 1500,
-  "scan_limit": 100,
-  "max_analysis_per_tick": 4,
-  "opencode_executable": "opencode",
-  "automation": {
-    "enabled": true,
-    "scheduled_external_writes": true,
-    "max_tasks_per_tick": 8,
-    "max_stage_attempts": 3,
-    "weekly_hunts": true,
-    "implementation_tasks_per_tick": 8,
-    "maintenance_tasks_per_tick": 6,
-    "max_infrastructure_attempts": 3,
-    "infrastructure_cooldown_seconds": 300
-  },
-  "contribution_strategy": {
-    "prefer_own_pr_on_competition": true,
-    "submit_issue_and_pr_together": true,
-    "link_pr_in_own_issue": true
-  },
-  "feature_requests": {
-    "enabled": true,
-    "candidates_per_tick": 2
-  },
-  "review_model": "tokenking/devin/swe-2",
-  "repository_catalog": "repository-catalog.json",
-  "research": {
-    "model_channel": "hermes",
-    "model": "tokenking/deepseek-v4.1-flash",
-    "candidates_per_run": 6,
-    "source_discovery_per_run": 3,
-    "peers_per_candidate": 3,
-    "files_per_peer": 4,
-    "target_files": 12,
-    "file_characters": 12000,
-    "context_characters": 320000,
-    "network_requests": 40,
-    "catalog_max_age_days": 30,
-    "batch_on_auto": true
-  },
-  "timeouts": {
-    "command_seconds": 180,
-    "model_seconds": 1500,
-    "research_model_seconds": 240,
-    "test_seconds": 1500,
-    "git_seconds": 600,
-    "stage_seconds": 2400,
-    "remote_ci_seconds": 1800
-  },
-  "budgets": {
-    "run_model_calls": 32,
-    "task_model_calls": 40,
-    "daily_model_calls": null,
-    "run_seconds": 5400,
-    "task_seconds": 1800,
-    "daily_seconds": 21600,
-    "run_cost_usd": null,
-    "daily_cost_usd": null
-  },
-  "scanning": {
-    "cache_seconds": 21600,
-    "repositories_per_tick": 12
-  }
+    "repositories":  [
+                         "Tencent/tdesign-react",
+                         "anomalyco/opencode",
+                         "arco-design/arco-design",
+                         "onlook-dev/onlook",
+                         "Comfy-Org/ComfyUI",
+                         "OpenBMB/ChatDev",
+                         "mermaid-js/mermaid",
+                         "xyflow/xyflow",
+                         "invoke-ai/InvokeAI",
+                         "clauderic/dnd-kit",
+                         "QwenLM/qwen-code",
+                         "google-gemini/gemini-cli",
+                         "cline/cline",
+                         "OpenHands/OpenHands",
+                         "Kilo-Org/kilocode",
+                         "SWE-agent/mini-swe-agent",
+                         "567-labs/instructor",
+                         "Aider-AI/aider",
+                         "NousResearch/hermes-agent",
+                         "ag2ai/ag2",
+                         "browser-use/browser-use",
+                         "cloudwego/eino",
+                         "crewAIInc/crewAI",
+                         "e2b-dev/code-interpreter",
+                         "huggingface/smolagents",
+                         "julep-ai/julep",
+                         "langchain-ai/deepagents",
+                         "langchain-ai/langgraph",
+                         "langflow-ai/langflow",
+                         "mcp-use/mcp-use",
+                         "microsoft/semantic-kernel",
+                         "microsoft/vscode",
+                         "mistralai/mistral-vibe",
+                         "modelcontextprotocol/python-sdk",
+                         "openai/codex",
+                         "openinterpreter/openinterpreter",
+                         "pydantic/pydantic-ai",
+                         "run-llama/llama_index",
+                         "stanfordnlp/dspy",
+                         "react/react",
+                         "vuejs/core",
+                         "sveltejs/svelte",
+                         "angular/angular",
+                         "solidjs/solid",
+                         "preactjs/preact",
+                         "vitejs/vite",
+                         "vitest-dev/vitest",
+                         "nuxt/nuxt",
+                         "TanStack/query",
+                         "TanStack/router",
+                         "TanStack/table",
+                         "pmndrs/zustand",
+                         "pmndrs/jotai",
+                         "reduxjs/redux-toolkit",
+                         "react-hook-form/react-hook-form",
+                         "colinhacks/zod",
+                         "vueuse/vueuse",
+                         "shadcn-ui/ui",
+                         "radix-ui/primitives",
+                         "mui/material-ui",
+                         "ant-design/ant-design",
+                         "mantinedev/mantine",
+                         "chakra-ui/chakra-ui",
+                         "heroui-inc/heroui",
+                         "saadeghi/daisyui",
+                         "tabler/tabler",
+                         "element-plus/element-plus",
+                         "primefaces/primereact",
+                         "primefaces/primevue",
+                         "tusen-ai/naive-ui",
+                         "Tencent/tdesign-vue-next",
+                         "recharts/recharts",
+                         "apache/echarts",
+                         "ueberdosis/tiptap",
+                         "facebook/lexical",
+                         "fullcalendar/fullcalendar",
+                         "marmelab/react-admin",
+                         "refinedev/refine",
+                         "carbon-design-system/carbon",
+                         "CopilotKit/CopilotKit",
+                         "assistant-ui/assistant-ui",
+                         "ag-ui-protocol/ag-ui",
+                         "gradio-app/gradio",
+                         "streamlit/streamlit",
+                         "LibreChat-AI/LibreChat",
+                         "Mintplex-Labs/anything-llm",
+                         "huggingface/chat-ui",
+                         "CherryHQ/cherry-studio",
+                         "earendil-works/pi",
+                         "ComposioHQ/composio",
+                         "triggerdotdev/trigger.dev",
+                         "iib0011/omni-tools",
+                         "opengeos/GeoLibre",
+                         "HeyPuter/puter",
+                         "xtool-org/xtool",
+                         "debpalash/VoiceStudio",
+                         "DuarteSantos8/openGym",
+                         "MoonshotAI/kimi-code",
+                         "stepfun-ai/Step-Code",
+                         "MiniMax-AI/minimax-code",
+                         "MiniMax-AI/OpenAgentCore",
+                         "InternLM/lmdeploy",
+                         "InternLM/xtuner",
+                         "PaddlePaddle/ERNIE",
+                         "aaif-goose/goose",
+                         "agno-agi/agno",
+                         "NVIDIA/OpenShell",
+                         "floatpane/matcha",
+                         "vercel/next.js"
+                     ],
+    "repository_checks":  {
+                              "max_inactive_days":  180,
+                              "ordering_notes":  {
+                                                     "scope":  "Telemetry feedback ordering: observed PR outcomes first (merged, then open submissions awaiting review), then unproven repositories, then policy-constrained repositories last. Per-repo pr_acceptance_rate and blocked_by_policy are tracked in telemetry pr_production.per_repo.",
+                                                     "merged":  [
+                                                                    "Tencent/tdesign-react"
+                                                                ],
+                                                     "prs_open_awaiting_review":  [
+                                                                                      "anomalyco/opencode",
+                                                                                      "arco-design/arco-design",
+                                                                                      "onlook-dev/onlook",
+                                                                                      "Comfy-Org/ComfyUI",
+                                                                                      "OpenBMB/ChatDev",
+                                                                                      "mermaid-js/mermaid",
+                                                                                      "xyflow/xyflow",
+                                                                                      "invoke-ai/InvokeAI",
+                                                                                      "clauderic/dnd-kit"
+                                                                                  ],
+                                                     "policy_constrained_last":  {
+                                                                                     "aaif-goose/goose":  "manual_issue_submission + human_pr_review_required; ready-project gate",
+                                                                                     "agno-agi/agno":  "required_issue_labels: ready",
+                                                                                     "NVIDIA/OpenShell":  "required_issue_labels: state:accepted",
+                                                                                     "floatpane/matcha":  "manual_issue_submission",
+                                                                                     "vercel/next.js":  "manual_issue/pr/comment submission required"
+                                                                                 }
+                                                 },
+                              "retired":  {
+                                              "continuedev/continue":  {
+                                                                           "reason":  "Official README: no longer actively maintained; read-only for all users",
+                                                                           "evidence":  "https://github.com/continuedev/continue#readme"
+                                                                       },
+                                              "SWE-agent/SWE-agent":  {
+                                                                          "reason":  "Official README: development moved to mini-swe-agent, which supersedes SWE-agent",
+                                                                          "evidence":  "https://github.com/SWE-agent/SWE-agent#readme"
+                                                                      },
+                                              "MoonshotAI/kimi-cli":  {
+                                                                          "reason":  "Repository archived; official README says Python Kimi CLI replaced by MoonshotAI/kimi-code",
+                                                                          "evidence":  "https://github.com/MoonshotAI/kimi-cli#readme"
+                                                                      }
+                                          },
+                              "policies":  {
+                                               "aaif-goose/goose":  {
+                                                                        "ready_project":  "https://github.com/orgs/aaif-goose/projects/1",
+                                                                        "manual_issue_submission":  true,
+                                                                        "human_pr_review_required":  true,
+                                                                        "evidence":  "https://github.com/aaif-goose/goose/blob/main/CONTRIBUTING.md"
+                                                                    },
+                                               "agno-agi/agno":  {
+                                                                     "required_issue_labels":  [
+                                                                                                   "ready"
+                                                                                               ],
+                                                                     "evidence":  "https://github.com/agno-agi/agno/blob/main/CONTRIBUTING.md"
+                                                                 },
+                                               "floatpane/matcha":  {
+                                                                        "manual_issue_submission":  true,
+                                                                        "evidence":  "https://github.com/floatpane/matcha/blob/8e9ba02326f5feb30b7e083f0827893bccd3623c/CONTRIBUTING.md"
+                                                                    },
+                                               "pbakaus/impeccable":  {
+                                                                          "automation":  "requires_explicit_maintainer_instructions",
+                                                                          "issue_submission":  "maintainer_authorization_required",
+                                                                          "pr_submission":  "maintainer_authorization_required",
+                                                                          "evidence":  "https://github.com/pbakaus/impeccable/blob/2f97a85a4a87a80066a693bd3546b092bd300772/AGENTS.md"
+                                                                      },
+                                               "NVIDIA/OpenShell":  {
+                                                                        "required_issue_labels":  [
+                                                                                                      "state:accepted"
+                                                                                                  ],
+                                                                        "evidence":  "https://github.com/NVIDIA/OpenShell/blob/42671c2dd2c02b744850e0bda72b99d5509969c1/AGENTS.md"
+                                                                    },
+                                               "vercel/next.js":  {
+                                                                      "manual_pr_submission":  true,
+                                                                      "manual_issue_submission":  true,
+                                                                      "manual_comment_submission":  true,
+                                                                      "evidence":  "https://github.com/vercel/next.js/blob/6100e81e314f7aad0c94e189bbae87820d7efb37/AGENTS.md#L271-L334"
+                                                                  }
+                                           },
+                              "cache_seconds":  86400
+                          },
+    "model":  "tokenking/devin/swe-2",
+    "implementation_channel":  "dsh",
+    "dsh":  {
+                "context_window":  128000,
+                "max_tokens":  32768,
+                "base_url":  "https://tokenking.uk/v1",
+                "api_key_env":  "OSS_DSH_API_KEY"
+            },
+    "timeout_seconds":  1500,
+    "scan_limit":  100,
+    "max_analysis_per_tick":  4,
+    "opencode_executable":  "opencode",
+    "automation":  {
+                       "enabled":  true,
+                       "scheduled_external_writes":  true,
+                       "max_tasks_per_tick":  8,
+                       "max_stage_attempts":  3,
+                       "weekly_hunts":  true,
+                       "implementation_tasks_per_tick":  8,
+                       "maintenance_tasks_per_tick":  6,
+                       "max_infrastructure_attempts":  3,
+                       "infrastructure_cooldown_seconds":  300
+                   },
+    "contribution_strategy":  {
+                                  "prefer_own_pr_on_competition":  true,
+                                  "submit_issue_and_pr_together":  true,
+                                  "link_pr_in_own_issue":  true
+                              },
+    "feature_requests":  {
+                             "enabled":  true,
+                             "candidates_per_tick":  2
+                         },
+    "review_model":  "tokenking/glm-5.3-flash",
+    "repository_catalog":  "repository-catalog.json",
+    "research":  {
+                     "model_channel":  "hermes",
+                     "model":  "tokenking/deepseek-v4.1-flash",
+                     "candidates_per_run":  6,
+                     "source_discovery_per_run":  3,
+                     "peers_per_candidate":  3,
+                     "files_per_peer":  4,
+                     "target_files":  12,
+                     "file_characters":  12000,
+                     "context_characters":  320000,
+                     "network_requests":  40,
+                     "catalog_max_age_days":  30,
+                     "batch_on_auto":  true
+                 },
+    "timeouts":  {
+                     "command_seconds":  180,
+                     "model_seconds":  1500,
+                     "research_model_seconds":  240,
+                     "test_seconds":  1500,
+                     "git_seconds":  600,
+                     "stage_seconds":  2400,
+                     "remote_ci_seconds":  1800
+                 },
+    "budgets":  {
+                    "run_model_calls":  32,
+                    "task_model_calls":  40,
+                    "daily_model_calls":  null,
+                    "run_seconds":  5400,
+                    "task_seconds":  1800,
+                    "daily_seconds":  21600,
+                    "run_cost_usd":  null,
+                    "daily_cost_usd":  null
+                },
+    "scanning":  {
+                     "cache_seconds":  21600,
+                     "repositories_per_tick":  12
+                 }
 }

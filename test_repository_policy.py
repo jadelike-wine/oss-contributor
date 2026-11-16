@@ -56,7 +56,7 @@ class RepositoryPolicyTests(unittest.TestCase):
     def test_shared_targets_and_two_retired_identifiers(self):
         self.assertEqual(self.config['repositories'], REPOSITORIES)
         self.assertEqual(set(self.config['repository_checks']['retired']),
-                         {'continuedev/continue', 'SWE-agent/SWE-agent'})
+                         {'continuedev/continue', 'SWE-agent/SWE-agent', 'MoonshotAI/kimi-cli'})
         with self.network():
             self.assertEqual(self.p.effective_repositories(), REPOSITORIES)
             self.assertEqual(self.p.effective_repositories(contribution=True), REPOSITORIES)

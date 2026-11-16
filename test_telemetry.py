@@ -1,4 +1,4 @@
-import hashlib
+﻿import hashlib
 import json
 from pathlib import Path
 import sqlite3
@@ -37,7 +37,7 @@ class TelemetryTests(unittest.TestCase):
         self.assertFalse(report['cost_caps_enforced'])
 
     def test_large_unicode_stdin_with_output_capture_is_complete_and_not_an_argument(self):
-        prompt = '研究输入：DeepSeek 与 SWE-2；保留 Unicode。\n' * 8192
+        prompt = '鐮旂┒杈撳叆锛欴eepSeek 涓?SWE-2锛涗繚鐣?Unicode銆俓n' * 8192
         payload = prompt.encode('utf-8')
         script = ('import hashlib,json,sys; data=sys.stdin.buffer.read(); '
                   'print(json.dumps({"bytes":len(data),"sha256":hashlib.sha256(data).hexdigest()}))')
@@ -114,7 +114,7 @@ class TelemetryTests(unittest.TestCase):
         self.assertEqual('none', answer['decision'])
         argv = invoke.call_args.args[0]
         self.assertEqual('research', argv[argv.index('--provider') + 1])
-        self.assertEqual('none', argv[argv.index('-t') + 1])
+        self.assertEqual('catalog', argv[argv.index('-t') + 1])
         row = self.p.db.execute('SELECT * FROM model_calls').fetchone()
         self.assertEqual('research/model', row['model'])
         self.assertEqual('hermes', row['channel'])

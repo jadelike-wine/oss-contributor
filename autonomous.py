@@ -345,7 +345,7 @@ class Autonomous:
         with self.p.lock('worker'):
             # Empty -t selects platform defaults in Hermes; a nonempty empty-toolset
             # selection is required. Never silently fall back to the default tools.
-            result = execute(['hermes', 'chat', '--provider', provider, '--model', name, '--ignore-rules', '-t', 'none', '--query-file', str(query), '--oneshot', '--format', 'stream-json'], cwd=self.p.root, timeout=model_timeout(self.p.config, purpose), started=lambda pid: self.p.track_process('worker', pid), output_prefix=folder / (purpose + '-review'))
+            result = execute(['hermes', 'chat', '--provider', provider, '--model', name, '--ignore-rules', '-t', 'catalog', '--query-file', str(query), '--oneshot', '--format', 'stream-json'], cwd=self.p.root, timeout=model_timeout(self.p.config, purpose), started=lambda pid: self.p.track_process('worker', pid), output_prefix=folder / (purpose + '-review'))
         (folder / (purpose + '-review.jsonl')).write_text(result.stdout, encoding='utf-8')
         (folder / (purpose + '-review.stderr')).write_text(result.stderr, encoding='utf-8')
         record_usage(result.stdout, 'hermes')

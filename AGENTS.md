@@ -206,7 +206,26 @@ AI 必须研究仓库的实际贡献规则，但不能过度保守。
 
 这些要求必须遵守，不得伪造或绕过。
 
-### 5.2 研究维护者的实际行为
+### 5.2 Issue 和 PR 模板合规
+
+提交的 Issue 和 PR 的标题与正文必须严格遵循目标仓库的模板要求。
+
+**标题规范：**
+- 若 `.github/ISSUE_TEMPLATE/*.yml` 或 `pull_request_template.md` 中 `title:` 字段含前缀（如 `[BUG]`、`[Bug]: `、`[组件名称]`），则标题必须使用该前缀。
+- 前缀保留原大小写和括号格式，例如 `[BUG]`、`[bug]`、`[Bug]:`、`[Feature Request]:`、`New Feature:`。
+
+**正文规范：**
+- Issue 正文必须覆盖模板要求的全部必填字段（YAML 模板中的 `label:` 字段，Markdown 模板中的标题/注释字段）。
+- PR 正文必须填充 `pull_request_template.md` 中的每个标题段落。
+- 不确定字段内容时，填 `N/A` 并说明原因，不得留空。
+
+**实施方式：**
+- `autonomous.py` 中的 `issue_template()` 和 `issue_title_compliant()` 自动读取并校验模板。
+- `create_issue()` 在提交前自动为标题补前缀。
+- `publish_pr()` 在提交前自动为 PR 标题补前缀。
+- Plan prompt 中的 `issue_template_fields`、`issue_template_title_prefix`、`pr_template_title_prefix` 将模板要求传递给模型。
+
+### 5.3 研究维护者的实际行为
 
 不能只看 CONTRIBUTING.md，还要分析实际合并记录。
 
@@ -221,7 +240,7 @@ AI 应识别这种规则执行差异，并将其纳入仓库策略画像。
 
 也不要因为出现过一次例外，就假设所有规则都可以忽略。
 
-### 5.3 遇到规则阻塞怎么办
+### 5.4 遇到规则阻塞怎么办
 
 如果 PR 被机器人或维护者拒绝：
 

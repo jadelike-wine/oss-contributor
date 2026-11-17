@@ -207,11 +207,13 @@ class RepositoryPolicyTests(unittest.TestCase):
         self.assertEqual(self.p.task(key)['state'], 'MERGED')
         self.assertEqual(engine.load(key), {**data, 'stage': 'MERGED'})
 
-    def test_goose_ready_gate_checks_exact_board_and_disables_automatic_issues(self):
+    def test_goose_ready_gate_checks_exact_board_personal_submission_is_soft(self):
         repo = 'aaif-goose/goose'
         key = self.p.hunt(repo, 'new finding')
         with self.network():
-            with self.assertRaisesRegex(RuntimeError, 'submit an issue personally'):
+            # PR-First: personal issue/PR submission conventions no longer
+            # pause; the Ready board gate still does.
+            with patch('contribute.ready_issue', return_value=True):
                 self.p.require_contribution(self.p.task(key))
             with self.p.db:
                 self.p.db.execute('UPDATE tasks SET number=12 WHERE id=?', (key,))
@@ -220,8 +222,7 @@ class RepositoryPolicyTests(unittest.TestCase):
                     self.p.prepare(key)
             with patch('contribute.ready_issue', return_value=True):
                 self.p.require_contribution(self.p.task(key))
-                with self.assertRaisesRegex(RuntimeError, 'personal code review'):
-                    self.p.require_contribution(self.p.task(key), publishing=True)
+                self.p.require_contribution(self.p.task(key), publishing=True)
         self.assertFalse((self.root / 'workspaces').exists())
 
     def test_review_reads_discovered_non_root_contribution_guide(self):

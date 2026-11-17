@@ -1,7 +1,7 @@
 ﻿{
-    "last_tick":  "2026-11-16T10:57:29.9872634+08:00",
+    "last_tick":  "2026-11-17T22:18:03.2713146+08:00",
     "state":  "ok",
-    "pid":  21788,
-    "log":  "C:\\Users\\lyp99\\Documents\\GitHub\\oss-contributor\\logs\\tick-20261116-104804.log",
-    "exit":  0
+    "pid":  16468,
+    "log":  "C:\\Users\\lyp99\\Documents\\GitHub\\oss-contributor\\logs\\tick-20261117-221802.log",
+    "exit":  1
 }

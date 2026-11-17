@@ -26,24 +26,23 @@ from test_research import opportunity
 class PolicyIntelligenceTests(unittest.TestCase):
     def test_hard_and_soft_classification(self):
         opportunity_ = opportunity()
-        # Soft conventions never wait.
+        # Soft conventions never wait — including former "hard" submission
+        # bans, which now ship anyway with the recorded acceptance risk.
         for soft in ({'maintainer_required': True}, {'automated_pr': False},
-                     {'automated_issue': False}, {'discussion_required': True}):
+                     {'automated_issue': False}, {'discussion_required': True},
+                     {'automation': 'forbidden'}, {'automation': 'disallowed'},
+                     {'automation': 'requires_explicit_maintainer_instructions'},
+                     {'manual_pr_submission': True},
+                     {'pr_submission': 'maintainer_authorization_required'},
+                     {'manual_issue_submission': True},
+                     {'human_pr_review_required': True}):
             policy = {**opportunity_['policy'], **soft}
             answer = {**opportunity_, 'policy': policy}
             self.assertFalse(needs_discussion(answer), soft)
             self.assertFalse(research_discussion(answer), soft)
-        # Hard gates still wait.
-        for hard in ({'automation': 'forbidden'}, {'automation': 'disallowed'},
-                     {'automation': 'requires_explicit_maintainer_instructions'},
-                     {'manual_pr_submission': True},
-                     {'pr_submission': 'maintainer_authorization_required'}):
-            policy = {**opportunity_['policy'], **hard}
-            answer = {**opportunity_, 'policy': policy}
-            self.assertTrue(needs_discussion(answer), hard)
-        # Security category and high risk remain hard.
+        # High risk is also soft; only private security disclosure stays hard.
+        self.assertFalse(needs_discussion({**opportunity_, 'risk': 'high'}))
         self.assertTrue(needs_discussion({**opportunity_, 'category': 'security'}))
-        self.assertTrue(needs_discussion({**opportunity_, 'risk': 'high'}))
 
     def test_acceptance_score_degrades_not_blocks(self):
         issue = {'labels': [], 'assignees': [{'login': 'other'}],
@@ -74,11 +73,14 @@ class PolicyIntelligenceTests(unittest.TestCase):
         self.assertIn('proceed_degraded', reason)
         self.assertLess(priority, 70)
 
-    def test_route_hard_policy_stays_paused(self):
+    def test_route_automation_ban_now_proceeds_degraded(self):
+        """PR-First hard rule: even an explicit automation ban ships the
+        contribution; the ban only lowers the acceptance score."""
         answer = opportunity()
         answer['policy']['automation'] = 'forbidden'
-        queue, _, _ = route(answer, None, reviewed=True, duplicate_clear=True)
-        self.assertEqual('PAUSED_POLICY', queue)
+        queue, _, reason = route(answer, None, reviewed=True, duplicate_clear=True)
+        self.assertEqual('READY_TO_IMPLEMENT', queue)
+        self.assertIn('proceed_degraded', reason)
 
     def test_wait_escalation_clock(self):
         self.assertIsNone(wait_escalation({'waiting_since': '2026-11-14T00:00:00+00:00'},
@@ -161,13 +163,50 @@ class Issue29864RegressionTests(unittest.TestCase):
             self.assertEqual('SKIPPED', self.engine.advance(self.key))
         self.assertEqual([], self.created_prs)
 
-    def test_hard_gated_wait_terminates_after_timeout(self):
-        """A hard-gated WAITING_MAINTAINER closes instead of auto-implementing."""
+    def test_local_discovery_wait_decision_skips_instead_of_parking(self):
+        """Hard rule: a planner 'wait' on a self-discovered issue must not park."""
+        self.plan = {**self.plan, 'decision': 'wait', 'reason': 'wants maintainer sign-off'}
+        data = {'stage': 'PLAN', 'attempts': {},
+                'contribution_origin': {'kind': 'local_discovery', 'task': self.key,
+                                        'at': '2026-01-01T00:00:00+00:00'}}
+        self.engine.store(self.key, data)
+        with self.mocks():
+            self.assertEqual('SKIPPED', self.engine.advance(self.key))
+        self.assertEqual([], self.created_prs)
+
+    def test_local_discovery_proposal_only_still_ships_its_pr(self):
+        """Hard rule: a self-discovered issue parked proposal-only resumes to its PR."""
+        data = {'stage': 'WAITING_MAINTAINER', 'attempts': {}, 'proposal_only': True,
+                'waiting_since': '2026-01-01T00:00:00+00:00',
+                'contribution_origin': {'kind': 'local_discovery', 'task': self.key,
+                                        'at': '2026-01-01T00:00:00+00:00'},
+                'plan': self.plan}
+        self.engine.store(self.key, data, 'WAITING_MAINTAINER')
+        with self.mocks():
+            self.assertEqual('PR_OPEN', self.engine.advance(self.key))
+        self.assertEqual(1, len(self.created_prs))
+
+    def test_local_discovery_register_issue_never_parks(self):
+        """Hard rule: registering a self-discovered issue goes straight to REPAIR."""
+        with self.p.db:
+            self.p.db.execute("UPDATE tasks SET source='hunt',number=NULL WHERE id=?", (self.key,))
+        data = {'stage': 'ISSUE', 'attempts': {}, 'proposal_only': True,
+                'plan': self.plan,
+                'contribution_origin': {'kind': 'local_discovery', 'task': self.key,
+                                        'at': '2026-01-01T00:00:00+00:00'}}
+        with self.mocks():
+            self.assertTrue(self.engine.register_issue(
+                self.key, data,
+                {'number': 7, 'html_url': 'https://github.com/owner/repo/issues/7'}))
+        self.assertEqual('REPAIR', data['stage'])
+        self.assertNotIn('proposal_only', data)
+
+    def test_security_gated_self_discovery_skips_immediately(self):
+        """Private-disclosure gate on our own issue: terminate, never park."""
         data = {'stage': 'WAITING_MAINTAINER', 'attempts': {}, 'proposal_only': True,
                 'waiting_since': '2026-01-01T00:00:00+00:00',
                 'research': {'approved': True, 'opportunity': {
-                    **opportunity(),
-                    'policy': {'automation': 'forbidden', 'reason': 'no bots'}}},
+                    **opportunity(), 'category': 'security'}},
                 'plan': self.plan}
         self.engine.store(self.key, data, 'WAITING_MAINTAINER')
         with self.mocks():
@@ -175,8 +214,22 @@ class Issue29864RegressionTests(unittest.TestCase):
         self.assertEqual('SKIPPED', stage)
         self.assertEqual([], self.created_prs)
 
-    def test_hard_ban_still_pauses_publication(self):
+    def test_security_still_pauses_publication(self):
+        """Security findings never publish a public PR."""
         data = {'stage': 'PUBLISH', 'attempts': {},
+                'research': {'approved': True,
+                             'opportunity': {**opportunity(), 'category': 'security',
+                                             'policy': {'automated_issue': True, 'automated_pr': True,
+                                                        'maintainer_required': False}}}}
+        self.engine.store(self.key, data)
+        with self.mocks():
+            with self.assertRaises(ContributionPaused):
+                self.engine.publish_pr(self.key, self.engine.load(self.key))
+        self.assertEqual([], self.created_prs)
+
+    def test_automation_ban_still_ships_its_pr(self):
+        """PR-First hard rule: even automation=forbidden ships issue+PR."""
+        data = {'stage': 'PLAN', 'attempts': {},
                 'research': {'approved': True,
                              'opportunity': {**opportunity(),
                                              'policy': {'automated_issue': True, 'automated_pr': True,
@@ -185,9 +238,8 @@ class Issue29864RegressionTests(unittest.TestCase):
                                                         'reason': 'no bots'}}}}
         self.engine.store(self.key, data)
         with self.mocks():
-            with self.assertRaises(ContributionPaused):
-                self.engine.publish_pr(self.key, self.engine.load(self.key))
-        self.assertEqual([], self.created_prs)
+            self.assertEqual('PR_OPEN', self.engine.advance(self.key))
+        self.assertEqual(1, len(self.created_prs))
 
 
 del Fixture

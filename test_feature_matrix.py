@@ -274,21 +274,22 @@ class MatrixTests(unittest.TestCase):
         matrix = build(answer, task, packet)
         gates = {'reviewed': True, 'duplicate_clear': True, 'maintainer': True}
         self.assertEqual(route(answer, matrix, **gates)[0], 'READY_TO_IMPLEMENT')
-        # Hard bans still pause regardless of maintainer approval.
+        # PR-First hard rule: every submission convention is a soft
+        # acceptance penalty — maintainer approval or not, it still ships.
         for policy in ({'human_pr_review_required': True}, {'manual_issue_submission': True},
                        {'manual_pr_submission': True}, {'automation': 'forbidden'}):
-            self.assertEqual(route(answer, matrix, policy=policy, **gates)[0], 'PAUSED_POLICY')
+            self.assertEqual(route(answer, matrix, policy=policy, **gates)[0], 'READY_TO_IMPLEMENT')
         matrix['feature_status'][task['repo']]['status'] = 'unknown'
         self.assertEqual(route(answer, matrix, **gates)[0], 'RESEARCH_ONLY')
-        # PR-First: automated_pr=false without an explicit ban is a soft risk,
-        # not a dead end — degraded implementation, not discussion purgatory.
+        # PR-First: automated_pr/automated_issue=false are soft risks, not
+        # dead ends — degraded implementation, not discussion purgatory.
         matrix['feature_status'][task['repo']]['status'] = 'not_found'
         answer['policy']['automated_pr'] = False
         queue, priority, reason = route(answer, matrix, **gates)
         self.assertEqual(queue, 'READY_TO_IMPLEMENT')
         self.assertIn('proceed_degraded', reason)
         answer['policy']['automated_issue'] = False
-        self.assertEqual(route(answer, matrix, **gates)[0], 'PAUSED_POLICY')
+        self.assertEqual(route(answer, matrix, **gates)[0], 'READY_TO_IMPLEMENT')
 
     def test_bug_remains_eligible_and_feature_priority_requires_gates(self):
         bug = opportunity()

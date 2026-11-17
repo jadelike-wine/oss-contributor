@@ -212,32 +212,45 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual([], self.created_issues)
         self.assertEqual([], self.created_prs)
 
-    def test_lost_proposal_response_recovers_without_duplicate_or_implementation(self):
+    def test_hard_gated_self_discovery_publishes_no_bare_proposal(self):
+        """Hard rule: a self-discovered issue must carry its own PR. A
+        verified hard gate makes that impossible, so the task ends without
+        publishing a proposal that could never ship one."""
         packet = self.packet()
         answer = opportunity()
-        answer['risk'] = 'high'
-        self.lose_issue_response = True
+        answer['category'] = 'security'
         with self.research_mocks(answer, packet):
-            self.assertEqual('ISSUE', self.engine.advance(self.key))
-            self.assertEqual('WAITING_MAINTAINER', self.engine.advance(self.key))
-        self.assertEqual(1, len(self.created_issues))
+            self.assertEqual('SKIPPED', self.engine.advance(self.key))
+        self.assertEqual([], self.created_issues)
         self.assertEqual([], self.purposes)
         self.assertEqual([], self.created_prs)
 
     def test_stale_proposal_cannot_publish_and_hard_ban_cannot_publish_pr(self):
         packet = self.packet()
         answer = opportunity()
-        answer['risk'] = 'high'
+        answer['category'] = 'security'
         with self.research_mocks(answer, packet):
             data = self.engine.load(self.key)
             self.engine.plan(self.key, data)
-            self.assertEqual('ISSUE', data['stage'])
+            # Hard rule: a self-discovered issue must carry its own PR; a
+            # private-disclosure gate ends the task instead of queueing a
+            # proposal that could never ship one.
+            self.assertEqual('SKIPPED', data['stage'])
+            # A stale reviewed research fingerprint still cannot publish —
+            # verified on a non-security proposal so the flow reaches the
+            # fingerprint check.
+            stale = opportunity()
+            data = {'stage': 'ISSUE', 'attempts': {}, 'proposal_only': True,
+                    'plan': {**self.plan, 'issue_body': 'Value differs. Tests pending.'},
+                    'research': {'approved': True,
+                                 'fingerprint': self.p.fingerprint(self.work),
+                                 'opportunity': stale}}
             (self.work / 'value.py').write_text('VALUE = 9\n', encoding='utf-8')
             with self.assertRaisesRegex(RuntimeError, 'unchanged reviewed research'):
                 self.engine.publish_issue(self.key, data)
-            # Explicit hard ban still blocks publication even when queued.
-            data['research']['opportunity']['policy']['automation'] = 'forbidden'
-            with self.assertRaisesRegex(RuntimeError, 'requires maintainer approval|prohibits automated'):
+            # Private disclosure still blocks publication even when queued.
+            data['research']['opportunity']['category'] = 'security'
+            with self.assertRaisesRegex(RuntimeError, 'private disclosure'):
                 self.engine.publish_pr(self.key, data)
         self.assertEqual([], self.created_issues)
 
@@ -278,22 +291,16 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(1, len(self.created_issues))
         self.assertEqual(1, len(self.created_prs))
 
-    def test_maintainer_approval_cannot_override_explicit_automation_ban(self):
+    def test_automation_ban_ships_pr_anyway(self):
+        """PR-First: an explicit upstream automation ban is a soft acceptance
+        risk — the pipeline ships its own issue+PR regardless."""
         packet = self.packet()
         answer = opportunity()
         answer['policy']['automation'] = 'forbidden'
         with self.research_mocks(answer, packet):
-            self.engine.advance(self.key)
-            # Explicit automation ban keeps the research paused; even a
-            # maintainer comment cannot publish an automated PR.
-            data = self.engine.load(self.key)
-            data['maintainer_approval'] = {'source': 'human_comment_review', 'approved': True,
-                                           'comment_ids': [1], 'digest': 'a' * 64,
-                                           'reviewed_at': '2026-11-01T00:00:00+00:00'}
-            self.engine.store(self.key, data)
-            with self.assertRaisesRegex(RuntimeError, 'requires maintainer approval|prohibits automated|private disclosure'):
-                self.engine.publish_pr(self.key, data)
-        self.assertEqual([], self.created_prs)
+            self.assertEqual('PR_OPEN', self.engine.advance(self.key))
+        self.assertEqual(1, len(self.created_issues))
+        self.assertEqual(1, len(self.created_prs))
 
     def test_research_rejects_fabricated_quote_and_target_path_escape(self):
         packet = self.packet()

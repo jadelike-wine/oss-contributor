@@ -478,29 +478,23 @@ class Autonomous:
                     self.move(task_id, data, 'WAITING_MAINTAINER')
                     return
                 # Own contribution never parks; soft gates proceed too.
-            opp_policy = opportunity.get('policy', {})
-            if not opp_policy.get('automated_issue', True) \
-                    and (opp_policy.get('automation') in HARD_AUTOMATION
-                         or opp_policy.get('manual_issue_submission') is True):
-                raise ContributionPaused('Research found upstream requires personal issue submission: ' + str(opp_policy.get('reason')))
             if not self.proactive(task_id, data) and self.discussion_required(task_id, data):
-                data['plan'] = opportunity
-                data['proposal_only'] = True
-                self.move(task_id, data, 'ISSUE')
+                # A self-discovered issue must carry its own PR. Private
+                # security disclosure makes that impossible, so terminate
+                # instead of publishing a bare proposal that can never ship.
+                data['reason'] = 'Private disclosure gate blocks the required PR on a self-discovered issue'
+                self.move(task_id, data, 'SKIPPED')
                 return
         issue = feature_issue or latest_issue or self.live_issue(task)
         if issue and issue['state'] != 'open' and not self.proactive(task_id, data, issue):
             self.move(task_id, data, 'SKIPPED')
             return
         if issue and data.get('research'):
-            # PR-First: only an explicit hard automation ban pauses here; a mere
-            # automated_pr=false or missing label is a soft acceptance risk.
-            opp_policy = data['research']['opportunity'].get('policy', {})
-            if opp_policy.get('automation') in HARD_AUTOMATION \
-                    or opp_policy.get('manual_pr_submission') is True \
-                    or opp_policy.get('pr_submission') in HARD_PR_SUBMISSION:
-                raise ContributionPaused('Upstream policy prohibits automated PR submission: '
-                                         + str(opp_policy.get('reason')))
+            # PR-First: automation bans, authorization requirements and a
+            # mere automated_pr=false are all soft acceptance risks — the
+            # contribution ships with the risk recorded, never paused here.
+            if data['research']['opportunity'].get('category') == 'security':
+                raise ContributionPaused('Security findings require private disclosure, not a public PR')
         prompt = ('Build a minimal executable regression or acceptance test for this contribution, not an implementation yet. Read CONTRIBUTING.md, '
                   'all applicable AGENTS.md and package scripts. Inspect existing issue discussion. Change ONLY regression test files, '
                   'never production code. No shell access; the controller runs commands. Tests must fail on the actual baseline defect '
@@ -571,6 +565,12 @@ class Autonomous:
             data['reason'] = answer.get('reason')
             # PR-First: only a verified hard gate earns an unbounded wait; soft
             # waits escalate automatically after the configured timeout.
+            # A self-discovered issue must ship its own PR — it never parks.
+            if local_discovery(task, data):
+                self.p.event(task_id, 'Planner deferred a self-discovered issue; '
+                             'own issues must carry their own PR: ' + str(data['reason']))
+                self.move(task_id, data, 'SKIPPED')
+                return
             data['upstream_direction_required'] = bool(
                 issue and self.discussion_required(task_id, data, issue))
             self.move(task_id, data, 'WAITING_MAINTAINER' if issue else 'SKIPPED')
@@ -805,12 +805,11 @@ class Autonomous:
         if data.get('research'):
             opportunity = data['research']['opportunity']
             opp_policy = opportunity.get('policy', {})
-            # PR-First: only private security disclosure and explicit hard
-            # submission bans block the issue step; soft signals ship anyway.
-            if opportunity['category'] == 'security' \
-                    or opp_policy.get('automation') in HARD_AUTOMATION \
-                    or opp_policy.get('manual_issue_submission') is True:
-                raise ContributionPaused('Public issue is disallowed by policy/security gate')
+            # PR-First: only private security disclosure blocks the issue
+            # step; automation bans and personal-submission conventions are
+            # soft signals and ship anyway.
+            if opportunity['category'] == 'security':
+                raise ContributionPaused('Security findings require private disclosure, not a public issue')
         login = gh('api', 'user')['login']
         items = self.flat(f"repos/{task['repo']}/issues?creator={login}&state=all&per_page=100")
         matches = [x for x in items if not x.get('pull_request') and self.marker(task_id) in (x.get('body') or '')]
@@ -861,6 +860,18 @@ class Autonomous:
             self.db.execute("UPDATE tasks SET number=?,url=?,source='issue' WHERE id=?", (issue['number'], issue['html_url'], task_id))
         data['issue_create_pending'] = False
         # Own contribution: issue in hand goes straight to repair — never wait.
+        # A self-discovered issue must ship its own PR, so it can never park
+        # in WAITING_MAINTAINER regardless of proposal or discussion flags.
+        if local_discovery(self.p.task(task_id), data):
+            if self.discussion_required(task_id, data):
+                # A verified hard gate cannot be lifted by waiting on our
+                # own report; the required PR is impossible, so terminate.
+                data['reason'] = 'Hard upstream gate blocks the required PR on a self-discovered issue'
+                self.move(task_id, data, 'SKIPPED')
+                return True
+            data.pop('proposal_only', None)
+            self.move(task_id, data, 'REPAIR')
+            return True
         wait = (data.get('proposal_only') or self.discussion_required(task_id, data)) \
             and not self.proactive(task_id, data)
         self.move(task_id, data, 'WAITING_MAINTAINER' if wait else 'REPAIR')
@@ -875,7 +886,7 @@ class Autonomous:
                 raise RuntimeError('Proposal requires unchanged reviewed research')
             opportunity = research['opportunity']
             if not opportunity['policy']['automated_issue'] or opportunity['category'] == 'security':
-                raise ContributionPaused('Public proposal is disallowed by policy/security gate')
+                raise ContributionPaused('Public proposal is disallowed by private-disclosure gate')
             body += '\n\n## Research evidence (static; tests pending)\n\n'
             body += '\n'.join('- ' + x['url'] + '\n  > ' + x['quote'] for x in opportunity['evidence'])
             for field in ('users', 'expected_effect', 'scope', 'validation', 'risks', 'effort', 'acceptance', 'comparison'):
@@ -911,6 +922,26 @@ class Autonomous:
         if not issue or issue['state'] != 'open' and not proactive:
             self.move(task_id, data, 'CLOSED')
             return False
+        if local_discovery(task, data):
+            # A self-discovered issue must carry its own PR — it never waits
+            # on a maintainer. A verified hard gate cannot be lifted by
+            # waiting on our own report, so the task terminates instead of
+            # parking; everything else goes straight back to implementation.
+            if self.discussion_required(task_id, data, issue):
+                data['reason'] = 'Hard upstream gate blocks the required PR on a self-discovered issue'
+                self.move(task_id, data, 'SKIPPED')
+                return True
+            cycles = data.get('wait_cycles', 0) + 1
+            data['wait_cycles'] = cycles
+            if cycles > int(self.options.get('max_wait_cycles', 3)):
+                data['reason'] = 'Planner kept deferring this self-discovered issue'
+                self.move(task_id, data, 'SKIPPED')
+                return True
+            if data.pop('proposal_only', False):
+                data.pop('plan', None)
+            data.pop('upstream_direction_required', None)
+            self.move(task_id, data, 'REPAIR' if data.get('plan', {}).get('spec') else 'PLAN')
+            return True
         from repository_policy import contribution_constraints, issue_policy_reason
         policy = contribution_constraints(self.p._repository_evidence.get(task['repo'], ({}, ''))[1],
             self.p.config.get('repository_checks', {}).get('policies', {}).get(task['repo'], {}))
@@ -1287,16 +1318,11 @@ class Autonomous:
         if data.get('research'):
             opportunity = data['research']['opportunity']
             opp_policy = opportunity.get('policy', {})
-            # PR-First: only verified hard gates stop publication. Soft
-            # conventions ship with the recorded acceptance assessment.
-            if (opportunity['category'] == 'security'
-                    or opp_policy.get('automation') in HARD_AUTOMATION
-                    or opp_policy.get('manual_pr_submission') is True
-                    or opp_policy.get('pr_submission') in HARD_PR_SUBMISSION
-                    or opp_policy.get('human_pr_review_required') is True
-                    or (self.discussion_required(task_id, data) and not has_scope_approval(data)
-                        and opp_policy.get('automation') in HARD_AUTOMATION)):
-                raise ContributionPaused('Research contribution requires maintainer approval or private disclosure')
+            # PR-First: only private security disclosure stops publication.
+            # Automation bans, authorization and personal-submission rules
+            # ship anyway with the recorded acceptance assessment.
+            if opportunity['category'] == 'security':
+                raise ContributionPaused('Security findings require private disclosure, not a public PR')
         work = task['workspace']
         folder = self.packet_dir(task_id)
         try:

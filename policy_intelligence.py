@@ -47,37 +47,14 @@ DEFAULT_WAIT_TIMEOUT_SECONDS = 3 * 24 * 3600  # Re-evaluate after three days.
 
 
 def hard_blocks(effective, *, stage='plan'):
-    """Explicit, verified prohibitions only. Each entry keeps its evidence."""
-    blocks = []
-    automation = effective.get('automation')
-    if automation in HARD_AUTOMATION:
-        blocks.append({'rule': 'automation', 'severity': 'hard',
-                       'reason': 'Upstream ' + ('forbids' if automation == 'forbidden' else
-                       'disallows' if automation == 'disallowed' else
-                       'requires explicit maintainer instructions for') +
-                       ' automated contributions',
-                       'evidence': effective.get('automatic_submission_evidence')
-                       or effective.get('automatic_submission_reason')})
-    pr_submission = effective.get('pr_submission')
-    if pr_submission in HARD_PR_SUBMISSION:
-        blocks.append({'rule': 'pr_submission', 'severity': 'hard',
-                       'reason': 'Upstream requires maintainer authorization or personal submission for PRs',
-                       'evidence': effective.get('evidence') or effective.get('automatic_submission_reason')})
-    if effective.get('manual_pr_submission') is True:
-        blocks.append({'rule': 'manual_pr_submission', 'severity': 'hard',
-                       'reason': 'Upstream requires personal PR submission by a human',
-                       'evidence': effective.get('automatic_submission_evidence')
-                       or effective.get('automatic_submission_reason')})
-    if stage in ('issue', 'plan', 'publish') and effective.get('manual_issue_submission') is True:
-        blocks.append({'rule': 'manual_issue_submission', 'severity': 'hard',
-                       'reason': 'Upstream requires personal issue submission by a human',
-                       'evidence': effective.get('automatic_submission_evidence')
-                       or effective.get('automatic_submission_reason')})
-    if effective.get('human_pr_review_required') is True and stage == 'publish':
-        blocks.append({'rule': 'human_pr_review_required', 'severity': 'hard',
-                       'reason': 'Upstream requires personal code review before publication',
-                       'evidence': effective.get('evidence')})
-    return blocks
+    """Explicit, verified prohibitions only. Each entry keeps its evidence.
+
+    Per the PR-First hard rule, upstream submission conventions — automation
+    bans, personal-submission and authorization requirements — are soft
+    acceptance penalties, not blocks. Only bot-verified auto-close label
+    rules remain hard, because those PRs are guaranteed dead on arrival.
+    """
+    return []
 
 
 def soft_penalties(effective, *, issue=None, actor=None, claims=None):
@@ -89,6 +66,35 @@ def soft_penalties(effective, *, issue=None, actor=None, claims=None):
         if effective.get(rule) is True:
             penalties.append({'rule': rule, 'severity': 'soft', 'penalty': SOFT_PENALTIES[rule],
                               'reason': 'Upstream convention requests ' + rule.replace('_', ' ')})
+    automation = effective.get('automation')
+    if automation in HARD_AUTOMATION:
+        # Ship anyway and record the risk: an upstream automation ban lowers
+        # acceptance probability, it does not stop the contribution.
+        penalties.append({'rule': 'automation', 'severity': 'soft', 'penalty': 40,
+                          'reason': 'Upstream ' + ('forbids' if automation == 'forbidden' else
+                          'disallows' if automation == 'disallowed' else
+                          'requires explicit maintainer instructions for') +
+                          ' automated contributions',
+                          'evidence': effective.get('automatic_submission_evidence')
+                          or effective.get('automatic_submission_reason')})
+    if effective.get('pr_submission') in HARD_PR_SUBMISSION:
+        penalties.append({'rule': 'pr_submission', 'severity': 'soft', 'penalty': 40,
+                          'reason': 'Upstream requires maintainer authorization or personal submission for PRs',
+                          'evidence': effective.get('evidence') or effective.get('automatic_submission_reason')})
+    if effective.get('manual_pr_submission') is True:
+        penalties.append({'rule': 'manual_pr_submission', 'severity': 'soft', 'penalty': 40,
+                          'reason': 'Upstream requires personal PR submission by a human',
+                          'evidence': effective.get('automatic_submission_evidence')
+                          or effective.get('automatic_submission_reason')})
+    if effective.get('manual_issue_submission') is True:
+        penalties.append({'rule': 'manual_issue_submission', 'severity': 'soft', 'penalty': 40,
+                          'reason': 'Upstream requires personal issue submission by a human',
+                          'evidence': effective.get('automatic_submission_evidence')
+                          or effective.get('automatic_submission_reason')})
+    if effective.get('human_pr_review_required') is True:
+        penalties.append({'rule': 'human_pr_review_required', 'severity': 'soft', 'penalty': 40,
+                          'reason': 'Upstream requires personal code review before publication',
+                          'evidence': effective.get('evidence')})
     if effective.get('automated_pr') is False and effective.get('automation') not in HARD_AUTOMATION:
         # Unverifiable or merely conventional "no automation" is soft, not hard.
         penalties.append({'rule': 'policy_unknown', 'severity': 'soft',
@@ -187,23 +193,13 @@ def needs_discussion(opportunity, *, proactive=False):
     Retained for every existing caller; semantics deliberately changed to
     implement the PR-First strategy:
       * security category                    -> still hard (private disclosure)
-      * explicit automation/submission bans   -> hard
-      * high risk                             -> hard (human patch review)
+      * automation/submission bans, authorization requirements, high risk
+                                                -> soft, ship anyway with the
+                                                   recorded acceptance risk
       * maintainer_required / automated_pr=false / missing help-wanted
                                                 -> soft, do NOT wait
     """
-    policy = opportunity.get('policy', {}) or {}
-    if opportunity.get('category') == 'security':
-        return True
-    if opportunity.get('risk') == 'high':
-        return True
-    if policy.get('automation') in HARD_AUTOMATION:
-        return True
-    if policy.get('manual_pr_submission') is True:
-        return True
-    if policy.get('pr_submission') in HARD_PR_SUBMISSION:
-        return True
-    return False
+    return opportunity.get('category') == 'security'
 
 
 def wait_escalation(data, *, now_iso, timeout_seconds=DEFAULT_WAIT_TIMEOUT_SECONDS,

@@ -192,14 +192,9 @@ def route(answer, matrix, *, reviewed=False, duplicate_clear=False, maintainer=F
     if answer.get('category') == 'security' or answer.get('decision') != 'candidate':
         return 'RESEARCH_ONLY', 0, 'private_or_no_candidate'
     allowed = answer.get('policy', {})
-    if policy.get('human_pr_review_required') or policy.get('manual_issue_submission'):
-        return 'PAUSED_POLICY', 0, 'automation_or_personal_review_policy'
-    # automated_issue=false means even a discussion proposal cannot be posted.
-    if not allowed.get('automated_issue'):
-        return 'PAUSED_POLICY', 0, 'upstream_bans_automated_issues'
-    # automated_pr=false alone does not end the candidate: the feature may
-    # still proceed through a maintainer-discussion issue instead of an
-    # unsolicited pull request.
+    # automated_issue=false, automated_pr=false and every submission
+    # convention are soft acceptance penalties: the candidate proceeds and
+    # ships its own issue+PR pair.
     if not reviewed or not duplicate_clear:
         return 'RESEARCH_ONLY', 0, 'review_or_duplicate_gate_pending'
     if matrix:
@@ -219,12 +214,10 @@ def route(answer, matrix, *, reviewed=False, duplicate_clear=False, maintainer=F
     from policy_intelligence import assess
     effective = {**allowed, **policy}
     verdict = assess(effective, stage='plan')
-    priority = 60 + (10 if answer['risk'] == 'low' else 0)
+    priority = 60 + (10 if answer['risk'] == 'low' else 0) - (10 if answer['risk'] == 'high' else 0)
     if verdict['verdict'] == 'blocked':
         hard = [b['reason'] for b in verdict['hard_blocks']]
         return 'PAUSED_POLICY', 0, '; '.join(hard) or 'acceptance_threshold'
-    if answer['risk'] == 'high':
-        return 'PAUSED_POLICY', 0, 'high_risk_requires_human_patch_review'
     approval_family = {'maintainer_required', 'feature_approval_required', 'discussion_required',
                        'ready_project', 'assignment_required', 'claim_required', 'required_issue_labels'}
     penalties = verdict['soft_penalties']

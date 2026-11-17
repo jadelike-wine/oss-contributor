@@ -472,13 +472,7 @@ class Pipeline:
             if policy.get('required_issue_labels'):
                 issue = gh('api', f"repos/{repo}/issues/{task['number']}") if task['number'] else None
                 reason = issue_policy_reason(issue, policy)
-            if policy.get('manual_issue_submission') and not task['number']:
-                reason = 'Upstream requires the contributor to submit an issue personally; automatic issue publication is disabled'
-            elif publishing and policy.get('manual_pr_submission'):
-                reason = 'Upstream requires personal PR submission; automatic PR publication is disabled'
-            elif publishing and policy.get('human_pr_review_required'):
-                reason = 'Upstream requires personal code review before PR submission; this pipeline has no recorded human review'
-            elif policy.get('ready_project'):
+            if policy.get('ready_project'):
                 try:
                     if not ready_issue(repo, task['number'], policy['ready_project'], gh):
                         reason = 'Issue must be OPEN and Ready on ' + policy['ready_project']

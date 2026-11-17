@@ -102,17 +102,18 @@ class LocalFixResearchTests(unittest.TestCase):
         for gates in ({'reviewed': False, 'duplicate_clear': True},
                       {'reviewed': True, 'duplicate_clear': False}):
             self.assertEqual('review_or_duplicate_gate_pending', route(answer, matrix, **gates)[2])
-        for policy in ({'manual_issue_submission': True}, {'human_pr_review_required': True}):
-            self.assertEqual('PAUSED_POLICY', self.route(answer, matrix, policy=policy)[0])
+        # PR-First hard rule: submission conventions and high risk are soft
+        # priority cuts; the route still implements.
+        for policy in ({'manual_issue_submission': True}, {'manual_pr_submission': True},
+                       {'human_pr_review_required': True}, {'automation': 'forbidden'}):
+            self.assertEqual('READY_TO_IMPLEMENT', self.route(answer, matrix, policy=policy)[0])
         for flag in ('automated_issue', 'automated_pr', 'maintainer_required'):
             blocked = copy.deepcopy(answer)
             blocked['policy'][flag] = flag == 'maintainer_required'
-            # PR-First: automated_issue=false pauses issue creation; the other
-            # soft flags degrade priority but still implement.
-            expected = 'PAUSED_POLICY' if flag == 'automated_issue' else 'READY_TO_IMPLEMENT'
-            self.assertEqual(expected, self.route(blocked, matrix)[0])
-        self.assertEqual('PAUSED_POLICY', self.route({**answer, 'risk': 'high'}, matrix,
-                                                   maintainer=True, proactive=True)[0])
+            # PR-First: all these flags degrade priority but still implement.
+            self.assertEqual('READY_TO_IMPLEMENT', self.route(blocked, matrix)[0])
+        self.assertEqual('READY_TO_IMPLEMENT', self.route({**answer, 'risk': 'high'}, matrix,
+                                                          maintainer=True, proactive=True)[0])
         self.assertEqual('RESEARCH_ONLY', self.route({**answer, 'category': 'security'}, matrix)[0])
 
 

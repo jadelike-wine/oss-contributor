@@ -124,15 +124,20 @@ class ContributionStrategyTests(unittest.TestCase):
             blocked['policy'][key] = value
             self.assertFalse(needs_discussion(blocked, proactive=True))
             self.assertEqual('READY_TO_IMPLEMENT', route(blocked, None, **gates)[0])
-        # Hard gates still block.
-        for hard in ({'automation': 'forbidden'}, {'manual_pr_submission': True}):
-            blocked = copy.deepcopy(answer)
-            blocked['policy'].update(hard)
-            self.assertTrue(needs_discussion(blocked, proactive=True))
+        # PR-First hard rule: every submission convention ships anyway;
+        # only private disclosure stays hard.
+        for soft in ({'automation': 'forbidden'}, {'manual_pr_submission': True},
+                     {'manual_issue_submission': True}, {'human_pr_review_required': True}):
+            degraded = copy.deepcopy(answer)
+            degraded['policy'].update(soft)
+            self.assertFalse(needs_discussion(degraded, proactive=True))
+            self.assertEqual('READY_TO_IMPLEMENT', route(degraded, None, **gates)[0])
         answer['risk'] = 'high'
+        self.assertFalse(needs_discussion(answer, proactive=True))
+        self.assertEqual('READY_TO_IMPLEMENT', route(answer, None, **gates)[0])
+        answer['category'] = 'security'
         self.assertTrue(needs_discussion(answer, proactive=True))
-        for policy in ({'human_pr_review_required': True}, {'manual_issue_submission': True}):
-            self.assertEqual('PAUSED_POLICY', route(answer, None, policy=policy, **gates)[0])
+        self.assertEqual('RESEARCH_ONLY', route(answer, None, **gates)[0])
 
     def test_real_reviewer_prompt_receives_our_publication_preference(self):
         self.enable()

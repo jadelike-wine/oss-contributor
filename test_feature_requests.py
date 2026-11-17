@@ -175,7 +175,8 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual('eligible', result['status'])
         self.assertFalse(result['scope_approval_current'])
         self.assertEqual('eligible', self.assess(saved, {'human_pr_review_required': True})['status'])
-        self.assertEqual('blocked', self.assess(saved, {'human_pr_review_required': True}, stage='publish')['status'])
+        # PR-First: even at publish a personal-review convention is soft.
+        self.assertEqual('eligible', self.assess(saved, {'human_pr_review_required': True}, stage='publish')['status'])
 
     def test_only_matching_current_human_comment_receipt_satisfies_scope_gate(self):
         saved = snapshot()
@@ -218,20 +219,27 @@ class AdmissionTests(unittest.TestCase):
         result = self.assess(saved, policy, approval_data=data)
         self.assertEqual('eligible', result['status'])
 
-    def test_manual_pr_delivery_blocks_all_stages_manual_issue_does_not_block_existing_issue(self):
-        for stage in ('plan', 'repair', 'publish'):
-            self.assertEqual('blocked', self.assess(policy={'manual_pr_submission': True}, stage=stage)['status'])
-        # manual_issue_submission is a hard block only at issue-creation stages.
-        self.assertEqual('blocked', self.assess(policy={'manual_issue_submission': True})['status'])
+    def test_manual_pr_delivery_is_soft_at_all_stages(self):
+        # PR-First hard rule: personal-submission conventions only lower the
+        # acceptance estimate; the feature still ships.
+        for policy in ({'manual_pr_submission': True}, {'manual_issue_submission': True},
+                       {'human_pr_review_required': True}):
+            for stage in ('plan', 'repair', 'publish'):
+                result = self.assess(policy=policy, stage=stage)
+                self.assertEqual('eligible', result['status'], (policy, stage))
+                self.assertTrue(result['soft_penalties'])
 
     def test_automation_ban_is_not_overridden_by_scope_approval(self):
         saved = snapshot()
         human = comment(1, 'maintainer', 'Please implement this.', 'OWNER')
         saved['comments'] = [human]
         data = {'maintainer_approval': approval_receipt([human], {'approved': True}, NOW)}
-        # An explicit automation ban stays hard even with maintainer approval.
-        self.assertEqual('blocked', self.assess(saved, {'automated_pr': False, 'automation': 'forbidden'},
-                                               approval_data=data)['status'])
+        # PR-First: an explicit automation ban is a soft acceptance risk even
+        # without maintainer approval — the feature still ships.
+        result = self.assess(saved, {'automated_pr': False, 'automation': 'forbidden'},
+                             approval_data=data)
+        self.assertEqual('eligible', result['status'])
+        self.assertTrue(any(p['rule'] == 'automation' for p in result['soft_penalties']))
         # Unverifiable automated_pr=false alone is soft, not a ban.
         result = self.assess(saved, {'automated_pr': False}, approval_data=data)
         self.assertEqual('eligible', result['status'])

@@ -517,7 +517,7 @@ class Autonomous:
                   'requirements override generic labels. Labels and elapsed waiting never prove maintainer approval. '
                   'Skip when value or verification is inadequate; do not wait for soft conventions. '
                   'Return JSON {"decision":"ready|skip|wait","reason":"...","title":"contribution title",'
-                  '"issue_body":"English issue body formatted per the repository issue template (see issue_template_fields), say tests are pending; do not invent results",'
+                  '"issue_body":"English issue body structured per the repository issue template: cover every heading in issue_template_required_headings verbatim with its exact level (use N/A for inapplicable fields), say tests are pending; do not invent results",'
                   '"issue_title_prefix":"required title prefix from the repository issue template, empty if none",'
                   '"pr_title":"fix(scope): ... or feat(scope): ... matching the PR template prefix if one exists","pr_body":"English proposed PR explanation",'
                   '"acceptance_criteria":["specific observable behavior for a feature"],'
@@ -552,7 +552,8 @@ class Autonomous:
                   'planning_baseline': self.planning_baseline(task),
                   'maintainer_approved': data.get('maintainer_approved', False),
                   'contributing_guide': self.p.contributing_path(task['repo']),
-                  'issue_template_fields': (self.issue_template(task) or {}).get('fields', []),
+                  'issue_template_required_headings': (self.issue_template(task) or {}).get('required_headings', []),
+                  'issue_template_raw': (self.issue_template(task) or {}).get('raw', ''),
                   'issue_template_title_prefix': self.issue_title_prefix(task),
                   'pr_template_title_prefix': self._pr_title_prefix(task),
                   'tools': runtime_tools()}, ensure_ascii=False, indent=2))
@@ -588,6 +589,8 @@ class Autonomous:
         for key in ('title', 'issue_body', 'pr_title', 'pr_body'):
             if not isinstance(answer.get(key), str) or not answer[key].strip():
                 raise ValueError('Missing plan field: ' + key)
+        # Optional planner-declared template prefix; used to fill placeholder tags.
+        answer['issue_title_prefix'] = str(answer.get('issue_title_prefix') or '')
         changed = set(changed_files(task['workspace']))
         if not changed or not changed.issubset(set(answer['spec']['test_files'])):
             raise ValueError('Reproduction planning changed non-test files or produced no test')
@@ -835,14 +838,10 @@ class Autonomous:
     def create_issue(self, task_id, data):
         task = self.p.task(task_id)
         body = self.issue_body(task_id, data)
-        title = data['plan']['title']
-        # Ensure the title satisfies the repository issue template prefix.
-        if not self.issue_title_compliant(task, title):
-            prefix = self.issue_title_prefix(task)
-            if prefix:
-                title = prefix.rstrip(': ') + ' ' + title.lstrip('[Bug]: ').lstrip('[BUG] ').lstrip('[FEAT] ')
-                data['plan']['title'] = title
-                self.store(task_id, data)
+        title = self.sanitize_title(task, data['plan']['title'], 'issue', data['plan'])
+        if title != data['plan']['title']:
+            data['plan']['title'] = title
+            self.store(task_id, data)
         file = self.packet_dir(task_id) / 'issue-body.md'
         file.write_text(public_text(body), encoding='utf-8')
         if not self.p.allow_external_writes:
@@ -903,7 +902,46 @@ class Autonomous:
                 if not command(['git', 'ls-files', '--', name], cwd=task['workspace']).strip():
                     test_patch += '\nNew regression file: ' + name + '\n' + (Path(task['workspace']) / name).read_text(encoding='utf-8')
             body += '\n\n## Regression test\n\n```diff\n' + test_patch + '\n```\n'
-        return body + '\n\nAI-assisted contribution.\n\n' + self.marker(task_id)
+        body += '\n\nAI-assisted contribution.\n\n' + self.marker(task_id)
+        return self.template_compliant_body(task_id, task, body)
+
+    def template_compliant_body(self, task_id, task, body):
+        """Enforce the repository issue template on the final body.
+
+        When the repo's issue template declares required headings, the model is
+        asked once to reflow the composed body into the template structure
+        (keeping reproduction evidence inside a Notes-like or appended section),
+        then every required heading is verified literally. Without a template
+        or without required headings the body passes through unchanged.
+        """
+        tmpl = self.issue_template(task)
+        if not tmpl or not tmpl.get('required_headings'):
+            return body
+        required = tmpl['required_headings']
+        missing = [h for h in required if h not in body]
+        if not missing:
+            return body
+        result = self.model(task_id, 'issue-body',
+            'Return only JSON {"body":"English issue body"}. Restructure the supplied issue draft so it '
+            'EXACTLY follows the repository issue template: produce every required heading listed in '
+            'required_headings verbatim (same level and text, including nested hierarchy), distribute the '
+            'draft content under the correct headings, and write "N/A — <one-line reason>" under headings '
+            'that do not apply. Keep the executed-reproduction log and the regression-test diff inside a '
+            'final Notes/Remarks/Additional-context style section, or under a trailing heading copied from '
+            'the template if none exists. Preserve the oss-contributor HTML marker and the '
+            '"AI-assisted contribution." line verbatim at the end. Keep it truthful and concise; do not '
+            'claim tests passed, do not invent environment facts — use N/A where unknown. Do not edit files.\n'
+            + json.dumps({'required_headings': required, 'template': tmpl.get('raw', ''),
+                          'body': body}, ensure_ascii=False, indent=2))
+        formatted = result.get('body')
+        if not isinstance(formatted, str) or not formatted.strip():
+            raise ValueError('Missing issue body after template formatting')
+        for heading in required:
+            if heading not in formatted:
+                raise ValueError('Issue body missing template heading: ' + heading)
+        if self.marker(task_id) not in formatted:
+            formatted += '\n\n' + self.marker(task_id)
+        return formatted
 
     @observed('maintainer_observation', task=True)
     def wait_maintainer(self, task_id, data):
@@ -1207,10 +1245,15 @@ class Autonomous:
     def issue_template(self, task):
         """Read the best-matching issue template for this task kind.
 
-        Returns dict with 'title_prefix' (from the template `title:` field) and
-        'fields' (label names the body must cover), or None when no template
-        exists.  Prefers bug templates for bug tasks, feature templates for
-        feature tasks, then falls back to any template.
+        Returns a dict with:
+          - 'file': template filename
+          - 'raw': template text (truncated), preserving heading hierarchy
+          - 'title_prefix': literal required prefix ('[BUG]', '[Bug]: ', 'New Feature: ')
+            or a placeholder bracket pattern '[X] ' for '[组件名称] ...' forms
+          - 'title_placeholder': True when the bracket must be filled in
+          - 'required_headings': exact heading lines ('## X' / '### X') the body must contain
+        or None when no template exists. Prefers bug templates for bug tasks,
+        feature templates for feature tasks, then falls back to any template.
         """
         work = Path(task['workspace'])
         template_dir = work / '.github' / 'ISSUE_TEMPLATE'
@@ -1219,11 +1262,10 @@ class Autonomous:
         entries = sorted(
             p for p in template_dir.iterdir()
             if p.is_file() and p.suffix.lower() in ('.yml', '.yaml', '.md')
-            and p.name.lower() != 'config.yml'
+            and p.name.lower() not in ('config.yml', 'config.yaml')
         )
         if not entries:
             return None
-        # Prefer bug/feature templates matching the task category.
         is_feature = bool(task.get('feature_request'))
         preferred = [p for p in entries if is_feature and re.search(r'feat|enhanc|request', p.name, re.I)]
         if not preferred:
@@ -1235,50 +1277,90 @@ class Autonomous:
                 text = path.read_text(encoding='utf-8')
             except OSError:
                 continue
-            title_prefix = ''
-            fields = []
+            title_raw = ''
+            m = re.search(r'^title:\s*(.*)$', text, re.M)
+            if m:
+                title_raw = m.group(1).strip().strip('"\'').strip()
+            title_prefix, title_placeholder = '', False
+            if title_raw:
+                bracket = re.match(r'^\[([^\]]+)\]([: ]?)(.*)$', title_raw)
+                if bracket:
+                    content, trailing = bracket.group(1), bracket.group(3)
+                    # A bracket whose content is itself descriptive placeholder text
+                    # (CJK, or words like 组件名称/title/name) means "fill in a tag",
+                    # not a literal prefix. Short ASCII tags like BUG/feat are literal.
+                    if re.search(r'[^\x00-\x7f]|名称|模块|标题|name|title', content, re.I) \
+                            or (trailing and re.search(r'[^\x00-\x7f]|title|描述|标题', trailing, re.I)):
+                        title_prefix, title_placeholder = '[', True
+                    else:
+                        title_prefix = ('[' + content + ']' + bracket.group(2)).rstrip()
+                else:
+                    # Plain-text prefix such as 'New Feature: ' — keep through the colon.
+                    title_prefix = title_raw.split(' ', 1)[0] if ' ' not in title_raw \
+                        else title_raw if title_raw.endswith(':') else title_raw.split(' ')[0]
+            required_headings = []
             if path.suffix.lower() in ('.yml', '.yaml'):
-                m = re.search(r'^title:\s*["\']?(.+?)["\']?\s*$', text, re.M)
-                if m:
-                    raw = m.group(1).strip()
-                    # Extract the literal prefix before the first placeholder.
-                    # e.g. '[Bug]: ' → '[Bug]: ', '[组件名称] 描述...' → '[组件名称]'
-                    title_prefix = re.sub(r'[\[{].*', '', raw).rstrip(': ').strip()
-                    if not title_prefix:
-                        title_prefix = raw
-                fields = re.findall(r'label:\s*(.+)$', text)
+                # Parse per-body-entry blocks: keep only labeled fields.
+                blocks = re.split(r'\n\s*- type:\s*\w+', text)
+                labeled = []
+                for block in blocks:
+                    lm = re.search(r'label:\s*(.+)$', block, re.M)
+                    if not lm:
+                        continue
+                    label = lm.group(1).strip().strip('"\'')
+                    labeled.append((label, bool(re.search(r'required:\s*true', block))))
+                # GitHub renders every answered form field as '### Label'; a
+                # template-conformant issue covers all labeled fields (write N/A
+                # for inapplicable ones), not only the required-validated subset.
+                required_headings = ['### ' + l for l, _ in labeled]
             else:
-                # Markdown templates use HTML comments or headings.
-                m = re.search(r'^title:\s*["\']?(.+?)["\']?\s*$', text, re.M)
-                if m:
-                    raw = m.group(1).strip()
-                    title_prefix = re.sub(r'[\[{].*', '', raw).rstrip(': ').strip()
-                    if not title_prefix:
-                        title_prefix = raw
-                fields = re.findall(r'^(?:#{2,4}|<!--)\s*(?:label\s*=\s*)?(.+?)(?:\s*-->)?\s*$', text, re.M)
-            if title_prefix or fields:
-                return {'title_prefix': title_prefix, 'fields': [f.strip() for f in fields if f.strip()],
-                        'file': path.name}
+                # Markdown templates: strip HTML comments, keep real headings only.
+                cleaned = re.sub(r'<!--.*?-->', '', text, flags=re.S)
+                required_headings = [h for h in re.findall(r'^#{2,6} [^\n]+', cleaned, re.M)
+                                     if h.strip('# ').strip()]
+            if title_prefix or required_headings:
+                return {'file': path.name, 'raw': text[:4000], 'title_prefix': title_prefix,
+                        'title_placeholder': title_placeholder, 'required_headings': required_headings}
         return None
 
     def issue_title_prefix(self, task):
         """Return the required title prefix for an issue in this repository."""
         tmpl = self.issue_template(task)
         if tmpl and tmpl.get('title_prefix'):
-            return tmpl['title_prefix']
+            return '[X] ' if tmpl.get('title_placeholder') else tmpl['title_prefix']
         return ''
 
     def issue_title_compliant(self, task, title):
         """Check whether a proposed title satisfies the repository template."""
-        prefix = self.issue_title_prefix(task)
-        if not prefix:
+        tmpl = self.issue_template(task)
+        if not tmpl or not tmpl.get('title_prefix'):
             return True
-        # The template prefix may contain a placeholder like [组件名称];
-        # require the literal bracket prefix if present.
-        literal = re.match(r'^(\[.+?\])', prefix)
-        if literal:
-            return title.startswith(literal.group(1) + ' ') or title.startswith(literal.group(1))
-        return title.startswith(prefix)
+        title = title.strip()
+        if tmpl.get('title_placeholder'):
+            # '[组件名称] 描述' style: any '[Tag] ' bracket prefix satisfies it.
+            return bool(re.match(r'^\[[^\]]{1,40}\]\s*\S', title))
+        prefix = tmpl['title_prefix']
+        return title.startswith(prefix) or title.startswith(prefix.rstrip(': ') + ' ')
+
+    def sanitize_title(self, task, title, kind, plan=None):
+        """Clean stray quote/wrapping artifacts and enforce the template prefix."""
+        title = re.sub(r'^\s*["\'`「『]+|["\'`」』]+\s*$', '', (title or '').strip()).strip()
+        if kind == 'issue':
+            tmpl = self.issue_template(task)
+            if tmpl and tmpl.get('title_prefix') and not self.issue_title_compliant(task, title):
+                if tmpl.get('title_placeholder'):
+                    # Prefer the planner's declared prefix, else derive a tag from the title's first word.
+                    plan_prefix = str((plan or {}).get('issue_title_prefix') or '').strip('[] ')
+                    tag = plan_prefix or re.sub(r'[^\w -]', '', title.split(' ', 1)[0].strip('[]()":,.')) or 'Bug'
+                    title = f'[{tag}] ' + re.sub(r'^\[[^\]]*\]\s*', '', title)
+                else:
+                    prefix = tmpl['title_prefix']
+                    title = prefix + (' ' if not prefix.endswith((':', ' ')) else '') + title
+        elif kind == 'pr':
+            pr_prefix = self._pr_title_prefix(task)
+            if pr_prefix and not title.startswith(pr_prefix.strip()):
+                title = pr_prefix.rstrip() + ' ' + title
+        return title
 
     def pr_body(self, task_id, data, body, feedback=None):
         task = self.p.task(task_id)
@@ -1453,11 +1535,8 @@ class Autonomous:
                 'head_repo': fork['full_name'], 'branch': branch,
                 'commit': data['publish_commit'], 'base': upstream['default_branch']}
             self.store(task_id, data)
-            pr_title = data['plan']['pr_title']
-            # Ensure PR title satisfies the repository PR template prefix.
-            pr_prefix = self._pr_title_prefix(task)
-            if pr_prefix and not pr_title.startswith(pr_prefix.strip()):
-                pr_title = pr_prefix.rstrip() + ' ' + pr_title.lstrip('[BUG] ').lstrip('[Bug]: ').lstrip('[FEAT] ')
+            pr_title = self.sanitize_title(task, data['plan']['pr_title'], 'pr')
+            if pr_title != data['plan']['pr_title']:
                 data['plan']['pr_title'] = pr_title
                 self.store(task_id, data)
             url = command(['gh', 'pr', 'create', '-R', task['repo'], '--base', upstream['default_branch'], '--head', login + ':' + branch, '--title', pr_title, '--body-file', str(folder / 'pr-body.md')], cwd=work).strip()

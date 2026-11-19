@@ -8,11 +8,11 @@ import shutil
 import subprocess
 import datetime as dt
 
-from contribute import ContributionPaused, command, execute, gh, now, opencode_executable, save
+from contribute import ContributionPaused, command, decode_output, execute, gh, now, opencode_executable, save
 from policy_intelligence import HARD_AUTOMATION, HARD_PR_SUBMISSION, wait_escalation
 from ci_status import observe_ci
 from telemetry import ACTIVE, BudgetExhausted, DeliveryBudgetExhausted, TaskBudgetExhausted, observed, model_call, stage, record_usage
-from repository_policy import human_maintainer_comments, approval_receipt, has_scope_approval
+from repository_policy import human_maintainer_comments, approval_receipt, has_scope_approval, ai_disclosure_required
 from scheduling import RunTaskBudget, task_lane, priority_key
 from contribution_strategy import enabled, local_discovery, PRIORITY_GUIDANCE
 from model_selection import execution_channel, implementation_channel, is_research_purpose, research_model, selected_model
@@ -124,6 +124,12 @@ def public_text(text):
         raise ValueError('Publication body exceeds the supported size; no partial evidence will be posted')
     if re.search(r'gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{16,}|-----BEGIN .*PRIVATE KEY-----', text):
         raise ValueError('Publication body contains credential-like content')
+    # UTF-8 read through an ANSI codepage leaves rare CJK characters followed
+    # by '?' or the replacement char ('鈥?' for an em dash, '鉂?' for the
+    # vitest marker). These characters are virtually never legitimate in an
+    # English issue/PR body, so a hit means a broken decode upstream.
+    if re.search(r'[鈥鉂脳鈫鈼銆鐢鏄閿熸湁][�?]|\ufffd', text):
+        raise ValueError('Publication body contains mojibake from a wrong-codepage decode; fix the captured output instead of publishing it')
     return text
 
 
@@ -658,7 +664,7 @@ class Autonomous:
                 details = []
                 for output in (getattr(error, 'stdout', None), getattr(error, 'stderr', None)):
                     if isinstance(output, bytes):
-                        output = output.decode('utf-8', errors='replace')
+                        output = decode_output(output)
                     if isinstance(output, str):
                         details.append(output[-1500:])
                 raise SetupError(str(error) + ('\n' + '\n'.join(details) if details else ''),
@@ -683,6 +689,35 @@ class Autonomous:
 
     def marker(self, task_id):
         return '<!-- oss-contributor:' + hashlib.sha256(task_id.encode()).hexdigest()[:24] + ' -->'
+
+    def ai_disclosure(self, task):
+        """Return the AI-assistance disclosure line, or '' when not warranted.
+
+        Controlled by ``contribution_strategy.ai_disclosure`` in config:
+        - ``always``  → always include (current default behaviour).
+        - ``never``   → never include, even when a repo asks for it.
+        - ``auto``    → include only when the upstream contribution rules
+          actually require AI disclosure (default). Repos that merely welcome
+          AI contributions do not force it.
+
+        An upstream requirement always wins over ``never`` unless the operator
+        explicitly sets ``always``/``never``; ``auto`` defers to the repository.
+        """
+        mode = str((self.p.config.get('contribution_strategy') or {})
+                   .get('ai_disclosure', 'auto')).strip().lower()
+        if mode == 'always':
+            return 'AI-assisted contribution.'
+        if mode == 'never':
+            # Upstream-required disclosure is still honoured unless explicitly
+            # overridden to 'never'; the operator owns that policy risk.
+            return ''
+        # auto: disclose only where the repo's rules require it. The cached
+        # CONTRIBUTING text lives in ``_repository_evidence[repo] -> (meta, rules)``.
+        evidence = getattr(self.p, '_repository_evidence', {}).get(task['repo'])
+        rules = evidence[1] if isinstance(evidence, tuple) and len(evidence) > 1 else ''
+        if ai_disclosure_required(rules):
+            return 'AI-assisted contribution.'
+        return ''
 
     @observed('deduplication', task=True)
     def duplicates(self, task_id, data, kind):
@@ -903,7 +938,11 @@ class Autonomous:
                 if not command(['git', 'ls-files', '--', name], cwd=task['workspace']).strip():
                     test_patch += '\nNew regression file: ' + name + '\n' + (Path(task['workspace']) / name).read_text(encoding='utf-8')
             body += '\n\n## Regression test\n\n```diff\n' + test_patch + '\n```\n'
-        body += '\n\nAI-assisted contribution.\n\n' + self.marker(task_id)
+        disclosure = self.ai_disclosure(task)
+        if disclosure:
+            body += '\n\n' + disclosure + '\n\n' + self.marker(task_id)
+        else:
+            body += '\n\n' + self.marker(task_id)
         return self.template_compliant_body(task_id, task, data, body)
 
     def template_compliant_body(self, task_id, task, data, body):
@@ -923,6 +962,7 @@ class Autonomous:
         missing = [h for h in required if h not in body_lines]
         if not missing:
             return body
+        disclosure = self.ai_disclosure(task)
         result = self.model(task_id, 'issue-body',
             'Return only JSON {"body":"English issue body"}. Restructure the supplied issue draft so it '
             'EXACTLY follows the repository issue template: produce every required heading listed in '
@@ -930,8 +970,9 @@ class Autonomous:
             'draft content under the correct headings, and write "N/A — <one-line reason>" under headings '
             'that do not apply. Keep the executed-reproduction log and the regression-test diff inside a '
             'final Notes/Remarks/Additional-context style section, or under a trailing heading copied from '
-            'the template if none exists. Preserve the oss-contributor HTML marker and the '
-            '"AI-assisted contribution." line verbatim at the end. Keep it truthful and concise; do not '
+            'the template if none exists. Preserve the oss-contributor HTML marker verbatim'
+            + (' and the AI-assistance disclosure line verbatim at the end' if disclosure else '')
+            + '. Keep it truthful and concise; do not '
             'claim tests passed, do not invent environment facts — use N/A where unknown. Do not edit files.\n'
             + json.dumps({'required_headings': required, 'template': tmpl.get('raw', ''),
                           'body': body}, ensure_ascii=False, indent=2))
@@ -942,8 +983,8 @@ class Autonomous:
         for heading in required:
             if heading not in formatted_lines:
                 raise ValueError('Issue body missing template heading: ' + heading)
-        if 'AI-assisted contribution.' not in formatted:
-            formatted = formatted.rstrip() + '\n\nAI-assisted contribution.\n'
+        if disclosure and disclosure not in formatted:
+            formatted = formatted.rstrip() + '\n\n' + disclosure + '\n'
         if self.marker(task_id) not in formatted:
             formatted += '\n\n' + self.marker(task_id)
         return formatted
@@ -1560,7 +1601,11 @@ class Autonomous:
                 data['plan']['pr_body'] = body
         else:
             upstream = gh('api', f"repos/{task['repo']}")
-            body = data['plan']['pr_body'] + f"\n\nRelated issue: #{task['number']}\n\n## Validation\n\n" + '\n'.join('- `' + json.dumps(r['argv']) + '` → exit ' + str(r['exit_code']) for r in evidence['results']) + '\n\nAI-assisted implementation; regression verification and separate-channel automated review completed. See review identity for model independence.\n\n' + self.marker(task_id)
+            validation_note = ''
+            if self.ai_disclosure(task):
+                validation_note = ('\n\nAI-assisted implementation; regression verification and separate-channel '
+                                   'automated review completed. See review identity for model independence.')
+            body = data['plan']['pr_body'] + f"\n\nRelated issue: #{task['number']}\n\n## Validation\n\n" + '\n'.join('- `' + json.dumps(r['argv']) + '` → exit ' + str(r['exit_code']) for r in evidence['results']) + validation_note + '\n\n' + self.marker(task_id)
             (folder / 'pr-body.md').write_text(self.pr_body(task_id, data, body), encoding='utf-8')
             features.check(self, task_id, data, 'publish')
             data['pr_create_pending'] = True

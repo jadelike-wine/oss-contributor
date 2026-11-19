@@ -214,7 +214,8 @@
     "contribution_strategy":  {
                                   "prefer_own_pr_on_competition":  true,
                                   "submit_issue_and_pr_together":  true,
-                                  "link_pr_in_own_issue":  true
+                                  "link_pr_in_own_issue":  true,
+                                   "ai_disclosure":  "auto"
                               },
     "feature_requests":  {
                              "enabled":  true,

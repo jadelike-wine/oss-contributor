@@ -5,6 +5,7 @@ import contextlib
 import datetime as dt
 import hashlib
 import json
+import locale
 import os
 from pathlib import Path
 import re
@@ -89,6 +90,40 @@ def save(path, value):
         if temporary is not None:
             temporary.unlink(missing_ok=True)
 
+def decode_output(data):
+    """Decode subprocess output captured as bytes.
+
+    Windows child processes emit a mix of UTF-8 (Node and most modern CLIs
+    once stdout is a pipe) and the console ANSI codepage (localized Python,
+    legacy tools). A single strict UTF-8 decode would turn ANSI bytes into
+    replacement characters, while a decode with errors='replace' lets valid
+    UTF-8-looking ANSI sequences through as mojibake (e.g. '鈥?' for an em
+    dash). Decode line by line: strict UTF-8 first, then the ANSI codepage,
+    so each line keeps its own encoding intact.
+    """
+    if data is None:
+        return ''
+    if isinstance(data, str):
+        return data
+    ansi = locale.getpreferredencoding(False) or 'utf-8'
+    lines = []
+    for raw in data.split(b'\n'):
+        try:
+            lines.append(raw.decode('utf-8'))
+            continue
+        except UnicodeDecodeError:
+            pass
+        for encoding in (ansi, 'gbk', 'latin-1'):
+            try:
+                lines.append(raw.decode(encoding))
+                break
+            except (UnicodeDecodeError, LookupError):
+                continue
+        else:
+            lines.append(raw.decode('utf-8', errors='replace'))
+    return '\n'.join(lines)
+
+
 @timed_command
 def execute(args, cwd=None, timeout=180, env=None, started=None, output_prefix=None, stdin_text=None):
     enforce_external_write_policy(args)
@@ -102,24 +137,24 @@ def execute(args, cwd=None, timeout=180, env=None, started=None, output_prefix=N
         env['PATH'] = str(local_bin) + os.pathsep + env.get('PATH', '')
         if args[0] == 'bun':
             args = [str(local_bin / ('bun.exe' if os.name == 'nt' else 'bun')), *args[1:]]
+    stdin_bytes = stdin_text.encode('utf-8') if stdin_text is not None else None
     if output_prefix is not None:
         prefix = Path(output_prefix)
         prefix.parent.mkdir(parents=True, exist_ok=True)
         stdout_path, stderr_path = Path(str(prefix) + '.jsonl'), Path(str(prefix) + '.stderr')
-        with stdout_path.open('w', encoding='utf-8') as stdout, stderr_path.open('w', encoding='utf-8') as stderr:
+        # Binary capture preserves the child's raw bytes so decode_output can
+        # resolve per-line UTF-8 vs ANSI codepage instead of forcing one codec.
+        with stdout_path.open('wb') as stdout, stderr_path.open('wb') as stderr:
             p = subprocess.Popen(args, cwd=cwd, env=env, stdout=stdout, stderr=stderr,
-                                 stdin=subprocess.PIPE if stdin_text is not None else None,
-                                 text=True, encoding='utf-8', errors='replace',
+                                 stdin=subprocess.PIPE if stdin_bytes is not None else None,
                                  start_new_session=os.name != 'nt')
-            if stdin_text is not None:
-                p.stdin.reconfigure(newline='')
             if started:
                 started(p.pid)
             try:
-                if stdin_text is None:
+                if stdin_bytes is None:
                     p.wait(timeout=timeout)
                 else:
-                    p.communicate(input=stdin_text, timeout=timeout)
+                    p.communicate(input=stdin_bytes, timeout=timeout)
             except subprocess.TimeoutExpired:
                 if os.name == 'nt':
                     subprocess.run(['taskkill', '/PID', str(p.pid), '/T', '/F'], capture_output=True)
@@ -130,20 +165,15 @@ def execute(args, cwd=None, timeout=180, env=None, started=None, output_prefix=N
             finally:
                 if started:
                     started(None)
-        return subprocess.CompletedProcess(args, p.returncode, stdout_path.read_text(encoding='utf-8', errors='replace'),
-                                           stderr_path.read_text(encoding='utf-8', errors='replace'))
+        return subprocess.CompletedProcess(args, p.returncode, decode_output(stdout_path.read_bytes()),
+                                           decode_output(stderr_path.read_bytes()))
     p = subprocess.Popen(args, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                         stdin=subprocess.PIPE if stdin_text is not None else None,
-                         text=True, encoding="utf-8", errors="replace", start_new_session=os.name != "nt")
-    if stdin_text is not None:
-        p.stdin.reconfigure(newline='')
+                         stdin=subprocess.PIPE if stdin_bytes is not None else None,
+                         start_new_session=os.name != "nt")
     if started:
         started(p.pid)
     try:
-        if stdin_text is None:
-            stdout, stderr = p.communicate(timeout=timeout)
-        else:
-            stdout, stderr = p.communicate(input=stdin_text, timeout=timeout)
+        stdout, stderr = p.communicate(input=stdin_bytes, timeout=timeout)
     except subprocess.TimeoutExpired:
         if os.name == "nt":
             subprocess.run(["taskkill", "/PID", str(p.pid), "/T", "/F"], capture_output=True)
@@ -154,7 +184,7 @@ def execute(args, cwd=None, timeout=180, env=None, started=None, output_prefix=N
     finally:
         if started:
             started(None)
-    return subprocess.CompletedProcess(args, p.returncode, stdout, stderr)
+    return subprocess.CompletedProcess(args, p.returncode, decode_output(stdout), decode_output(stderr))
 
 def command(args, cwd=None, timeout=None, env=None, started=None):
     if os.name == "nt" and args[0] == "git":

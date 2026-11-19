@@ -7,8 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from autonomous import json_answer, runtime_tools, validate_spec
-from contribute import execute, save
+from autonomous import json_answer, public_text, runtime_tools, validate_spec
+from contribute import decode_output, execute, save
 
 
 class RuntimeTests(unittest.TestCase):
@@ -112,6 +112,37 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             self.assertEqual(result.stdout.strip(), 'result')
             self.assertEqual(result.stderr.strip(), 'diagnostic')
+
+    def test_decode_output_prefers_utf8_and_falls_back_per_line(self):
+        # UTF-8 line survives strict decode; a GBK-encoded line (an em dash
+        # plus a vitest-style marker) fails strict UTF-8 and falls back to the
+        # ANSI codepage instead of decaying into mojibake like '鈥?'.
+        data = '✓ utf-8 line\n'.encode('utf-8') + '错误 — 失败\n'.encode('gbk') + b'ascii\n'
+        decoded = decode_output(data)
+        self.assertEqual(decoded.split('\n')[0], '✓ utf-8 line')
+        self.assertEqual(decoded.split('\n')[1], '错误 — 失败')
+        self.assertEqual(decoded.split('\n')[2], 'ascii')
+
+    def test_decode_output_handles_empty_and_str_passthrough(self):
+        self.assertEqual(decode_output(None), '')
+        self.assertEqual(decode_output(b''), '')
+        self.assertEqual(decode_output('already text'), 'already text')
+
+    def test_execute_decodes_utf8_output(self):
+        # Write the bytes directly: a bare print() would re-encode '✓' through
+        # the child's own stdout codec, which is cp936 on a zh-CN console and
+        # would crash before execute() ever sees the output.
+        result = execute([sys.executable, '-c',
+                          'import sys; sys.stdout.buffer.write("✓ done\\n".encode("utf-8"))'],
+                         timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('✓ done', result.stdout)
+
+    def test_public_text_rejects_mojibake_and_replacement_char(self):
+        public_text('## Bug description\n\nEverything is fine.')
+        for bad in ('N/A 鈥?test-level failure', 'marker 鉂? spec', 'broken � sequence'):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, 'mojibake'):
+                public_text(bad)
 
     @unittest.skipUnless(sys.platform == 'win32', 'Windows launcher resolution')
     def test_windows_shims_resolve_to_existing_runtime_entries(self):

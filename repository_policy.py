@@ -65,6 +65,38 @@ def contribution_constraints(rules, configured=None):
     return policy
 
 
+def ai_disclosure_required(rules):
+    """Whether the official contribution rules mandate declaring AI assistance.
+
+    A positive match means the repository's own policy requires contributors to
+    disclose AI-generated work in the issue/PR body; omitting it there would be
+    a policy violation. Purely welcoming or tolerating AI assistance does NOT
+    count as a requirement.
+    """
+    if not isinstance(rules, str) or not rules.strip():
+        return False
+    plain = re.sub(r'\[([^]]+)\]\([^)]*\)', r'\1', rules)
+    plain = re.sub(r'[*`>]', '', plain)
+    plain = re.sub(r'\s+', ' ', plain)
+    patterns = [
+        # Explicit obligations: "you must/have to disclose/declare AI"
+        r'\b(?:must|are required to|required to|have to|need to|shall|should)\s+'
+        r'(?:disclose|declare|indicate|note|state|identify|label|mark|flag)\b[^.!?]{0,80}'
+        r'\b(?:ai|llm|generated|generated code|ai-assisted|copilot|automated)\b',
+        r'\b(?:disclose|declare|indicate|state|label|mark|flag)\b[^.!?]{0,60}'
+        r'\b(?:ai|llm|generated|ai-assisted|automated)\b[^.!?]{0,60}'
+        r'\b(?:required|mandatory|must|always)\b',
+        # "transparency"/"declare" phrasing common in AI policies
+        r'\btransparen(?:t|cy)\b[^.!?]{0,80}\b(?:ai|generated|ai-assisted)\b',
+        r'\b(?:ai|ai-assisted|generated)\b[^.!?]{0,60}\btransparen(?:t|cy)\b',
+        # "highlight/indicate when and where you used AI"
+        r'\b(?:highlight|indicate|explain|describe)\b[^.!?]{0,60}'
+        r'\b(?:when|where|how|that) you (?:used|use) ai\b',
+        r'\bdeclare the level\b[^.!?]{0,80}\b(?:ai|honest)\b',
+    ]
+    return any(re.search(pattern, plain, flags=re.I) for pattern in patterns)
+
+
 def issue_policy_reason(issue, policy):
     """Return an unsatisfied hard gate, independent of model/maintainer claims."""
     required = policy.get('required_issue_labels') or []

@@ -1575,8 +1575,28 @@ class Autonomous:
             url = command(['gh', 'pr', 'create', '-R', task['repo'], '--base', upstream['default_branch'], '--head', login + ':' + branch, '--title', pr_title, '--body-file', str(folder / 'pr-body.md')], cwd=work).strip()
             pr = {'number': int(url.rstrip('/').split('/')[-1]), 'html_url': url}
         data.update(pr_number=pr['number'], pr_url=pr['html_url'], pr_create_pending=False)
+        self.ensure_open_pr(task_id, task, pr['number'])
         self.move(task_id, data, 'PR_OPEN')
         self.sync_issue_link(task_id, data)
+
+    def ensure_open_pr(self, task_id, task, pr_number):
+        """Hard gate: the published PR must be a regular open PR, never a draft.
+
+        A draft PR cannot be reviewed or merged, so if the upstream state
+        somehow shows draft=True (account-level draft-by-default, a retry
+        path, or a manual edit), convert it immediately via GraphQL
+        markPullRequestReadyForReview.  Failing the conversion is a hard error.
+        """
+        pr = gh('pr', 'view', str(pr_number), '-R', task['repo'], '--json', 'draft,state,id')
+        if not pr.get('draft'):
+            return
+        self.p.event(task_id, f'PR #{pr_number} was draft; converting to ready for review')
+        result = gh('api', 'graphql', '-f', 'query=mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { isDraft state } } }',
+                    '-F', f'id={pr["id"]}')
+        converted = result.get('data', {}).get('markPullRequestReadyForReview', {}).get('pullRequest', {})
+        if converted.get('isDraft'):
+            raise RuntimeError(f'PR #{pr_number} remains draft after markPullRequestReadyForReview')
+        self.p.event(task_id, f'PR #{pr_number} converted to ready for review')
 
     def sync_issue_link(self, task_id, data):
         try:

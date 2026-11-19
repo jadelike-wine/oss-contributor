@@ -169,5 +169,66 @@ class TestIssueTemplate(unittest.TestCase):
             self.assertEqual(e.sanitize_title(task, 'nav bug', 'pr'), 'fix: nav bug')
 
 
+class TestEnsureOpenPr(unittest.TestCase):
+    def _engine(self, gh_responses):
+        e = Autonomous.__new__(Autonomous)
+        e.p = MagicMock()
+        e.p.task.return_value = {'workspace': '/tmp/w', 'repo': 'o/r'}
+        calls = []
+        def fake_gh(*args, **kw):
+            calls.append(args)
+            key = ' '.join(str(a) for a in args)
+            for pattern, resp in gh_responses.items():
+                if pattern in key:
+                    return resp
+            return {}
+        e._gh = fake_gh
+        return e, calls
+
+    def test_skips_when_not_draft(self):
+        e, calls = self._engine({'pr view': {'draft': False, 'state': 'OPEN', 'id': 'n1'}})
+        # Patch module-level gh
+        import autonomous
+        orig = autonomous.gh
+        autonomous.gh = e._gh
+        try:
+            e.ensure_open_pr('t1', e.p.task('x'), 5)
+        finally:
+            autonomous.gh = orig
+        graphql = [c for c in calls if 'graphql' in ' '.join(c)]
+        self.assertEqual(graphql, [])
+
+    def test_converts_draft(self):
+        e, calls = self._engine({
+            'pr view': {'draft': True, 'state': 'OPEN', 'id': 'PR_node123'},
+            'graphql': {'data': {'markPullRequestReadyForReview': {'pullRequest': {'isDraft': False, 'state': 'OPEN'}}}},
+        })
+        import autonomous
+        orig = autonomous.gh
+        autonomous.gh = e._gh
+        try:
+            e.ensure_open_pr('t1', e.p.task('x'), 5)
+        finally:
+            autonomous.gh = orig
+        graphql = [c for c in calls if 'graphql' in ' '.join(c)]
+        self.assertEqual(len(graphql), 1)
+        self.assertIn('markPullRequestReadyForReview', ' '.join(graphql[0]))
+
+    def test_fails_when_still_draft(self):
+        e, calls = self._engine({
+            'pr view': {'draft': True, 'state': 'OPEN', 'id': 'PR_node123'},
+            'graphql': {'data': {'markPullRequestReadyForReview': {'pullRequest': {'isDraft': True, 'state': 'OPEN'}}}},
+        })
+        import autonomous
+        orig = autonomous.gh
+        autonomous.gh = e._gh
+        try:
+            with self.assertRaises(RuntimeError) as ctx:
+                e.ensure_open_pr('t1', e.p.task('x'), 5)
+            self.assertIn('remains draft', str(ctx.exception))
+        finally:
+            autonomous.gh = orig
+
+
 if __name__ == '__main__':
     unittest.main()

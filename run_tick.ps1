@@ -28,11 +28,13 @@ try {
     & $py -X utf8 (Join-Path $Root 'hermes_tick.py') *>&1 | Tee-Object -FilePath $logFile -Append
     "=== TICK END $(Get-Date -Format o) exit=$LASTEXITCODE ===" | Tee-Object -FilePath $logFile -Append
 
-    # Heartbeat for health monitoring.
+    # Heartbeat for health monitoring; surface a non-zero tick exit instead of
+    # always reporting success (e.g. the daily model budget being exhausted).
     $hb = @{
         last_tick = (Get-Date).ToString('o'); log = $logFile; exit = $LASTEXITCODE
-        pid = $PID; state = 'ok'
+        pid = $PID; state = $(if ($LASTEXITCODE -eq 0) { 'ok' } else { 'failed' })
     } | ConvertTo-Json
     Set-Content (Join-Path $logDir 'heartbeat.json') $hb -Encoding utf8
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 finally { $mutex.ReleaseMutex(); $mutex.Dispose() }

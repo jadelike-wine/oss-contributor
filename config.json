@@ -108,7 +108,10 @@
                          "agno-agi/agno",
                          "NVIDIA/OpenShell",
                          "floatpane/matcha",
-                         "vercel/next.js"
+                         "vercel/next.js",
+                         "bytedance/deer-flow",
+                         "agentscope-ai/agentscope",
+                         "XiaomiMiMo/MiMo-Code"
                      ],
     "repository_checks":  {
                               "max_inactive_days":  180,
@@ -235,7 +238,29 @@
                      "context_characters":  320000,
                      "network_requests":  40,
                      "catalog_max_age_days":  30,
-                     "batch_on_auto":  true
+                     "batch_on_auto":  true,
+                     "deep_scan":  {
+                                      "repositories":  [
+                                                           "bytedance/deer-flow",
+                                                           "agentscope-ai/agentscope",
+                                                           "QwenLM/qwen-code",
+                                                           "google-gemini/gemini-cli",
+                                                           "XiaomiMiMo/MiMo-Code"
+                                                       ],
+                                      "auto_include_merged":  true,
+                                      "scopes_per_repo_per_run":  2,
+                                      "files_per_scope":  10,
+                                      "file_characters":  30000,
+                                      "policy_characters":  60000,
+                                      "rules":  10,
+                                      "target_files":  25,
+                                      "peers_per_candidate":  4,
+                                      "files_per_peer":  6,
+                                      "context_characters":  480000,
+                                      "network_requests":  60,
+                                      "scan_cache_seconds":  10800,
+                                      "hotspot_commits":  50
+                                  }
                  },
     "timeouts":  {
                      "command_seconds":  180,

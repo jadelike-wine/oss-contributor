@@ -239,11 +239,12 @@ Goose 的指定看板 `Ready`、`manual_issue_submission`、`human_pr_review_req
 | `research.reserve_model_calls` / `research.reserve_seconds` | 缺省预留 2 次调用和 600 秒给研究；从单轮既有总额度内分配，不增加总预算 |
 | `research.peers_per_candidate` | 3，范围 3–5 |
 | `research.files_per_peer` | 4，范围 2–6 |
-| `research.target_files` | 12，范围 3–25，包含规则文件 |
+| `research.target_files` | 12，范围 3–40，包含规则文件；深筛层当前 25 |
 | `research.file_characters` | 12,000，最大 60,000 |
 | `research.context_characters` | 320,000，最大 600,000；超出安全暂停，不静默丢弃证据 |
 | `research.network_requests` | 每候选每次采集 40，最大 60；历史累计另记 |
 | `research.batch_on_auto` | 当前配置 true；旧配置缺省 false，保留旧调度行为 |
+| `research.deep_scan` | 深度筛查层。`repositories` 名单内仓库（当前 DeerFlow、AgentScope、Qwen Code、Gemini CLI、MiMo-Code）获得：每仓每轮最多 `scopes_per_repo_per_run` 个源码 scope（1–4，当前 2）、单 scope 最多 `files_per_scope` 个文件（含本地 import 依赖，1–12，当前 10）、单文件 `file_characters` 字符（上限 40,000，当前 30,000）、研究 packet 使用 `target_files`/`peers_per_candidate`/`files_per_peer`/`context_characters`/`network_requests` 覆盖值（仍走既有上下限校验）、扫描按 `scan_cache_seconds` 缩短缓存并排在每轮最前、`hotspot_commits` 次近期提交内改动过的模块优先。`auto_include_merged` 为 true 时已合并过 PR 的仓库自动入层。名单外仓库完全沿用既有有界参数 |
 | `timeouts.command_seconds` | 普通命令 180 秒 |
 | `timeouts.git_seconds` | clone/fetch/worktree/push 600 秒 |
 | `timeouts.model_seconds` / `test_seconds` | 当前 1,500 秒，缺省回退 `timeout_seconds` |

@@ -17,6 +17,50 @@ MAX_RULES = 6
 MAX_CHARACTERS = 12000
 MAX_POLICY_CHARACTERS = 60000
 
+# Absolute ceilings for the deep-scan tier; per-repo deep_scan config can raise
+# the bounded scope up to these values but never beyond them.
+DEEP_MAX_FILES = 12
+DEEP_MAX_RULES = 12
+DEEP_MAX_CHARACTERS = 40000
+DEEP_MAX_POLICY_CHARACTERS = 100000
+DEEP_MAX_PATHS = 100000
+
+
+def deep_scan_repos(config, merged=()):
+    """Repos in the deep-scan tier: explicit list plus merged repositories."""
+    deep = config.get('research', {}).get('deep_scan', {})
+    if not isinstance(deep, dict):
+        return set()
+    repos = deep.get('repositories', [])
+    if not isinstance(repos, list) or any(not isinstance(r, str) or '/' not in r for r in repos):
+        raise ValueError('research.deep_scan.repositories must be a list of owner/repo strings')
+    result = {r.casefold() for r in repos}
+    if deep.get('auto_include_merged'):
+        result.update(r.casefold() for r in merged)
+    return result
+
+
+def scope_limits(config, repo):
+    """Per-repo bounded scope limits; deep-scan repos may widen within ceilings."""
+    limits = {'files': MAX_FILES, 'rules': MAX_RULES, 'characters': MAX_CHARACTERS,
+              'policy_characters': MAX_POLICY_CHARACTERS, 'paths': MAX_PATHS}
+    deep = config.get('research', {}).get('deep_scan', {})
+    if repo.casefold() not in deep_scan_repos(config):
+        return limits
+    overrides = {'files': ('files_per_scope', DEEP_MAX_FILES),
+                 'rules': ('rules', DEEP_MAX_RULES),
+                 'characters': ('file_characters', DEEP_MAX_CHARACTERS),
+                 'policy_characters': ('policy_characters', DEEP_MAX_POLICY_CHARACTERS),
+                 'paths': ('paths', DEEP_MAX_PATHS)}
+    for key, (option, ceiling) in overrides.items():
+        value = deep.get(option)
+        if value is None:
+            continue
+        if type(value) is not int or not 1 <= value <= ceiling:
+            raise ValueError('research.deep_scan.' + option + ' must be 1..' + str(ceiling))
+        limits[key] = value
+    return limits
+
 
 def digest(files):
     return hashlib.sha256(json.dumps(files, sort_keys=True, ensure_ascii=False,
@@ -75,6 +119,64 @@ def scope_options(paths):
         matches.sort(key=lambda p: (-len(set(parts) & set(PurePosixPath(p).parts[:-1])), p))
         result.append([source, *matches[:2]])
     return result
+
+
+LOCAL_IMPORT = re.compile(
+    r"^\s*(?:from\s+([\w.]+)\s+import\b|import\s+([\w.]+)"            # python
+    r"|from\s+['\"]([^'\"]+)['\"]|import\s+['\"]([^'\"]+)['\"]"       # js/ts
+    r"|require\(['\"]([^'\"]+)['\"]\))", re.M)
+
+
+def local_imports(text, source_path, available):
+    """Same-repo relative import targets, resolved against the source dir only."""
+    base = PurePosixPath(source_path).parent
+    found = []
+    for match in LOCAL_IMPORT.finditer(text):
+        target = next(g for g in match.groups() if g)
+        if not target.startswith('.'):
+            continue  # Only sibling/package-relative imports, never bare packages.
+        # Python '.mod'/'..pkg.mod' means climb packages, then take a dotted
+        # module path; JS './x'/'../x' is already a filesystem-relative path.
+        dots = len(target) - len(target.lstrip('.'))
+        rest = target.lstrip('.')
+        if re.fullmatch(r'[\w.]*', rest) and (dots > 1 or '/' not in rest and '\\' not in rest):
+            parent = base
+            for _ in range(dots - 1):
+                parent = parent.parent
+            rest_path = rest.replace('.', '/')
+            candidate = os.path.normpath(str(parent / rest_path)).replace('\\', '/')
+        else:
+            candidate = os.path.normpath(str(base / target)).replace('\\', '/')
+        for suffix in ('', '.py', '.ts', '.tsx', '.js', '.jsx', '.mjs', '/index.py',
+                       '/index.ts', '/index.js', '/__init__.py', '.go', '.rs'):
+            path = candidate + suffix
+            if path in available and safe_path(path):
+                found.append(path)
+                break
+    return found
+
+
+def hotspot_order(base, sha, paths, commits):
+    """Recently changed eligible sources first; alphabetical fallback inside ties.
+
+    Hotspot files carry a churn signal correlated with defect density. The
+    ordering is only a preference: every scope still must pass the full
+    reproduce/red gate before it can become a contribution.
+    """
+    if commits <= 0:
+        return {}
+    try:
+        log = local_git(base, 'log', '-' + str(commits), '--name-only', '--format=%H', sha)
+    except (RuntimeError, subprocess.TimeoutExpired):
+        return {}
+    rank, index = {}, 0
+    eligible = set(paths)
+    for line in log.splitlines():
+        line = line.strip()
+        if line in eligible and line not in rank:
+            rank[line] = index
+            index += 1
+    return rank
 
 
 def read_file(base, sha, path, maximum=MAX_CHARACTERS):
@@ -147,9 +249,11 @@ def policy_references(path, body, available):
     return references
 
 
-def collect_scope(pipeline, record, after='', progress=None):
+def collect_scope(pipeline, record, after='', progress=None, limits=None):
     """Collect one complete small scope. Missing cached material stays unknown."""
     repo = record['repo']
+    if limits is None:
+        limits = scope_limits(pipeline.config, repo)
     base = pipeline.root / 'workspaces' / repo.replace('/', '--')
     if not (base / '.git').exists():
         raise ValueError('No existing base clone; source discovery does not clone')
@@ -163,7 +267,7 @@ def collect_scope(pipeline, record, after='', progress=None):
     if not re.fullmatch('[a-f0-9]{40}', sha):
         raise ValueError('Discovery requires an immutable local tracking SHA')
     entries = local_git(base, 'ls-tree', '-r', '-l', '-z', sha).split('\0')
-    if len(entries) > MAX_PATHS + 1:
+    if len(entries) > limits['paths'] + 1:
         raise ValueError('Cached source inventory exceeds discovery bound')
     sizes = {}
     for entry in filter(None, entries):
@@ -172,9 +276,16 @@ def collect_scope(pipeline, record, after='', progress=None):
         if mode in ('100644', '100755') and kind == 'blob' and size.isdigit() and safe_path(path):
             sizes[path] = int(size)
     paths = list(sizes)
-    options = scope_options([p for p in paths if 0 < sizes[p] <= MAX_CHARACTERS])
+    options = scope_options([p for p in paths if 0 < sizes[p] <= limits['characters']])
     if not options:
         raise ValueError('No bounded source module with matching tracked tests')
+    deep = pipeline.config.get('research', {}).get('deep_scan', {})
+    if repo.casefold() in deep_scan_repos(pipeline.config):
+        churn = hotspot_order(base, sha, [p[0] for p in options],
+                              deep.get('hotspot_commits', 0))
+        if churn:
+            fallback = {p[0]: index for index, p in enumerate(options)}
+            options.sort(key=lambda p: (churn.get(p[0], len(churn) + fallback[p[0]]), p[0]))
     selected = next((p for p in options if p[0] > after), options[0])
     if progress is not None:
         progress.update(module=selected[0], sha=sha)
@@ -198,12 +309,26 @@ def collect_scope(pipeline, record, after='', progress=None):
         raise ValueError('Complete applicable local policy is unavailable')
     policy = {}
     while rules - policy.keys():
-        if len(rules) > MAX_RULES:
+        if len(rules) > limits['rules']:
             raise ValueError('Applicable discovery rules exceed complete-read bound')
         path = sorted(rules - policy.keys())[0]
-        policy[path] = read_file(base, sha, path, MAX_POLICY_CHARACTERS)
+        policy[path] = read_file(base, sha, path, limits['policy_characters'])
         rules.update(policy_references(path, policy[path], available))
-    sources = {path: read_file(base, sha, path) for path in selected[:MAX_FILES]}
+    sources = {path: read_file(base, sha, path, limits['characters'])
+               for path in selected[:limits['files']]}
+    if len(sources) < limits['files'] and repo.casefold() in deep_scan_repos(pipeline.config):
+        # Deep tier: pull bounded local dependencies so the model sees real
+        # call sites and contracts, not just the module plus its tests.
+        frontier = list(sources)
+        while len(sources) < limits['files'] and frontier:
+            path = frontier.pop(0)
+            for dep in local_imports(sources[path], path, available):
+                if len(sources) >= limits['files']:
+                    break
+                if dep in sources or dep in policy or sizes.get(dep, 0) > limits['characters']:
+                    continue
+                sources[dep] = read_file(base, sha, dep, limits['characters'])
+                frontier.append(dep)
     manifest = {'version': 1, 'repo': repo, 'sha': sha, 'source_paths': list(sources),
                 'policy_paths': sorted(policy), 'source_digest': digest(sources),
                 'policy_digest': digest(policy), 'observed_at': now(),
@@ -220,8 +345,8 @@ def collect_scope(pipeline, record, after='', progress=None):
               'network_requests': 0, 'recent_issues_and_prs': [], 'recent_releases': [],
               'peer_selection': 'Local defect investigation; no cross-project feature claims'}
     packet['evidence_sources'] = evidence_catalog(packet)
-    from research import limits
-    if len(json.dumps(packet, ensure_ascii=False)) > limits(pipeline)['context_characters']:
+    from research import limits as research_limits
+    if len(json.dumps(packet, ensure_ascii=False)) > research_limits(pipeline, repo)['context_characters']:
         raise ValueError('Complete source and policy packet exceeds research context bound')
     return packet
 
@@ -240,9 +365,11 @@ def load_packet(pipeline, task):
         raise ValueError('Discovery manifest does not match registered task')
     source_paths, policy_paths = manifest['source_paths'], manifest['policy_paths']
     files = packet['target']['files']
+    slimits = scope_limits(pipeline.config, task['repo'])
     if (not isinstance(source_paths, list) or not isinstance(policy_paths, list)
             or not re.fullmatch('[a-f0-9]{40}', manifest.get('sha', ''))
-            or not 2 <= len(source_paths) <= MAX_FILES or not 1 <= len(policy_paths) <= MAX_RULES
+            or not 2 <= len(source_paths) <= slimits['files']
+            or not 1 <= len(policy_paths) <= slimits['rules']
             or len(set(source_paths)) != len(source_paths) or len(set(policy_paths)) != len(policy_paths)
             or set(source_paths) & set(policy_paths)
             or set(files) != set(source_paths) | set(policy_paths)
@@ -250,7 +377,8 @@ def load_packet(pipeline, task):
             or packet['target']['repo'] != task['repo'] or packet['target']['sha'] != task['base_sha']
             or packet['target']['checked_paths'] != [*sorted(policy_paths), *source_paths]
             or any(not isinstance(value, str) or not value or '\0' in value or len(value) >
-                   (MAX_POLICY_CHARACTERS if path in policy_paths else MAX_CHARACTERS) for path, value in files.items())
+                   (slimits['policy_characters'] if path in policy_paths else slimits['characters'])
+                   for path, value in files.items())
             or digest({p: files[p] for p in source_paths}) != manifest['source_digest']
             or digest({p: files[p] for p in policy_paths}) != manifest['policy_digest']
             or packet['policy'] != {p: files[p] for p in policy_paths}
@@ -282,57 +410,71 @@ def register_scopes(engine, limit):
     records = {r['repo']: r for r in json.loads(catalog_path.read_text(encoding='utf-8'))['repositories']}
     pending = p.db.execute("SELECT id,repo FROM tasks WHERE source='hunt' AND state IN ('DISCOVERED','PLAN') "
                            "AND json_type(payload,'$.source_discovery')='object' ORDER BY updated,id").fetchall()
-    preferred, selected_repos = [], set()
+    deep_repos = deep_scan_repos(p.config, getattr(p, 'merged_repositories', lambda: [])())
+    per_repo = {}
+    for repo in deep_repos:
+        quota = p.config.get('research', {}).get('deep_scan', {}).get('scopes_per_repo_per_run', 2)
+        if type(quota) is not int or not 1 <= quota <= 4:
+            raise ValueError('research.deep_scan.scopes_per_repo_per_run must be 1..4')
+        per_repo[repo] = quota
+    preferred, selected_repos = [], {}
     for row in p.fair_candidates(pending, repositories=pool, cursor_name='source-discovery'):
+        used = selected_repos.get(row['repo'].casefold(), 0)
+        cap = per_repo.get(row['repo'].casefold(), 1)
         data = engine.load(row['id'])
-        if (row['repo'] not in selected_repos and data['stage'] == 'PLAN' and not data.get('research', {}).get('approved')
+        if (used < cap and data['stage'] == 'PLAN' and not data.get('research', {}).get('approved')
                 and data['attempts'].get('RESEARCH', 0) < engine.options.get('max_stage_attempts', 3)
                 and retry_ready(data, 'RESEARCH')):
             preferred.append(row['id'])
-            selected_repos.add(row['repo'])
+            selected_repos[row['repo'].casefold()] = used + 1
             with p.db:
                 p.db.execute("INSERT INTO scheduler VALUES ('source-discovery',?) ON CONFLICT(name) DO UPDATE SET last_repo=excluded.last_repo", (row['repo'],))
             if len(preferred) == limit:
                 return preferred
-    rows = [{'id': repo, 'repo': repo} for repo in pool if repo in records and repo not in selected_repos]
+    rows = [{'id': repo, 'repo': repo} for repo in pool
+            if repo in records and repo.casefold() not in selected_repos]
     report = []
     for row in p.fair_candidates(rows, repositories=pool, cursor_name='source-discovery')[:8]:
         if len(preferred) >= limit:
             break
         repo = row['repo']
-        cursor_name = 'source-discovery:' + repo
-        previous = p.db.execute('SELECT last_repo FROM scheduler WHERE name=?', (cursor_name,)).fetchone()
-        progress = {}
-        try:
-            packet = collect_scope(p, records[repo], previous[0] if previous else '', progress=progress)
-            manifest = packet['discovery_manifest']
-            key = repo.replace('/', '--') + '--hunt-source-' + manifest['scope_id'][:24]
-            if not p.db.execute('SELECT 1 FROM tasks WHERE id=?', (key,)).fetchone():
-                focus = 'Inspect independently reproducible local behavior in ' + manifest['source_paths'][0]
-                # Complete immutable source/policy evidence exists before task registration.
-                save(p.root / 'runs' / key / 'source-discovery.json', packet)
+        attempts = per_repo.get(repo.casefold(), 1)
+        for _ in range(attempts):
+            if len(preferred) >= limit:
+                break
+            cursor_name = 'source-discovery:' + repo
+            previous = p.db.execute('SELECT last_repo FROM scheduler WHERE name=?', (cursor_name,)).fetchone()
+            progress = {}
+            try:
+                packet = collect_scope(p, records[repo], previous[0] if previous else '', progress=progress)
+                manifest = packet['discovery_manifest']
+                key = repo.replace('/', '--') + '--hunt-source-' + manifest['scope_id'][:24]
+                if not p.db.execute('SELECT 1 FROM tasks WHERE id=?', (key,)).fetchone():
+                    focus = 'Inspect independently reproducible local behavior in ' + manifest['source_paths'][0]
+                    # Complete immutable source/policy evidence exists before task registration.
+                    save(p.root / 'runs' / key / 'source-discovery.json', packet)
+                    with p.db:
+                        p.db.execute('INSERT INTO tasks(id,repo,source,title,score,state,holds,payload,updated,base_sha) '
+                                     'VALUES (?,?,?,?,?,?,?,?,?,?)',
+                                     (key, repo, 'hunt', focus, 60, 'DISCOVERED', '[]',
+                                      json.dumps({'focus': focus, 'source_discovery': manifest}), now(), manifest['sha']))
+                    preferred.append(key)
+                    status = 'registered'
+                else:
+                    status = 'unchanged_scope_reused'
+                report.append({'repo': repo, 'status': status, 'task': key, 'sha': manifest['sha']})
+            except BudgetExhausted:
+                raise
+            except (ValueError, RuntimeError, OSError, subprocess.TimeoutExpired, KeyError) as error:
+                report.append({'repo': repo, 'status': 'unknown', 'reason': str(error), **progress})
+            finally:
                 with p.db:
-                    p.db.execute('INSERT INTO tasks(id,repo,source,title,score,state,holds,payload,updated,base_sha) '
-                                 'VALUES (?,?,?,?,?,?,?,?,?,?)',
-                                 (key, repo, 'hunt', focus, 60, 'DISCOVERED', '[]',
-                                  json.dumps({'focus': focus, 'source_discovery': manifest}), now(), manifest['sha']))
-                preferred.append(key)
-                status = 'registered'
-            else:
-                status = 'unchanged_scope_reused'
-            report.append({'repo': repo, 'status': status, 'task': key, 'sha': manifest['sha']})
-        except BudgetExhausted:
-            raise
-        except (ValueError, RuntimeError, OSError, subprocess.TimeoutExpired, KeyError) as error:
-            report.append({'repo': repo, 'status': 'unknown', 'reason': str(error), **progress})
-        finally:
-            with p.db:
-                # A failed nested rule or missing cached blob is unknown, not a
-                # finding. Yield the module turn without creating/resetting a task.
-                if progress.get('module'):
-                    p.db.execute('INSERT INTO scheduler VALUES (?,?) ON CONFLICT(name) DO UPDATE SET last_repo=excluded.last_repo',
-                                 (cursor_name, progress['module']))
-                p.db.execute("INSERT INTO scheduler VALUES ('source-discovery',?) ON CONFLICT(name) DO UPDATE SET last_repo=excluded.last_repo", (repo,))
+                    # A failed nested rule or missing cached blob is unknown, not a
+                    # finding. Yield the module turn without creating/resetting a task.
+                    if progress.get('module'):
+                        p.db.execute('INSERT INTO scheduler VALUES (?,?) ON CONFLICT(name) DO UPDATE SET last_repo=excluded.last_repo',
+                                     (cursor_name, progress['module']))
+                    p.db.execute("INSERT INTO scheduler VALUES ('source-discovery',?) ON CONFLICT(name) DO UPDATE SET last_repo=excluded.last_repo", (repo,))
     save(p.root / 'runs/source-discovery-summary.json', {'at': now(), 'repositories': report,
                                                       'preferred_tasks': preferred, 'limit': limit})
     return preferred

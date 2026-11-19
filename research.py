@@ -16,11 +16,19 @@ FIELDS = ('title', 'background', 'users', 'expected_effect', 'scope', 'validatio
           'risks', 'effort', 'acceptance', 'comparison', 'issue_body')
 
 
-def limits(pipeline):
+def limits(pipeline, repo=None):
     options = pipeline.config.get('research', {})
     bounds = {'peers_per_candidate': (3, 3, 5), 'files_per_peer': (4, 2, 6),
-              'target_files': (12, 3, 25), 'file_characters': (12000, 100, 60000),
+              'target_files': (12, 3, 40), 'file_characters': (12000, 100, 60000),
               'context_characters': (320000, 1000, 600000), 'network_requests': (40, 1, 60)}
+    if repo is not None:
+        from source_discovery import deep_scan_repos
+        deep = options.get('deep_scan', {})
+        if repo.casefold() in deep_scan_repos(pipeline.config):
+            # Deep-tier repos widen the research packet within the same bounds
+            # validation; every override still must fit the allowed range.
+            options = {**options, **{k: v for k, v in deep.items()
+                                     if k in bounds and v is not None}}
     result = {}
     for key, (default, low, high) in bounds.items():
         value = options.get(key, default)
@@ -181,7 +189,7 @@ def snapshot(repo, focus='', options=None, request=None, raw=None):
 def collect(engine, task):
     from repository_catalog import research_pool
     from telemetry import ACTIVE, BudgetExhausted
-    p, options = engine.p, limits(engine.p)
+    p, options = engine.p, limits(engine.p, task['repo'])
     checkpoint = engine.packet_dir(task['id']) / 'research-context.json'
     payload = json.loads(task['payload']) if isinstance(task.get('payload'), str) else task.get('payload', {})
     if payload.get('source_discovery'):
@@ -710,7 +718,7 @@ def needs_discussion(opportunity, *, proactive=False):
 
 
 def research_answer(engine, task_id, purpose, prompt):
-    if len(prompt) > limits(engine.p)['context_characters'] + 12000:
+    if len(prompt) > limits(engine.p, engine.p.task(task_id)['repo'])['context_characters'] + 12000:
         raise TaskBudgetExhausted('research_prompt_characters_exhausted')
     channel = engine.p.config.get('research', {}).get('model_channel', 'opencode')
     if channel in ('opencode', 'dsh'):

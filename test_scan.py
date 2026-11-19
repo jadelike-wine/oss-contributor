@@ -21,6 +21,11 @@ class ScanTests(unittest.TestCase):
         health = patch.object(Pipeline, 'effective_repositories', lambda p, contribution=False: list(p.config['repositories']))
         health.start()
         self.addCleanup(health.stop)
+        # Deep-tier ordering has a dedicated test; keep every other assertion
+        # on the neutral catalog order.
+        deep = patch('source_discovery.deep_scan_repos', lambda config, merged=(): set())
+        deep.start()
+        self.addCleanup(deep.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.config = json.loads(Path(__file__).with_name('config.json').read_text(encoding='utf-8'))

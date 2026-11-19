@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "checked_at": "2026-11-09T15:45:10.533612+00:00",
+  "checked_at": "2026-11-19T07:16:53.985309+00:00",
   "repositories": [
     {
       "repo": "QwenLM/qwen-code",
@@ -22582,6 +22582,546 @@
             "      with the Work to which such Contribution(s) was submitted. If You",
             "      or a Contribution incorporated within the Work constitutes direct",
             "      or contributory patent infringement, then any patent licenses"
+          ]
+        }
+      }
+    },
+    {
+      "repo": "bytedance/deer-flow",
+      "url": "https://github.com/bytedance/deer-flow",
+      "checked_at": "2026-11-19T07:16:22.315776+00:00",
+      "status": "research_only",
+      "category": "agents_workflows",
+      "research_allowed": true,
+      "automatic_contribution": true,
+      "policy": {
+        "automation": "unconfirmed",
+        "issue_submission": "unconfirmed",
+        "pr_submission": "allowlisted",
+        "scope": "bounded root and discovered guide inspection",
+        "contribution_allowlisted": true,
+        "decision": "Existing contribution allowlist still requires live health, task policy and publication gates; catalog never authorizes publication"
+      },
+      "reason": "Pinned public source/test/documentation verified; allowlisted for automated contribution pending live gates",
+      "canonical": "bytedance/deer-flow",
+      "default_branch": "main",
+      "pushed_at": "2026-11-19T03:40:38Z",
+      "updated_at": "2026-11-19T07:06:25Z",
+      "archived": false,
+      "disabled": false,
+      "private": false,
+      "license": "MIT",
+      "contributing_url": "repos/bytedance/deer-flow/contents/CONTRIBUTING.md",
+      "sha": "585abb979fbc483485c0fc53ed0e571ab7eebadb",
+      "inventory": {
+        "source": {
+          "count": 1942,
+          "examples": [
+            ".agent/skills/blocking-io-guard/templates/anchor.template.py",
+            ".agent/skills/smoke-test/scripts/check_docker.sh",
+            ".agent/skills/smoke-test/scripts/check_local_env.sh",
+            ".agent/skills/smoke-test/scripts/deploy_docker.sh",
+            ".agent/skills/smoke-test/scripts/deploy_local.sh",
+            ".agent/skills/smoke-test/scripts/frontend_check.sh",
+            ".agent/skills/smoke-test/scripts/health_check.sh",
+            ".agent/skills/smoke-test/scripts/pull_code.sh",
+            "backend/app/__init__.py",
+            "backend/app/channels/__init__.py"
+          ]
+        },
+        "test": {
+          "count": 2083,
+          "examples": [
+            "backend/tests/_agent_e2e_helpers.py",
+            "backend/tests/_approval_test_helpers.py",
+            "backend/tests/_gateway_shutdown_budget.py",
+            "backend/tests/_host_path_helpers.py",
+            "backend/tests/_readable_helpers.py",
+            "backend/tests/_replay_fixture.py",
+            "backend/tests/_repository_race_helpers.py",
+            "backend/tests/_router_auth_helpers.py",
+            "backend/tests/_run_message_pagination_helpers.py",
+            "backend/tests/_scheduled_rows.py"
+          ]
+        },
+        "documentation": {
+          "count": 505,
+          "examples": [
+            ".agent/skills/blocking-io-guard/SKILL.md",
+            ".agent/skills/blocking-io-guard/references/good-anchor-rules.md",
+            ".agent/skills/blocking-io-guard/references/sop-skeleton.md",
+            ".agent/skills/deerflow-maintainer-orchestrator/SKILL.md",
+            ".agent/skills/engineer-system-change/SKILL.md",
+            ".agent/skills/smoke-test/SKILL.md",
+            ".agent/skills/smoke-test/references/SOP.md",
+            ".agent/skills/smoke-test/references/troubleshooting.md",
+            ".agent/skills/smoke-test/templates/report.docker.template.md",
+            ".agent/skills/smoke-test/templates/report.local.template.md"
+          ]
+        }
+      },
+      "files": {
+        "scripts/pnpm.py": {
+          "sha256": "2238ba61f297d47277eceae07dbddc743da624b17765173c72f49aa2d99ba803",
+          "characters": 4251,
+          "file_type": "source",
+          "url": "https://github.com/bytedance/deer-flow/blob/585abb979fbc483485c0fc53ed0e571ab7eebadb/scripts/pnpm.py",
+          "excerpt": "#!/usr/bin/env python3\n\"\"\"Run the frontend's pinned pnpm version directly or through Corepack.\"\"\"\n\nfrom __future__ import annotations\n\nimport json\nimport os\nimport re\nimport shutil\nimport subprocess\nimport sys\nfrom collections.abc import Sequence\nfrom pathlib import Path\n\nFRONTEND_DIR = Path(__file__).resolve().parent.parent / \"frontend\"\nCOREPACK_NOTICE = \"Using pnpm via Corepack.\"\nPACKAGE_JSON_PATH = FRONTEND_DIR / \"package.json\"\n\n\ndef find_corepack_command() -> list[str] | None:\n    corepack_names = (\"corepack.cmd\", \"corepack\") if os.name == \"nt\" else (\"corepack\", \"corepack.cmd\")\n    for nam",
+          "policy_excerpts": []
+        },
+        "backend/tests/test_file_io.py": {
+          "sha256": "5f63c36e11b0a780f78e9d6de2a91ed2a3335fd12ae83d984b9b44a6c1f89e44",
+          "characters": 2168,
+          "file_type": "test",
+          "url": "https://github.com/bytedance/deer-flow/blob/585abb979fbc483485c0fc53ed0e571ab7eebadb/backend/tests/test_file_io.py",
+          "excerpt": "from __future__ import annotations\n\nimport asyncio\nimport contextvars\nimport threading\n\nimport pytest\n\nfrom deerflow.utils.file_io import run_file_io\n\n\n@pytest.mark.anyio\nasync def test_run_file_io_propagates_contextvars_to_worker() -> None:\n    marker: contextvars.ContextVar[str] = contextvars.ContextVar(\"marker\", default=\"missing\")\n    marker.set(\"owner-1\")\n\n    def read_marker() -> tuple[str, str]:\n        return marker.get(), threading.current_thread().name\n\n    value, thread_name = await run_file_io(read_marker)\n\n    assert value == \"owner-1\"\n    assert thread_name.startswith(\"file-io\")\n\n",
+          "policy_excerpts": []
+        },
+        "AGENTS.md": {
+          "sha256": "5c79601057d92b5f987f26a9cbdb942f4b2cc33ec5585167a3d6b5b31bf97738",
+          "characters": 5929,
+          "file_type": "documentation",
+          "url": "https://github.com/bytedance/deer-flow/blob/585abb979fbc483485c0fc53ed0e571ab7eebadb/AGENTS.md",
+          "excerpt": "# DeerFlow\n\nDeerFlow is an agent harness: a LangGraph-based backend with thread-isolated\nsandboxes, memory, subagents, skills and MCP tools, and a Next.js frontend. IM\nchannels connect through the Gateway. `CLAUDE.md` imports this file; edit\nguidance here, not in the shim.\n\n## How guidance is organized\n\nRules live in the `AGENTS.md` nearest to the code. Before you edit a directory,\nread every `AGENTS.md` from that directory up to this file. Some coding agents do\nnot load the nested files on their own.\n\n| Area | Guide |\n| --- | --- |\n| Backend: harness, Gateway, channels, tests | [backend/AGENT",
+          "policy_excerpts": [
+            "Humans start at [README.md](README.md), [CONTRIBUTING.md](CONTRIBUTING.md) and"
+          ]
+        },
+        ".github/ISSUE_TEMPLATE/config.yml": {
+          "sha256": "0212c9ec9a924d664f2069308b566953809e79e3a8089ae6733ebe17147ea28f",
+          "characters": 691,
+          "file_type": "configuration",
+          "url": "https://github.com/bytedance/deer-flow/blob/585abb979fbc483485c0fc53ed0e571ab7eebadb/.github/ISSUE_TEMPLATE/config.yml",
+          "excerpt": "blank_issues_enabled: false\ncontact_links:\n  - name: 💬 Questions & usage help\n    url: https://github.com/bytedance/deer-flow/discussions/categories/q-a\n    about: \"How do I use X? Why does Y behave like that? Ask in Discussions — it gets answered faster and stays searchable.\"\n  - name: 💡 Ideas & proposals\n    url: https://github.com/bytedance/deer-flow/discussions/categories/ideas\n    about: Have a half-formed idea? Float it in Discussions before opening a formal feature request.\n  - name: 🔒 Report a security vulnerability\n    url: https://github.com/bytedance/deer-flow/security/policy\n    ab",
+          "policy_excerpts": [
+            "    url: https://github.com/bytedance/deer-flow/discussions/categories/q-a",
+            "    about: \"How do I use X? Why does Y behave like that? Ask in Discussions — it gets answered faster and stays searchable.\"",
+            "    url: https://github.com/bytedance/deer-flow/discussions/categories/ideas",
+            "    about: Have a half-formed idea? Float it in Discussions before opening a formal feature request."
+          ]
+        },
+        ".github/pull_request_template.md": {
+          "sha256": "763b6adb881723aea3fa34ff4e3cd2a0cf6e06e0e65cfa26130ad5132acb4fd6",
+          "characters": 4051,
+          "file_type": "documentation",
+          "url": "https://github.com/bytedance/deer-flow/blob/585abb979fbc483485c0fc53ed0e571ab7eebadb/.github/pull_request_template.md",
+          "excerpt": "<!-- Reference a related issue with #123. Use Fixes / Closes / Resolves to\n     auto-close it on merge. Delete this line if the PR doesn't reference an issue. -->\nFixes #\n\n## Why\n\n<!-- Why are you opening this PR? Cover two things:\n       - The trigger — what made you write this? A bug you hit, a feature you need,\n         tech debt, or a prod issue?\n       - The pain being addressed — user-facing problem, or what it unblocks.\n     For non-trivial features, please open an issue/discussion first to align on\n     scope before writing code. -->\n\n\n## What changed\n\n<!-- Describe the change from a u",
+          "policy_excerpts": [
+            "     For non-trivial features, please open an issue/discussion first to align on",
+            "  - Prompt-layer self-check: for every data source in the new text, what is its trust level, and which channel should it ride? Model-supplied or user-influenceable values belong on the untrusted, sanitized data channel (e.g. the task `HumanMessage`) — never interpolated into framework-owned system text, even neutralized."
+          ]
+        },
+        "CONTRIBUTING.md": {
+          "sha256": "2840a4e88759a6021e6d29eb44639256eaf233c5d3be650107058c75fc8893b0",
+          "characters": 19619,
+          "file_type": "documentation",
+          "url": "https://github.com/bytedance/deer-flow/blob/585abb979fbc483485c0fc53ed0e571ab7eebadb/CONTRIBUTING.md",
+          "excerpt": "# Contributing to DeerFlow\n\nThank you for your interest in contributing to DeerFlow! This guide will help you set up your development environment and understand our development workflow.\n\n## Development Environment Setup\n\nWe offer two development environments. **Docker is recommended** for the most consistent and hassle-free experience.\n\n### Option 1: Docker Development (Recommended)\n\nDocker provides a consistent, isolated environment with all dependencies pre-configured. No need to install Node.js, Python, or nginx on your local machine.\n\n#### Prerequisites\n\n- Docker Desktop or Docker Engine\n",
+          "policy_excerpts": [
+            "# Contributing to DeerFlow",
+            "Thank you for your interest in contributing to DeerFlow! This guide will help you set up your development environment and understand our development workflow.",
+            "   - Frontend changes are automatically reloaded",
+            "   - Backend changes trigger automatic restart",
+            "   - All API requests are automatically proxied through nginx",
+            "DeerFlow is an AI project and we welcome AI-assisted contributions. To help",
+            "- a confirmation that a human has read, understands, and takes responsibility",
+            "contributed routes) live in `backend/tests/test_extension_host_contracts.py` so",
+            "- Ask questions in [Discussions](https://github.com/bytedance/deer-flow/discussions)",
+            "By contributing to DeerFlow, you agree that your contributions will be licensed under the [MIT License](./LICENSE)."
+          ]
+        },
+        "LICENSE": {
+          "sha256": "b23dff4d4bac8d17b6efaaa7e88c2b730149c4dda45699ce676b719cfdffe7e1",
+          "characters": 1134,
+          "file_type": "configuration",
+          "url": "https://github.com/bytedance/deer-flow/blob/585abb979fbc483485c0fc53ed0e571ab7eebadb/LICENSE",
+          "excerpt": "MIT License\n\nCopyright (c) 2025 Bytedance Ltd. and/or its affiliates\nCopyright (c) 2025-2026 DeerFlow Authors\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice s",
+          "policy_excerpts": []
+        },
+        "README.md": {
+          "sha256": "c3fd49e14561d8b3599b90d285f6ff899b2f1149f567fa7f8cf0f5217709922b",
+          "characters": 11208,
+          "file_type": "documentation",
+          "url": "https://github.com/bytedance/deer-flow/blob/585abb979fbc483485c0fc53ed0e571ab7eebadb/README.md",
+          "excerpt": "English | [中文](README_zh.md) | [日本語](README_ja.md) | [Français](README_fr.md) | [Русский](README_ru.md) | [Português](README_pt.md) | [한국어](README_ko.md)\n\n[![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](backend/pyproject.toml)\n[![Node.js](https://img.shields.io/badge/Node.js-22%2B-339933?logo=node.js&logoColor=white)](Makefile)\n[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)\n\n<a href=\"https://trendshift.io/repositories/14699\" target=\"_blank\"><img src=\"https://trendshift.io/api/badge/repositories/14699\" alt=\"bytedance%2",
+          "policy_excerpts": [
+            "> **DeerFlow 2.0 is a ground-up rewrite.** It shares no code with v1. If you're looking for the original Deep Research framework, it's maintained on the [`1.x` branch](https://github.com/bytedance/deer-flow/tree/main-1.x) — contributions there are still welcome. Active development has moved to 2.0.",
+            "DeerFlow started as a Deep Research framework — and the community ran with it. Since launch, developers have pushed it far beyond research: building data pipelines, generating slide decks, spinning up dashboards, automating content workflows. Things we never anticipated.",
+            "- [Contributing Guide](CONTRIBUTING.md) - Development environment, workflow and tests",
+            "## Contributing",
+            "We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, workflow, and guidelines.",
+            "DeerFlow is built upon the incredible work of the open-source community. We are deeply grateful to all the projects and contributors whose efforts have made DeerFlow possible. Truly, we stand on the shoulders of giants.",
+            "We would like to extend our sincere appreciation to the following projects for their invaluable contributions:",
+            "### Key Contributors"
+          ]
+        },
+        "SECURITY.md": {
+          "sha256": "d16d97c5e98a92a77c3ff9e89e542d0e38d2c03df3ddeb5841ee261495b6c353",
+          "characters": 398,
+          "file_type": "documentation",
+          "url": "https://github.com/bytedance/deer-flow/blob/585abb979fbc483485c0fc53ed0e571ab7eebadb/SECURITY.md",
+          "excerpt": "# Security Policy\n\n## Supported Versions\n\nAs deer-flow doesn't provide an official release yet, please use the latest version to receive security updates.\nCurrently, we have two branches to maintain:\n* main branch for deer-flow 2.x\n* main-1.x branch for deer-flow 1.x\n\n## Reporting a Vulnerability\n\nPlease go to https://github.com/bytedance/deer-flow/security to report the vulnerability you find.\n",
+          "policy_excerpts": []
+        }
+      }
+    },
+    {
+      "repo": "agentscope-ai/agentscope",
+      "url": "https://github.com/agentscope-ai/agentscope",
+      "checked_at": "2026-11-19T07:16:22.316771+00:00",
+      "status": "research_only",
+      "category": "agents_workflows",
+      "research_allowed": true,
+      "automatic_contribution": true,
+      "policy": {
+        "automation": "unconfirmed",
+        "issue_submission": "unconfirmed",
+        "pr_submission": "allowlisted",
+        "scope": "bounded root and discovered guide inspection",
+        "contribution_allowlisted": true,
+        "decision": "Existing contribution allowlist still requires live health, task policy and publication gates; catalog never authorizes publication"
+      },
+      "reason": "Pinned public source/test/documentation verified; allowlisted for automated contribution pending live gates",
+      "canonical": "agentscope-ai/agentscope",
+      "default_branch": "main",
+      "pushed_at": "2026-11-19T03:05:12Z",
+      "updated_at": "2026-11-19T07:15:11Z",
+      "archived": false,
+      "disabled": false,
+      "private": false,
+      "license": "Apache-2.0",
+      "contributing_url": "repos/agentscope-ai/agentscope/contents/CONTRIBUTING.md",
+      "sha": "bea42ba815ddc1bc0a74792762fb319be515e384",
+      "inventory": {
+        "source": {
+          "count": 816,
+          "examples": [
+            ".github/scripts/update_news.py",
+            "examples/a2a/client.py",
+            "examples/a2a/server.py",
+            "examples/agent_service/main.py",
+            "examples/console/main.py",
+            "examples/long_term_memory/agentic_memory/main.py",
+            "examples/long_term_memory/mem0/oss_demo.py",
+            "examples/long_term_memory/reme/reme_demo.py",
+            "examples/pipeline/goal/goal_pipeline.py",
+            "examples/rag/index_and_search.py"
+          ]
+        },
+        "test": {
+          "count": 244,
+          "examples": [
+            "scripts/model_examples/run_tests.py",
+            "tests/_daytona_live_utils.py",
+            "tests/a2a_agent_e2e_test.py",
+            "tests/a2a_agent_test.py",
+            "tests/agent_basic_test.py",
+            "tests/agent_config_grouping_test.py",
+            "tests/agent_content_block_test.py",
+            "tests/agent_injection_test.py",
+            "tests/agent_interrupt_test.py",
+            "tests/agent_structured_output_test.py"
+          ]
+        },
+        "documentation": {
+          "count": 24,
+          "examples": [
+            ".gemini/styleguide.md",
+            ".github/PULL_REQUEST_TEMPLATE.md",
+            ".github/copilot-instructions.md",
+            "CONTRIBUTING.md",
+            "CONTRIBUTING_zh.md",
+            "README.md",
+            "README_zh.md",
+            "docs/NEWS.md",
+            "docs/NEWS_zh.md",
+            "docs/changelog.md"
+          ]
+        }
+      },
+      "files": {
+        "scripts/claim_intent.py": {
+          "sha256": "a35fb5365d7689333ffb82135ed8e6279f0f01d551c806995cf4d604821641b1",
+          "characters": 3852,
+          "file_type": "source",
+          "url": "https://github.com/agentscope-ai/agentscope/blob/bea42ba815ddc1bc0a74792762fb319be515e384/scripts/claim_intent.py",
+          "excerpt": "# -*- coding: utf-8 -*-\n\"\"\"Decide whether an issue comment is asking to take the issue on.\n\nA regex prefilter in the workflow has already discarded the comments that\nplainly say nothing of the sort, and an exact ``/assign`` never reaches here.\nWhat is left is natural language that mentions claiming without being a\nclaim — \"is anyone working on this?\", \"@x said they would take it\" — which is\nthe distinction this asks a model to make.\n\nPrints JSON to stdout. Reads the comment from a file, never an argument, so a\nhostile comment cannot reach a shell.\n\"\"\"\nimport argparse\nimport asyncio\nimport json",
+          "policy_excerpts": [
+            "A regex prefilter in the workflow has already discarded the comments that",
+            "- reporting that they already opened a pull request"
+          ]
+        },
+        "tests/event_test.py": {
+          "sha256": "9c94db2ad532d1662a5f29f046e25766f073ef3b83cac56b58d02d3c1fc1625c",
+          "characters": 2814,
+          "file_type": "test",
+          "url": "https://github.com/agentscope-ai/agentscope/blob/bea42ba815ddc1bc0a74792762fb319be515e384/tests/event_test.py",
+          "excerpt": "# -*- coding: utf-8 -*-\n\"\"\"Event test\"\"\"\nfrom unittest.async_case import IsolatedAsyncioTestCase\n\nfrom pydantic import ValidationError\n\nfrom utils import AnyString\nfrom agentscope.event import ReplyStartEvent, ToolResultDataDeltaEvent\n\n\nclass EventTest(IsolatedAsyncioTestCase):\n    \"\"\"The event test case.\"\"\"\n\n    async def asyncSetUp(self) -> None:\n        \"\"\"The async setup method.\"\"\"\n\n    async def test_model_dump(self) -> None:\n        \"\"\"Test model dump.\"\"\"\n        event = ReplyStartEvent(\n            session_id=\"test_session\",\n            reply_id=\"test_reply\",\n            name=\"Friday\",\n",
+          "policy_excerpts": []
+        },
+        "README.md": {
+          "sha256": "da3142131c2e1d7c564ee67b35e1a10aba391def43c696aa24d67c925307029b",
+          "characters": 14657,
+          "file_type": "documentation",
+          "url": "https://github.com/agentscope-ai/agentscope/blob/bea42ba815ddc1bc0a74792762fb319be515e384/README.md",
+          "excerpt": "<p align=\"center\">\n  <img\n    src=\"https://img.alicdn.com/imgextra/i1/O1CN01nTg6w21NqT5qFKH1u_!!6000000001621-55-tps-550-550.svg\"\n    alt=\"AgentScope Logo\"\n    width=\"200\"\n  />\n</p>\n\n<span align=\"center\">\n\n[**中文主页**](https://github.com/agentscope-ai/agentscope/blob/main/README_zh.md) | [**Documentation**](https://docs.agentscope.io/) | [**Roadmap**](https://github.com/orgs/agentscope-ai/projects/2/views/1)\n\n</span>\n\n<p align=\"center\">\n    <a href=\"https://arxiv.org/abs/2402.14034\">\n        <img\n            src=\"https://img.shields.io/badge/cs.MA-2402.14034-B31C1C?logo=arxiv&logoColor=B31C1C\"\n ",
+          "policy_excerpts": [
+            "AgentScope 2.0 is a production-ready, easy-to-use agent framework with essential abstractions that keep up with rising model capability.",
+            "| [**Context**](https://docs.agentscope.io/latest/en/building-blocks/context/overview) | Automatic compaction, tool-result offload, and context injection (system prompt, RAG, memory) via built-in middleware |",
+            "## Contributing",
+            "We welcome contributions from the community! Please refer to our [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines",
+            "on how to contribute.",
+            "## Contributors",
+            "All thanks to our contributors:",
+            "<a href=\"https://github.com/agentscope-ai/agentscope/graphs/contributors\">"
+          ]
+        },
+        ".github/ISSUE_TEMPLATE/config.yml": {
+          "sha256": "0de5df3a164419a7a7261baa09ec1d2af3ec7399cd2b63e534b2ec62f174a88a",
+          "characters": 496,
+          "file_type": "configuration",
+          "url": "https://github.com/agentscope-ai/agentscope/blob/bea42ba815ddc1bc0a74792762fb319be515e384/.github/ISSUE_TEMPLATE/config.yml",
+          "excerpt": "blank_issues_enabled: false\ncontact_links:\n  - name: Feature Request / Idea\n    url: https://github.com/agentscope-ai/agentscope/discussions/new?category=ideas\n    about: Suggest a new feature or share an idea. Maintainers will turn accepted proposals into roadmap issues.\n  - name: Question / Usage Help\n    url: https://github.com/agentscope-ai/agentscope/discussions/new?category=general\n    about: Ask a usage question or start a general discussion. Please do NOT open an issue for questions.",
+          "policy_excerpts": [
+            "    url: https://github.com/agentscope-ai/agentscope/discussions/new?category=ideas",
+            "    url: https://github.com/agentscope-ai/agentscope/discussions/new?category=general",
+            "    about: Ask a usage question or start a general discussion. Please do NOT open an issue for questions."
+          ]
+        },
+        ".github/PULL_REQUEST_TEMPLATE.md": {
+          "sha256": "8bba3bfef05bbb7b121cc6b1a609e9f70fb51ec003b85d12efacdba087b1614d",
+          "characters": 1026,
+          "file_type": "documentation",
+          "url": "https://github.com/agentscope-ai/agentscope/blob/bea42ba815ddc1bc0a74792762fb319be515e384/.github/PULL_REQUEST_TEMPLATE.md",
+          "excerpt": "## PR Title Format\n\nPlease ensure your PR title follows the Conventional Commits format:\n- Format: `<type>(<scope>): <description>`\n- Example: `feat(memory): add redis cache support`\n- Allowed types: `feat`, `fix`, `docs`, `ci`, `refactor`, `test`, `chore`, `perf`, `style`, `build`, `revert`\n- Description should start with a lowercase letter\n\n## AgentScope Version\n\n[The version of AgentScope you are working on, e.g. `import agentscope; print(agentscope.__version__)`]\n\n## Description\n\n[Please describe the background, purpose, changes made, and how to test this PR]\n\n## Checklist\n\nPlease check th",
+          "policy_excerpts": [
+            "Please check the following items before code is ready to be reviewed.",
+            "- [ ]  I have read the [CONTRIBUTING.md](https://github.com/agentscope-ai/agentscope/blob/main/CONTRIBUTING.md)",
+            "- [ ]  Code is ready for review"
+          ]
+        },
+        "CONTRIBUTING.md": {
+          "sha256": "ecba3f2d0dfcaf59abad8b59f4d1f7f9ed99f6ed49656e1091b1acb351d8b029",
+          "characters": 17145,
+          "file_type": "documentation",
+          "url": "https://github.com/agentscope-ai/agentscope/blob/bea42ba815ddc1bc0a74792762fb319be515e384/CONTRIBUTING.md",
+          "excerpt": "# Contributing to AgentScope\n\n\nThank you for your interest in contributing to AgentScope!\n\nAs an open-source project, we warmly welcome and encourage\ncontributions from the community. Whether you're fixing bugs, adding new features, improving documentation, or sharing\nideas, your contributions help make AgentScope better for everyone.\n\n## 1. Development Roadmap and How to Get Involved\n\nTo support the long-term, healthy growth of AgentScope and its open-source\ncommunity, we keep our development plan transparent and openly tracked.\n\n**Our roadmap is public.** The AgentScope development plan is p",
+          "policy_excerpts": [
+            "# Contributing to AgentScope",
+            "Thank you for your interest in contributing to AgentScope!",
+            "contributions from the community. Whether you're fixing bugs, adding new features, improving documentation, or sharing",
+            "ideas, your contributions help make AgentScope better for everyone.",
+            "page/issues are contribution opportunities open to everyone. If one of these",
+            "**If you'd like to join the core development.** We warmly welcome contributors",
+            "gradually invite committed contributors into the core development circle.",
+            "- Core development involves frequent design discussions, code reviews, and",
+            "  contributors work within this collaborative process",
+            "respond and discuss it with you so we can find the best path forward together.",
+            "## 2. Responsible Use of AI in Contributions",
+            "AgentScope welcomes contributors who use AI coding assistants — Claude Code,"
+          ]
+        },
+        "LICENSE": {
+          "sha256": "4186bcadf358c60080060309769db6b2a352720d7353d827bb574c600fee9913",
+          "characters": 20637,
+          "file_type": "configuration",
+          "url": "https://github.com/agentscope-ai/agentscope/blob/bea42ba815ddc1bc0a74792762fb319be515e384/LICENSE",
+          "excerpt": "\n                                 Apache License\n                           Version 2.0, January 2004\n                        http://www.apache.org/licenses/\n\n   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION\n\n   1. Definitions.\n\n      \"License\" shall mean the terms and conditions for use, reproduction,\n      and distribution as defined by Sections 1 through 9 of this document.\n\n      \"Licensor\" shall mean the copyright owner or entity authorized by\n      the copyright owner that is granting the License.\n\n      \"Legal Entity\" shall mean the union of the acting entity and all\n    ",
+          "policy_excerpts": [
+            "      \"Contribution\" shall mean any work of authorship, including",
+            "      Licensor for the purpose of discussing and improving the Work, but",
+            "      designated in writing by the copyright owner as \"Not a Contribution.\"",
+            "      \"Contributor\" shall mean Licensor and any individual or Legal Entity",
+            "      on behalf of whom a Contribution has been received by Licensor and",
+            "      this License, each Contributor hereby grants to You a perpetual,",
+            "      this License, each Contributor hereby grants to You a perpetual,",
+            "      by such Contributor that are necessarily infringed by their",
+            "      Contribution(s) alone or by combination of their Contribution(s)",
+            "      with the Work to which such Contribution(s) was submitted. If You",
+            "      or a Contribution incorporated within the Work constitutes direct",
+            "      or contributory patent infringement, then any patent licenses"
+          ]
+        }
+      }
+    },
+    {
+      "repo": "XiaomiMiMo/MiMo-Code",
+      "url": "https://github.com/XiaomiMiMo/MiMo-Code",
+      "checked_at": "2026-11-19T07:16:22.318758+00:00",
+      "status": "research_only",
+      "category": "agents_workflows",
+      "research_allowed": true,
+      "automatic_contribution": true,
+      "policy": {
+        "automation": "unconfirmed",
+        "issue_submission": "unconfirmed",
+        "pr_submission": "allowlisted",
+        "scope": "bounded root and discovered guide inspection",
+        "contribution_allowlisted": true,
+        "decision": "Existing contribution allowlist still requires live health, task policy and publication gates; catalog never authorizes publication"
+      },
+      "reason": "Pinned public source/test/documentation verified; allowlisted for automated contribution pending live gates",
+      "canonical": "XiaomiMiMo/MiMo-Code",
+      "default_branch": "main",
+      "pushed_at": "2026-11-18T14:27:46Z",
+      "updated_at": "2026-11-19T05:23:11Z",
+      "archived": false,
+      "disabled": false,
+      "private": false,
+      "license": "MIT",
+      "contributing_url": "repos/XiaomiMiMo/MiMo-Code/contents/CONTRIBUTING.md",
+      "sha": "75e1ed0b3b6561796bdfeb36edcf091f9793f24d",
+      "inventory": {
+        "source": {
+          "count": 856,
+          "examples": [
+            ".agents/skills/drive-mimo/scripts/wait-for-text.sh",
+            "local-install.sh",
+            "packages/cli/launcher.js",
+            "packages/cli/mimo.js",
+            "packages/cli/parsers-config.ts",
+            "packages/cli/postinstall.mjs",
+            "packages/cli/script/build-node.ts",
+            "packages/cli/script/build.ts",
+            "packages/cli/script/dev.ts",
+            "packages/cli/script/generate.ts"
+          ]
+        },
+        "test": {
+          "count": 646,
+          "examples": [
+            "packages/cli/script/test-shard.ts",
+            "packages/cli/src/session/resume-test-hooks.ts",
+            "packages/cli/src/skill/builtin/.bundle/data-analytics/workflows/create-data-context/tests/test_state_helpers.py",
+            "packages/cli/test/account/repo.test.ts",
+            "packages/cli/test/account/service.test.ts",
+            "packages/cli/test/acp/agent-interface.test.ts",
+            "packages/cli/test/acp/event-subscription.test.ts",
+            "packages/cli/test/actor/abandon-question-bootstrap.test.ts",
+            "packages/cli/test/actor/cancel-cascade.test.ts",
+            "packages/cli/test/actor/cancel-notification.test.ts"
+          ]
+        },
+        "documentation": {
+          "count": 359,
+          "examples": [
+            ".agents/skills/drive-mimo/SKILL.md",
+            ".agents/skills/effect/SKILL.md",
+            ".github/pull_request_template.md",
+            "AGENTS.md",
+            "CONTRIBUTING.md",
+            "README.md",
+            "README.zh.md",
+            "README_npm.md",
+            "SECURITY.md",
+            "USE_RESTRICTIONS.md"
+          ]
+        }
+      },
+      "files": {
+        "local-install.sh": {
+          "sha256": "505ceb0a6191be47c5de81237d4e60ba4ebd88b5540bfab6f0f9015720276559",
+          "characters": 1680,
+          "file_type": "source",
+          "url": "https://github.com/XiaomiMiMo/MiMo-Code/blob/75e1ed0b3b6561796bdfeb36edcf091f9793f24d/local-install.sh",
+          "excerpt": "#!/usr/bin/env bash\n\nset -euo pipefail\n\nrepo_dir=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd)\"\npackage_dir=\"$repo_dir/packages/cli\"\ninstall_dir=\"${MIMOCODE_INSTALL_DIR:-$HOME/.mimocode/bin}\"\n\nif ! command -v bun >/dev/null 2>&1; then\n  echo \"bun is required but was not found in PATH\" >&2\n  exit 1\nfi\n\ncase \"$(uname -s)\" in\n  Darwin)\n    platform=\"darwin\"\n    ;;\n  Linux)\n    platform=\"linux\"\n    if ldd --version 2>&1 | grep -qi musl; then\n      echo \"musl-based Linux distributions such as Alpine are not supported\" >&2\n      exit 1\n    fi\n    ;;\n  *)\n    echo \"Unsupported operating system: $(un",
+          "policy_excerpts": []
+        },
+        "script/release.test.ts": {
+          "sha256": "de70a76f095b0c4685d5225d08d56a1f5bbb67fdc96e403b47b4c02dbcdd8689",
+          "characters": 6407,
+          "file_type": "test",
+          "url": "https://github.com/XiaomiMiMo/MiMo-Code/blob/75e1ed0b3b6561796bdfeb36edcf091f9793f24d/script/release.test.ts",
+          "excerpt": "import { describe, expect, test } from \"bun:test\"\nimport { $ } from \"bun\"\nimport path from \"path\"\nimport { mkdtemp, mkdir, rm } from \"node:fs/promises\"\nimport { tmpdir } from \"node:os\"\nimport { assertFdsCredentials, assertTarballs, npmPackages, packLibrary, stableVersion, verify } from \"./release\"\n\nconst root = path.resolve(import.meta.dir, \"..\")\nconst git = (cwd: string) => new $.Shell().cwd(cwd)\n\nasync function fixture(versions: Record<string, string>) {\n  const dir = await mkdtemp(path.join(tmpdir(), \"release-verify-\"))\n  await Promise.all(\n    Object.entries(versions).map(async ([name, ver",
+          "policy_excerpts": []
+        },
+        "AGENTS.md": {
+          "sha256": "392b62dab5c9e670a363b9f75e2623a63e7466bd73387e582c09a4bd44b38506",
+          "characters": 3809,
+          "file_type": "documentation",
+          "url": "https://github.com/XiaomiMiMo/MiMo-Code/blob/75e1ed0b3b6561796bdfeb36edcf091f9793f24d/AGENTS.md",
+          "excerpt": "# MiMo-Code\n\n## Conventions\n\n- Use MiMoCode Compose skills when available, otherwise use superpowers skill if installed.\n- To regenerate the JavaScript SDK, run `./packages/sdk/script/build.ts`.\n- ALWAYS USE PARALLEL TOOLS WHEN APPLICABLE.\n- The default branch in this repo is `main`.\n- CI triggers on `main`.\n- Prefer automation: execute requested actions without confirmation unless blocked by missing info or safety/irreversibility.\n- Install deps with `bun ci` (= `bun install --frozen-lockfile`) — install per `bun.lock`, don't mutate the lockfile. ⛔ Do NOT use `bun install`/`npm install`.\n- Co",
+          "policy_excerpts": [
+            "- Prefer automation: execute requested actions without confirmation unless blocked by missing info or safety/irreversibility.",
+            "- Do not edit `packages/cli/migration/*/migration.sql` that already shipped — engines have applied those journals; new schema changes get a **new** migration directory under `packages/cli/migration/`."
+          ]
+        },
+        ".github/ISSUE_TEMPLATE/config.yml": {
+          "sha256": "1f103c6a9dd07cd13a9a6f17ace6b813f47747eb9cb7e00488cb2073caaf91bb",
+          "characters": 28,
+          "file_type": "configuration",
+          "url": "https://github.com/XiaomiMiMo/MiMo-Code/blob/75e1ed0b3b6561796bdfeb36edcf091f9793f24d/.github/ISSUE_TEMPLATE/config.yml",
+          "excerpt": "blank_issues_enabled: false\n",
+          "policy_excerpts": []
+        },
+        ".github/pull_request_template.md": {
+          "sha256": "a45194a63ce95898c6705a19feb4571c257caaed9ed79d7f274451c3c285f8ba",
+          "characters": 837,
+          "file_type": "documentation",
+          "url": "https://github.com/XiaomiMiMo/MiMo-Code/blob/75e1ed0b3b6561796bdfeb36edcf091f9793f24d/.github/pull_request_template.md",
+          "excerpt": "### Issue / context (if applicable)\n\n<!--\nLink any relevant issue or discussion. For an external contribution that introduces a new feature or significant design change, include the issue where the direction was agreed. Use `Fixes #123` or `Closes #123` only when this PR fully resolves that issue.\n-->\n\n### Type of change\n\nBug fix / New feature / Refactor / Documentation — keep the ones that apply and delete the rest.\n\n### What does this PR do?\n\nBriefly describe the problem, what changed, and why this approach works.\n\n### How did you verify your code works?\n\nWhat did you test, and how can a rev",
+          "policy_excerpts": [
+            "Link any relevant issue or discussion. For an external contribution that introduces a new feature or significant design change, include the issue where the direction was agreed. Use `Fixes #123` or `Closes #123` only when this PR fully resolves that issue."
+          ]
+        },
+        "CONTRIBUTING.md": {
+          "sha256": "374ca7e54f4d226c7ccb5c3607c1b15dc40145737dff7e471dffcda934a6f382",
+          "characters": 8013,
+          "file_type": "documentation",
+          "url": "https://github.com/XiaomiMiMo/MiMo-Code/blob/75e1ed0b3b6561796bdfeb36edcf091f9793f24d/CONTRIBUTING.md",
+          "excerpt": "# Contributing to MiMoCode\n\nMiMoCode's codebase moves quickly. Outside contributions are welcome, especially focused improvements to the terminal experience and developer compatibility.\n\n## What we accept\n\nGood contributions include:\n\n- Bug fixes with a clear reproduction\n- TUI usability, accessibility, performance, and compatibility improvements\n- LSP, formatter, model, and provider compatibility fixes\n- Environment-specific quirks (terminal, OS, shell, locale compatibility)\n- Documentation fixes and corrections\n\nPlease discuss these in an issue before writing code:\n\n- New features, new comma",
+          "policy_excerpts": [
+            "# Contributing to MiMoCode",
+            "MiMoCode's codebase moves quickly. Outside contributions are welcome, especially focused improvements to the terminal experience and developer compatibility.",
+            "Good contributions include:",
+            "Please discuss these in an issue before writing code:",
+            "Want to work on an existing issue? Leave a comment first so we can tell you if it is already being worked on.",
+            "Release one version at a time: runs share one concurrency group, and GitHub keeps only one pending run in it. If a publish step fails, fix the cause and use **Re-run failed jobs**; steps that already landed are skipped. If the original run is gone, start the workflow manually with **Use workflow from** set to the tag. Never retag a version that has published anything — ship a new patch instead.",
+            "Repository setup: secrets `MIMO_FDS_AK` / `MIMO_FDS_SK` (optional variables `MIMO_FDS_ENDPOINT`, `MIMO_FDS_BUCKET`, `MIMO_FDS_PREFIX`). npm uses trusted publishing, so there is no npm token. Register `release.yml` as the trusted publisher of every published `@mimo-ai/*` package once: run `npm login` as a package owner (a 2FA session; tokens cannot change package settings), then `bun script/release.ts trust`. It skips packages that are already configured.",
+            "- Long AI-generated PR descriptions are not acceptable and may be ignored. If you cannot explain the change briefly, it is probably too large.",
+            "docs: update contributing guidelines",
+            "A feature request is a place to discuss an idea, not a commitment that the project will adopt it. For significant features and design changes, wait for a maintainer to confirm the direction before opening a PR."
+          ]
+        },
+        "LICENSE": {
+          "sha256": "d7201a5532f4ce12324aec5469dc1dfe290654d085c2547bc7384932881ac448",
+          "characters": 1114,
+          "file_type": "configuration",
+          "url": "https://github.com/XiaomiMiMo/MiMo-Code/blob/75e1ed0b3b6561796bdfeb36edcf091f9793f24d/LICENSE",
+          "excerpt": "MIT License\n\nCopyright (c) 2026 MiMo Code, Xiaomi Corporation\nCopyright (c) 2025 opencode\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in ",
+          "policy_excerpts": []
+        },
+        "README.md": {
+          "sha256": "60baed28e8dd35b0dfef1a8aabfb804da7df11d181f9749acad7e95dbc31b278",
+          "characters": 29034,
+          "file_type": "documentation",
+          "url": "https://github.com/XiaomiMiMo/MiMo-Code/blob/75e1ed0b3b6561796bdfeb36edcf091f9793f24d/README.md",
+          "excerpt": "<h1 align=\"center\">MiMoCode</h1>\n\n<p align=\"center\">\n  <img src=\"assets/readme/mimocode-banner.png\" alt=\"MiMoCode\" width=\"700\">\n</p>\n\n<p align=\"center\"><strong>MiMo Code: Where Models and Agents Co-Evolve</strong></p>\n\n<p align=\"center\">\n  <a href=\"README.zh.md\">中文</a> | English\n</p>\n\n<p align=\"center\">\n  <a href=\"https://mimo.xiaomi.com/coder\">Website</a> | <a href=\"https://mimo.xiaomi.com/en/blog/mimo-code-long-horizon\">Blog</a>\n</p>\n\n---\n\nMiMoCode is a terminal-native AI coding assistant. It can read and write code, run commands, manage Git, and use a persistent memory system to keep a deep",
+          "policy_excerpts": [
+            "The first launch guides you through configuration automatically. Supported options:",
+            "**[awesome-mimo-agent](https://github.com/XiaomiMiMo/awesome-mimo-agent)** collects setup guides for using MiMo in those tools — worth a look if you want to try MiMo elsewhere. Contributions welcome: open a PR to add your own setup.",
+            "- **Session checkpoint** (`checkpoint.md`) — structured state snapshots maintained automatically by the checkpoint-writer subagent",
+            "Memory is injected automatically when a session resumes, so the agent does not need to relearn project context.",
+            "- **Automatic checkpoints** — decides when to save session state based on the model context window",
+            "A tree-shaped task system (`T1`, `T1.1`, `T1.2`, …) that integrates automatically with the checkpoint system, so task progress is preserved when sessions resume.",
+            "Workflows are deterministic JavaScript scripts that orchestrate multiple agents in a sandboxed runtime. Unlike agent conversations, workflows encode fixed phase sequences with bounded retries and automatic parallelization — fire-and-forget execution with no user interaction required.",
+            "Skills are reusable instruction sets that teach agents how to handle specific tasks (e.g. generating PDFs, writing academic papers, searching arXiv). For a new task, MiMoCode searches available skills by exact name, localized alias, and BM25 relevance. High-confidence matches are loaded automatically; uncertain matches are ranked for the agent to assess. In the TUI, type `/` to browse the autocomplete list or invoke a skill directly with `/<skill-name>` — mentioning two or more skills in a single message auto-loads them and injects a multi-skill orchestration plan.",
+            "| `playwright` | Automate a real browser from the terminal — navigation, form filling, snapshots, screenshots, data extraction, and UI-flow debugging |"
+          ]
+        },
+        "SECURITY.md": {
+          "sha256": "01a365933f5304e9c002bac04ec238a15e90d6e094b45d8351961c0edb208550",
+          "characters": 5032,
+          "file_type": "documentation",
+          "url": "https://github.com/XiaomiMiMo/MiMo-Code/blob/75e1ed0b3b6561796bdfeb36edcf091f9793f24d/SECURITY.md",
+          "excerpt": "# Security\n\n## Threat Model\n\n### Overview\n\nMiMoCode is an AI coding assistant that runs locally and can use powerful tools, including shell execution, file operations, and network access.\n\n### No Sandbox\n\nMiMoCode does **not** treat its permission system as a security sandbox. Permissions help users review and control actions, but they are not an isolation boundary.\n\nIf you need isolation, run MiMoCode in a disposable container, virtual machine, or similarly restricted environment. Review project instructions and third-party tool or MCP server configuration before allowing them to execute.\n\n##",
+          "policy_excerpts": [
+            "`mimo run` is a headless mode intended for automation, such as CI pipelines and scripts, and is not recommended for everyday personal use; use the interactive TUI instead. Because it cannot prompt, it also resolves permission requests without asking:",
+            "- Requests that would normally ask for approval are automatically rejected, but actions already allowed by your permission rules still run.",
+            "- With `--dangerously-skip-permissions`, every request that is not explicitly denied is automatically approved, without the warning the TUI shows at startup.",
+            "Do not report a suspected vulnerability in a public GitHub issue, discussion, or pull request.",
+            "Use GitHub's private [vulnerability reporting form](https://github.com/XiaomiMiMo/MiMo-Code/security/advisories/new). This keeps the report and subsequent discussion private between the reporter and the repository maintainers.",
+            "Reports must describe a concrete, reproducible security impact. Automated scanner output or model-generated speculation without validation may not receive a response."
           ]
         }
       }

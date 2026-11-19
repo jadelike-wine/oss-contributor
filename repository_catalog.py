@@ -49,7 +49,8 @@ cline/cline Kilo-Org/kilocode continuedev/continue Aider-AI/aider earendil-works
 OpenHands/OpenHands SWE-agent/SWE-agent aaif-goose/goose langchain-ai/langgraph mastra-ai/mastra
 pydantic/pydantic-ai crewAIInc/crewAI agno-agi/agno microsoft/semantic-kernel
 modelcontextprotocol/typescript-sdk ComposioHQ/composio browser-use/browser-use
-triggerdotdev/trigger.dev inngest/inngest n8n-io/n8n activepieces/activepieces'''.split(),
+triggerdotdev/trigger.dev inngest/inngest n8n-io/n8n activepieces/activepieces
+bytedance/deer-flow agentscope-ai/agentscope XiaomiMiMo/MiMo-Code'''.split(),
     'applications_and_tools': '''iib0011/omni-tools opengeos/GeoLibre HeyPuter/puter
 floatpane/matcha xtool-org/xtool debpalash/VoiceStudio DuarteSantos8/openGym
 pbakaus/impeccable NVIDIA/OpenShell'''.split(),

@@ -643,6 +643,12 @@ class Pipeline:
             except (OSError, ValueError):
                 previous = {}
             ttl = 0 if force else self.config.get('scanning', {}).get('cache_seconds', 0)
+            from source_discovery import deep_scan_repos
+            deep_repos = deep_scan_repos(self.config, self.merged_repositories())
+            deep_ttl = self.config.get('research', {}).get('deep_scan', {}).get('scan_cache_seconds', ttl)
+            if type(deep_ttl) is not int or not 0 <= deep_ttl <= 86400 * 30:
+                raise ValueError('research.deep_scan.scan_cache_seconds must be 0..2592000')
+            repo_ttl = lambda repo: deep_ttl if repo.casefold() in deep_repos else ttl
             cursor = self.db.execute("SELECT last_repo FROM scheduler WHERE name='scan'").fetchone()
             if cursor and cursor['last_repo'] in repos:
                 start = repos.index(cursor['last_repo']) + 1
@@ -663,7 +669,7 @@ class Pipeline:
                     record.update(previous_records.get(record['repo'], {}))
                     record['requested'] = False
                     continue
-                cached = reusable_scan_record(previous, record['repo'], now(), ttl, self.config['scan_limit'])
+                cached = reusable_scan_record(previous, record['repo'], now(), repo_ttl(record['repo']), self.config['scan_limit'])
                 if cached:
                     record.update(cached)
                 elif previous_records.get(record['repo'], {}).get('status') == 'unknown':
@@ -698,6 +704,10 @@ class Pipeline:
             merged = self.merged_repositories()
             if merged:
                 summary['repositories'].sort(key=lambda record: record['repo'].casefold() not in merged)
+            # Deep-scan repositories always lead the order: they are the
+            # operators' priority targets and get the shorter cache TTL below.
+            if deep_repos:
+                summary['repositories'].sort(key=lambda record: record['repo'].casefold() not in deep_repos)
             save(summary_path, summary)
             print(f'scan scope: {scope} ({len(repos)} repositories)', file=sys.stderr)
             try:
@@ -712,7 +722,7 @@ class Pipeline:
                             continue
                         if record.get('retry_exhausted') and recovery_probes >= probe_limit:
                             continue
-                    cached = reusable_scan_record(previous, repo, now(), ttl, self.config['scan_limit'])
+                    cached = reusable_scan_record(previous, repo, now(), repo_ttl(repo), self.config['scan_limit'])
                     if cached:
                         record.update(cached)
                         save(summary_path, summary)

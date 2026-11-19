@@ -368,6 +368,53 @@ class SourceDiscoveryTests(unittest.TestCase):
         self.assertEqual('READY_TO_IMPLEMENT', self.p.db.execute(
             'SELECT queue FROM research_candidates WHERE task=?', (key,)).fetchone()[0])
 
+    def test_deep_tier_widens_scope_and_registers_multiple_modules_per_repo(self):
+        from source_discovery import deep_scan_repos, scope_limits
+        self.assertEqual({'files': 6, 'rules': 6, 'characters': 12000,
+                          'policy_characters': 60000, 'paths': 50000},
+                         {k: scope_limits(self.p.config, 'owner/repo')[k]
+                          for k in ('files', 'rules', 'characters', 'policy_characters', 'paths')})
+        self.p.config.setdefault('research', {})['deep_scan'] = {
+            'repositories': ['owner/repo'], 'files_per_scope': 5,
+            'file_characters': 30000, 'scopes_per_repo_per_run': 2,
+            'hotspot_commits': 50, 'context_characters': 480000}
+        self.assertIn('owner/repo', deep_scan_repos(self.p.config))
+        limits = scope_limits(self.p.config, 'owner/repo')
+        self.assertEqual(5, limits['files'])
+        self.assertEqual(30000, limits['characters'])
+        # A local dependency pulled into the widened scope.
+        (self.base / 'helper.py').write_text('HELPER = True\n')
+        (self.base / 'reader.py').write_text('from .helper import HELPER\nREAD = HELPER\n')
+        (self.base / 'tests/test_reader.py').write_text('from reader import READ\nassert READ\n')
+        self.commit(self.base)
+        limits_arg = dict(limits)
+        packet = collect_scope(self.p, self.records[0], after='reader.py', limits=limits_arg)
+        self.assertLessEqual(len(packet['target']['files']) - len(packet['policy']), 5)
+        reader_packet = collect_scope(self.p, self.records[0], after='', limits=limits_arg)
+        if 'reader.py' in reader_packet['target']['files']:
+            self.assertIn('helper.py', reader_packet['target']['files'])
+        from source_discovery import local_imports
+        self.assertEqual(['helper.py'], local_imports(
+            'from .helper import HELPER\n', 'reader.py', {'helper.py'}))
+        # Deep repos may register scopes_per_repo_per_run modules per run.
+        keys = register_scopes(self.engine, 4)
+        owner_keys = [k for k in keys if self.p.task(k)['repo'] == 'owner/repo']
+        self.assertEqual(2, len(owner_keys))
+        modules = {self.p.task(k)['payload'] for k in owner_keys}
+        self.assertEqual(2, len(modules))
+        for key in owner_keys:
+            load_packet(self.p, self.p.task(key))  # Deep scope validates on load.
+
+    def test_deep_limit_outside_ceiling_fails_closed(self):
+        from source_discovery import scope_limits
+        self.p.config.setdefault('research', {})['deep_scan'] = {
+            'repositories': ['owner/repo'], 'files_per_scope': 99}
+        with self.assertRaisesRegex(ValueError, 'files_per_scope'):
+            scope_limits(self.p.config, 'owner/repo')
+        self.p.config['research']['deep_scan']['files_per_scope'] = 'wide'
+        with self.assertRaisesRegex(ValueError, 'files_per_scope'):
+            scope_limits(self.p.config, 'owner/repo')
+
     def test_local_network_cap_checkpoints_without_reclassifying_global_budget(self):
         from telemetry import ACTIVE
         key = self.p.hunt('owner/repo', 'source scope fixture')

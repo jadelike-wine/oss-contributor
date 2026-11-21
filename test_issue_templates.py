@@ -64,6 +64,32 @@ body:
       label: Description
 '''
 
+MIMO_YML = '''name: Bug report
+description: Report an issue that should be fixed
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating System
+'''
+
+MIMO_BLOCK_YML = '''name: Bug report
+labels:
+  - bug
+  - "help wanted"
+body:
+  - type: textarea
+    attributes:
+      label: Description
+'''
+
 
 def engine_with(work):
     e = Autonomous.__new__(Autonomous)
@@ -131,6 +157,96 @@ class TestIssueTemplate(unittest.TestCase):
             self.assertIn('### Is there an existing issue?', t['required_headings'])
             self.assertTrue(e.issue_title_compliant(e.p.task('x'), '[Bug]: broken thing'))
             self.assertFalse(e.issue_title_compliant(e.p.task('x'), 'broken thing'))
+
+    def test_template_labels_inline(self):
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td)
+            write_template(work, 'bug-report.yml', MIMO_YML)
+            e = engine_with(work)
+            t = e.issue_template(e.p.task('x'))
+            self.assertEqual(t['labels'], ['bug'])
+
+    def test_template_labels_block(self):
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td)
+            write_template(work, 'bug-report.yml', MIMO_BLOCK_YML)
+            e = engine_with(work)
+            t = e.issue_template(e.p.task('x'))
+            self.assertEqual(t['labels'], ['bug', 'help wanted'])
+
+    def test_template_labels_absent(self):
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td)
+            write_template(work, 'BUG_REPORT.yaml', CARBON_YML)
+            e = engine_with(work)
+            t = e.issue_template(e.p.task('x'))
+            self.assertEqual(t['labels'], [])
+
+    def test_template_labels_parsing_edge_cases(self):
+        self.assertEqual(Autonomous._template_labels('labels: []'), [])
+        self.assertEqual(Autonomous._template_labels('labels: bug'), ['bug'])
+        self.assertEqual(Autonomous._template_labels('labels: [bug, "help wanted"]'), ['bug', 'help wanted'])
+        self.assertEqual(Autonomous._template_labels('labels:\n  - bug\nbody:\n  - type: input'), ['bug'])
+        self.assertEqual(Autonomous._template_labels('name: x\nbody:\n  - type: input'), [])
+
+    def _issue_engine(self, work):
+        e = Autonomous.__new__(Autonomous)
+        e.p = MagicMock()
+        e.p.config = {}
+        e.p.allow_external_writes = True
+        e.p.task.return_value = {'workspace': str(work), 'repo': 'o/r'}
+        e.issue_body = lambda task_id, data: '### Description\n\nx\n'
+        e.sanitize_title = lambda task, title, kind, data=None: title
+        e.packet_dir = lambda task_id: work
+        e.store = lambda task_id, data: None
+        e.register_issue = lambda task_id, data, issue: issue
+        return e
+
+    def test_create_issue_applies_template_labels(self):
+        import autonomous
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td)
+            write_template(work, 'bug-report.yml', MIMO_YML)
+            e = self._issue_engine(work)
+            calls = []
+
+            def fake_command(args, **kw):
+                calls.append(list(args))
+                return 'https://github.com/o/r/issues/1' if 'create' in args else ''
+
+            orig = autonomous.command
+            autonomous.command = fake_command
+            try:
+                e.create_issue('t1', {'plan': {'title': 'broken thing'}})
+            finally:
+                autonomous.command = orig
+            create = [c for c in calls if 'create' in c][0]
+            edit = [c for c in calls if 'edit' in c][0]
+            # Labels are applied after creation, never as part of `issue create`.
+            self.assertNotIn('--label', create)
+            self.assertEqual(edit[edit.index('--add-label') + 1], 'bug')
+
+    def test_create_issue_survives_label_permission_failure(self):
+        import autonomous
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td)
+            write_template(work, 'bug-report.yml', MIMO_YML)
+            e = self._issue_engine(work)
+            data = {'plan': {'title': 'broken thing'}}
+
+            def fake_command(args, **kw):
+                if 'create' in args:
+                    return 'https://github.com/o/r/issues/2'
+                raise RuntimeError('jadelike-wine does not have the correct permissions')
+
+            orig = autonomous.command
+            autonomous.command = fake_command
+            try:
+                issue = e.create_issue('t1', data)
+            finally:
+                autonomous.command = orig
+            self.assertEqual(issue['number'], 2)
+            self.assertIn('label_warning', data)
 
     def test_sanitize_strips_quote_and_adds_placeholder(self):
         with tempfile.TemporaryDirectory() as td:

@@ -888,7 +888,28 @@ class Autonomous:
         self.store(task_id, data)
         url = command(['gh', 'issue', 'create', '-R', task['repo'], '--title', title, '--body-file', str(file)]).strip()
         issue = {'number': int(url.rstrip('/').split('/')[-1]), 'html_url': url}
+        self.apply_issue_labels(task_id, task, issue, data)
         return self.register_issue(task_id, data, issue)
+
+    def apply_issue_labels(self, task_id, task, issue, data):
+        """Best-effort application of the template's top-level labels.
+
+        GitHub only applies ``labels:`` automatically on the web form; the API
+        needs an explicit edit. Adding labels requires triage/write, which the
+        automation account often lacks, so a failure is recorded but never
+        blocks the issue itself (the issue is already created by then).
+        """
+        labels = (self.issue_template(task, data) or {}).get('labels') or []
+        if not labels:
+            return
+        args = ['gh', 'issue', 'edit', str(issue['number']), '-R', task['repo']]
+        for label in labels:
+            args += ['--add-label', label]
+        try:
+            command(args)
+        except Exception:
+            data['label_warning'] = 'template labels not applied: ' + ', '.join(labels)
+            self.store(task_id, data)
 
     def register_issue(self, task_id, data, issue):
         with self.db:
@@ -1300,6 +1321,43 @@ class Autonomous:
         kind, prefix = self._pr_title_rule(task)
         return prefix if kind == 'bracket' else ''
 
+    @staticmethod
+    def _template_labels(text):
+        """Parse the template-level ``labels:`` list (inline or block YAML).
+
+        GitHub applies these automatically when the issue is filed through the
+        web form; the API needs them passed explicitly. Both ``labels: [bug]``
+        and the block sequence form are supported.
+        """
+        m = re.search(r'^labels:[ \t]*(.*)$', text, re.M)
+        if not m:
+            return []
+        inline = m.group(1).strip()
+        if inline.startswith('['):
+            inner = inline[1:]
+            if ']' in inner:
+                inner = inner[:inner.index(']')]
+            items = inner.split(',')
+        elif inline:
+            items = [inline]
+        else:
+            items = []
+            for line in text[m.end():].splitlines():
+                if not line.strip():
+                    continue
+                if not line[:1].isspace():
+                    break
+                bm = re.match(r'^\s*-\s*(.*?)\s*$', line)
+                if not bm:
+                    break
+                items.append(bm.group(1))
+        labels = []
+        for item in items:
+            value = item.strip().strip('"\'').strip()
+            if value:
+                labels.append(value)
+        return labels
+
     def issue_template(self, task, data=None):
         """Read the best-matching issue template for this task kind.
 
@@ -1309,6 +1367,7 @@ class Autonomous:
           - 'title_prefix': literal required prefix ('[BUG]', '[Bug]: ', 'New Feature: ')
           - 'title_placeholder': True for '[组件名称] ...' forms where a tag must be filled in
           - 'required_headings': exact heading lines ('## X' / '### X') the body must contain
+          - 'labels': template-level labels GitHub would apply via the web form
         or None when no template exists. Prefers bug templates for bug tasks,
         feature templates for feature tasks, then falls back to any template.
         """
@@ -1377,9 +1436,11 @@ class Autonomous:
                 cleaned = re.sub(r'```.*?```', '', cleaned, flags=re.S)
                 required_headings = [h for h in re.findall(r'^#{2,6} [^\n]+', cleaned, re.M)
                                      if h.strip('# ').strip()]
-            if title_prefix or title_placeholder or required_headings:
+            labels = self._template_labels(text)
+            if title_prefix or title_placeholder or required_headings or labels:
                 return {'file': path.name, 'raw': text[:4000], 'title_prefix': title_prefix,
-                        'title_placeholder': title_placeholder, 'required_headings': required_headings}
+                        'title_placeholder': title_placeholder, 'required_headings': required_headings,
+                        'labels': labels}
         return None
 
     def issue_title_prefix(self, task, data=None):

@@ -40,6 +40,26 @@ def deep_scan_repos(config, merged=()):
     return result
 
 
+def deep_scan_enable_all(config, pool):
+    """Mark every verified research-pool repository as deep-scan tier, in memory only.
+
+    The pool names are copied into ``config['research']['deep_scan']['repositories']``
+    so every ``deep_scan_repos`` call in this process treats the whole pool as the
+    deep tier. ``config.json`` is never written; the change dies with the process.
+    Returns the normalized casefolded deep-scan set actually applied.
+    """
+    deep = config.setdefault('research', {}).setdefault('deep_scan', {})
+    if not isinstance(deep, dict):
+        raise ValueError('research.deep_scan must be an object')
+    names = [r for r in pool if isinstance(r, str) and '/' in r]
+    if not names:
+        raise ValueError('deep-scan requires a non-empty verified research pool')
+    # Replace the explicit tier with the pool. auto_include_merged still appends
+    # merged repositories on top, so the result is pool + merged, never narrower.
+    deep['repositories'] = list(names)
+    return {r.casefold() for r in names}
+
+
 def scope_limits(config, repo):
     """Per-repo bounded scope limits; deep-scan repos may widen within ceilings."""
     limits = {'files': MAX_FILES, 'rules': MAX_RULES, 'characters': MAX_CHARACTERS,

@@ -55,6 +55,14 @@ python -X utf8 catalog_sweep.py --output runs/catalog-sweep --analyze-only --att
 # 定向补跑仍保留完整目录和逐仓库结果
 python -X utf8 catalog_sweep.py --output runs/catalog-sweep --analyze-only --repo QwenLM/qwen-code
 
+# 手动全部深度筛查：把整���已核验研究池临时当作深筛层（仅本次进程，不改 config.json）
+# 扫描 → 注册源码 scope → 深度研究一条龙；只研究，不实现或发布。须显式运行，不自动触发。
+python -X utf8 contribute.py deep-scan
+# 常用调节：限制扫描仓库数 / scope 注册数 / 研究候选数，或只跑部分阶段
+python -X utf8 contribute.py deep-scan --repos 20 --scopes 4 --candidates 6
+python -X utf8 contribute.py deep-scan --no-research   # 只扫描+注册 scope
+python -X utf8 contribute.py deep-scan --no-scan       # 跳过扫描，只注册+研究
+
 # 创建本地研究任务；目标可以来自研究目录，也可以来自原贡献白名单
 python -X utf8 contribute.py hunt SWE-agent/mini-swe-agent "Compare session recovery and checkpoints"
 python -X utf8 contribute.py analyze <上一步任务ID>
@@ -244,7 +252,7 @@ Goose 的指定看板 `Ready`、`manual_issue_submission`、`human_pr_review_req
 | `research.context_characters` | 320,000，最大 600,000；超出安全暂停，不静默丢弃证据 |
 | `research.network_requests` | 每候选每次采集 40，最大 60；历史累计另记 |
 | `research.batch_on_auto` | 当前配置 true；旧配置缺省 false，保留旧调度行为 |
-| `research.deep_scan` | 深度筛查层。`repositories` 名单内仓库（当前 DeerFlow、AgentScope、Qwen Code、Gemini CLI、MiMo-Code）获得：每仓每轮最多 `scopes_per_repo_per_run` 个源码 scope（1–4，当前 2）、单 scope 最多 `files_per_scope` 个文件（含本地 import 依赖，1–12，当前 10）、单文件 `file_characters` 字符（上限 40,000，当前 30,000）、研究 packet 使用 `target_files`/`peers_per_candidate`/`files_per_peer`/`context_characters`/`network_requests` 覆盖值（仍走既有上下限校验）、扫描按 `scan_cache_seconds` 缩短缓存并排在每轮最前、`hotspot_commits` 次近期提交内改动过的模块优先。`auto_include_merged` 为 true 时已合并过 PR 的仓库自动入层。名单外仓库完全沿用既有有界参数 |
+| `research.deep_scan` | 深度筛查层。`contribute.py deep-scan` 手动入口把整个已核验研究池临时当作本层（仅进程内，不落盘、不进入 tick/auto 调度）；`repositories` 名单内仓库（当前 DeerFlow、AgentScope、Qwen Code、Gemini CLI、MiMo-Code）获得：每仓每轮最多 `scopes_per_repo_per_run` 个源码 scope（1–4，当前 2）、单 scope 最多 `files_per_scope` 个文件（含本地 import 依赖，1–12，当前 10）、单文件 `file_characters` 字符（上限 40,000，当前 30,000）、研究 packet 使用 `target_files`/`peers_per_candidate`/`files_per_peer`/`context_characters`/`network_requests` 覆盖值（仍走既有上下限校验）、扫描按 `scan_cache_seconds` 缩短缓存并排在每轮最前、`hotspot_commits` 次近期提交内改动过的模块优先。`auto_include_merged` 为 true 时已合并过 PR 的仓库自动入层。名单外仓库完全沿用既有有界参数 |
 | `timeouts.command_seconds` | 普通命令 180 秒 |
 | `timeouts.git_seconds` | clone/fetch/worktree/push 600 秒 |
 | `timeouts.model_seconds` / `test_seconds` | 当前 1,500 秒，缺省回退 `timeout_seconds` |

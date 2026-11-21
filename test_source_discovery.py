@@ -405,6 +405,26 @@ class SourceDiscoveryTests(unittest.TestCase):
         for key in owner_keys:
             load_packet(self.p, self.p.task(key))  # Deep scope validates on load.
 
+    def test_deep_scan_enable_all_widens_tier_in_memory_only(self):
+        from source_discovery import deep_scan_enable_all, deep_scan_repos, scope_limits
+        self.p.config.setdefault('research', {})['deep_scan'] = {
+            'repositories': ['someone/else'], 'files_per_scope': 5}
+        applied = deep_scan_enable_all(self.p.config, ['owner/repo', 'second/repo', 'bad-name'])
+        self.assertEqual({'owner/repo', 'second/repo'}, applied)
+        # Explicit tier was replaced by the pool; config.json on disk is untouched.
+        self.assertEqual({'owner/repo', 'second/repo'}, deep_scan_repos(self.p.config))
+        self.assertNotIn('someone/else', deep_scan_repos(self.p.config))
+        on_disk = json.loads((self.root / 'config.json').read_text(encoding='utf-8'))
+        self.assertNotIn('deep_scan', on_disk.get('research', {}))
+        # Pool members now get widened scope limits.
+        self.assertEqual(5, scope_limits(self.p.config, 'owner/repo')['files'])
+        self.assertEqual(5, scope_limits(self.p.config, 'second/repo')['files'])
+
+    def test_deep_scan_enable_all_rejects_empty_pool(self):
+        from source_discovery import deep_scan_enable_all
+        with self.assertRaisesRegex(ValueError, 'non-empty'):
+            deep_scan_enable_all(self.p.config, [])
+
     def test_deep_limit_outside_ceiling_fails_closed(self):
         from source_discovery import scope_limits
         self.p.config.setdefault('research', {})['deep_scan'] = {

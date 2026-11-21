@@ -1515,6 +1515,15 @@ def main():
     sub = parser.add_subparsers(dest="action", required=True)
     scan_parser = sub.add_parser("scan")
     scan_parser.add_argument('--force', action='store_true', help='Refresh cached or cooled-down reads once; preserve failure history')
+    deep = sub.add_parser('deep-scan', help='Manually treat the WHOLE verified research pool as the deep-scan tier for this run only; never automatic')
+    deep.add_argument('--repos', type=int, default=None,
+                      help='Cap how many pool repositories to actually scan this run (default: entire pool)')
+    deep.add_argument('--scopes', type=int, default=4,
+                      help='Source-discovery scopes to register this run, 0..4 (default 4)')
+    deep.add_argument('--candidates', type=int, default=None,
+                      help='Research candidates to study this run, 1..10 (default: research.candidates_per_run)')
+    deep.add_argument('--no-scan', action='store_true', help='Skip the issue/PR scan phase')
+    deep.add_argument('--no-research', action='store_true', help='Register scopes but do not run research_batch')
     rescan_parser = sub.add_parser('rescan-issues', help='Refresh up to 10 known issue identities and their PR relations; never publish')
     rescan_parser.add_argument('repo')
     rescan_parser.add_argument('numbers', type=int, nargs='+')
@@ -1596,7 +1605,7 @@ def main():
 
 def dispatch(pipeline, args):
     research_only = (args.action in ('scan', 'rescan-issues', 'register-pr', 'hunt', 'research-batch',
-                                    'review-research-overlap', 'resolve-research-overlap') or
+                                    'review-research-overlap', 'resolve-research-overlap', 'deep-scan') or
                      (args.action == 'analyze' and pipeline.task(args.task)['source'] == 'hunt'))
     if args.action not in ('status', 'unlock', 'clean-workspaces') and not research_only:
         pipeline.effective_repositories()
@@ -1605,6 +1614,35 @@ def dispatch(pipeline, args):
         print(json.dumps(Autonomous(pipeline).research_batch(), ensure_ascii=False, indent=2))
     elif args.action == "scan":
         print(f"New/updated issues: {pipeline.scan(force=getattr(args, 'force', False))}")
+    elif args.action == 'deep-scan':
+        # Operator-triggered whole-pool deep scan. Not wired into tick/auto: it
+        # only runs when this command is invoked explicitly. The deep tier is
+        # widened in memory only; config.json is never modified.
+        from repository_catalog import research_pool
+        from source_discovery import deep_scan_enable_all, register_scopes
+        from autonomous import Autonomous
+        pool = research_pool(pipeline, respect_peer_filter=False)
+        deep_set = deep_scan_enable_all(pipeline.config, pool)
+        print(f'deep-scan tier widened to {len(deep_set)} verified repositories (this run only)', file=sys.stderr)
+        if args.scopes is not None and (type(args.scopes) is not int or not 0 <= args.scopes <= 4):
+            raise ValueError('deep-scan --scopes must be 0..4')
+        if args.candidates is not None and (type(args.candidates) is not int or not 1 <= args.candidates <= 10):
+            raise ValueError('deep-scan --candidates must be 1..10')
+        if args.repos is not None and (type(args.repos) is not int or not 1 <= args.repos):
+            raise ValueError('deep-scan --repos must be a positive integer')
+        result = {'pool': len(deep_set), 'phases': {}}
+        if not args.no_scan:
+            result['phases']['scan'] = pipeline.scan(max_repositories=args.repos)
+        engine = Autonomous(pipeline)
+        pipeline.recover_locks()
+        with pipeline.lock('autonomous'):
+            preferred = register_scopes(engine, args.scopes) if args.scopes else []
+            result['phases']['scopes'] = preferred
+            if not args.no_research:
+                if args.candidates is not None:
+                    pipeline.config['research']['candidates_per_run'] = args.candidates
+                result['phases']['research'] = engine.research_batch(locked=True, preferred_task_ids=preferred)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.action == 'rescan-issues':
         repo_name(args.repo)
         numbers = list(dict.fromkeys(args.numbers))
